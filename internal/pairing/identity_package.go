@@ -270,19 +270,22 @@ func NewPeerPairKeyMaterial(localDiscoveryID, remoteDiscoveryID string, localLev
 	if _, err := rand.Read(secret); err != nil {
 		return PeerPairKeyMaterial{}, fmt.Errorf("generate peer-pair key material: %w", err)
 	}
+	keyIDBytes := make([]byte, 16)
+	if _, err := rand.Read(keyIDBytes); err != nil {
+		return PeerPairKeyMaterial{}, fmt.Errorf("generate peer-pair key id: %w", err)
+	}
 	secretKey := base64.RawURLEncoding.EncodeToString(secret)
 	if bootstrapProofKey != "" && subtle.ConstantTimeCompare([]byte(secretKey), []byte(bootstrapProofKey)) == 1 {
 		return PeerPairKeyMaterial{}, fmt.Errorf("generated peer-pair key unexpectedly matched bootstrap proof key")
 	}
 	pairID := stablePairID(localDiscoveryID, remoteDiscoveryID)
 	level := maxLevel(localLevel, remoteLevel)
-	keyIDDigest := sha256.Sum256([]byte(fmt.Sprintf("fse-peer-pair-key-v1\n%s\n%d\n%s", pairID, level, secretKey)))
 	return PeerPairKeyMaterial{
 		PairID:            pairID,
 		LocalDiscoveryID:  localDiscoveryID,
 		RemoteDiscoveryID: remoteDiscoveryID,
 		EncryptionLevel:   level,
-		KeyID:             base64.RawURLEncoding.EncodeToString(keyIDDigest[:16]),
+		KeyID:             base64.RawURLEncoding.EncodeToString(keyIDBytes),
 		SecretKey:         secretKey,
 		CreatedAt:         time.Now().UTC(),
 	}, nil

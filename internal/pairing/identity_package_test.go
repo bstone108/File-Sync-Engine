@@ -1,6 +1,7 @@
 package pairing
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -164,6 +165,19 @@ func TestPlanIdentityBootstrapRejectsMismatchedBootstrapProof(t *testing.T) {
 
 	if _, err := PlanIdentityBootstrap(cfg, pkg); err == nil || !strings.Contains(err.Error(), "bootstrap proof") {
 		t.Fatalf("expected bootstrap proof mismatch rejection, got %v", err)
+	}
+}
+
+func TestPeerPairKeyIDIsNotDerivedFromSecretKeyMaterial(t *testing.T) {
+	source, err := os.ReadFile("identity_package.go")
+	if err != nil {
+		t.Fatalf("read identity package source: %v", err)
+	}
+	body := string(source)
+	for _, forbidden := range []string{"keyIDDigest", "secretKey)))", "secretKey))"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("peer-pair key IDs must be independent random identifiers, not SHA-256 digests of secret key material; found %q", forbidden)
+		}
 	}
 }
 
