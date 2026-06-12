@@ -276,6 +276,17 @@ jobs:
           fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
+      - name: Install macOS packaging checksum tools
+        shell: bash
+        run: |
+          brew install coreutils
+          if [ -d /opt/homebrew/opt/coreutils/libexec/gnubin ]; then
+            echo "/opt/homebrew/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+          fi
+          if [ -d /usr/local/opt/coreutils/libexec/gnubin ]; then
+            echo "/usr/local/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+          fi
+
       - name: Build cross-platform daemon binaries
         run: scripts/build-all.sh "${{ steps.version.outputs.version }}"
 
@@ -292,13 +303,6 @@ jobs:
         shell: bash
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
-          brew install coreutils
-          if [ -d /opt/homebrew/opt/coreutils/libexec/gnubin ]; then
-            echo "/opt/homebrew/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
-          fi
-          if [ -d /usr/local/opt/coreutils/libexec/gnubin ]; then
-            echo "/usr/local/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
-          fi
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Package desktop engine resources

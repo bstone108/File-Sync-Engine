@@ -164,10 +164,14 @@ func TestReleaseWorkflowBuildsMacOSDaemonBeforeDesktopGoSetup(t *testing.T) {
 	}
 	macJob := workflow[macJobIndex:]
 	daemonIndex := strings.Index(macJob, "Build cross-platform daemon binaries")
+	checksumIndex := strings.Index(macJob, "Install macOS packaging checksum tools")
 	desktopGoIndex := strings.Index(macJob, "Set up Go for Wails desktop build")
 	installIndex := strings.Index(macJob, "Install Wails CLI and packaging tools")
-	if daemonIndex == -1 || desktopGoIndex == -1 || installIndex == -1 {
-		t.Fatalf("release workflow missing macOS daemon build, desktop Go setup, or Wails install step")
+	if daemonIndex == -1 || checksumIndex == -1 || desktopGoIndex == -1 || installIndex == -1 {
+		t.Fatalf("release workflow missing macOS checksum setup, daemon build, desktop Go setup, or Wails install step")
+	}
+	if checksumIndex > daemonIndex {
+		t.Fatalf("macOS release job must install coreutils before daemon/package tests need sha256sum")
 	}
 	if daemonIndex > desktopGoIndex {
 		t.Fatalf("macOS release job must build daemon with root go.mod before setup-go switches to desktop-gui/go.mod")
