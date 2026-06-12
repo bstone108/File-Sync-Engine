@@ -1,0 +1,4 @@
+development/
+/tmp/
+*.log
+/desktop-gui/wails-output/

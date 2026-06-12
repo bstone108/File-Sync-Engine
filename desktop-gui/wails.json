@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "File Synchronization Engine",
+  "outputfilename": "fse-desktop",
+  "frontend:dir": ".",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "File Synchronization Engine",
+    "email": ""
+  },
+  "info": {
+    "productName": "File Synchronization Engine Desktop",
+    "productVersion": "0.0.0-prototype",
+    "copyright": "Copyright © 2026"
+  }
+}

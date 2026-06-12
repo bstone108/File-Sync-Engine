@@ -1,0 +1,31 @@
+{
+  "nodeName": "laptop-a",
+  "listen": ["tcp://0.0.0.0:22000"],
+  "discovery": {
+    "disabled": false,
+    "dht": true,
+    "local": true,
+    "dhtNamespace": "filesyncengine/v1",
+    "dhtBootstrapPeers": ["/dnsaddr/bootstrap.libp2p.io"]
+  },
+  "peers": [
+    {
+      "id": "peer-b",
+      "addresses": ["/ip4/192.0.2.10/tcp/22000/p2p/12D3KooWExample"],
+      "endpoints": [
+        {"kind": "manual", "address": "/ip4/192.0.2.10/tcp/22000/p2p/12D3KooWExample"},
+        {"kind": "relay", "address": "relay://relay.example.net/peer-b"},
+        {"kind": "pipe", "address": "stdio"}
+      ]
+    }
+  ],
+  "folders": [
+    {
+      "id": "documents",
+      "path": "./example-data/documents",
+      "mode": "sendrecv",
+      "blockSize": 131072,
+      "ignore": ["**/.DS_Store", "**/Thumbs.db"]
+    }
+  ]
+}
