@@ -268,14 +268,53 @@ func TestReleaseWorkflowBuildsMacOSDaemonBeforeDesktopGoSetup(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowDefaultsToPackageManagerSafeCIVersion(t *testing.T) {
+func TestReleaseWorkflowUsesDateIncrementReleaseVersions(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+	script := readRequiredFile(t, filepath.Join("..", "..", "scripts", "resolve-release-version.sh"))
+
+	for _, want := range []string{
+		"scripts/resolve-release-version.sh \"${{ inputs.version }}\"",
+		"TZ=America/Chicago date +%Y.%m.%d",
+		"YYYY.MM.DD.tNN",
+		"git tag --list \"v${release_date}.t[0-9][0-9]\"",
+		"printf -v version '%s.t%02d'",
+	} {
+		if !strings.Contains(workflow, want) && !strings.Contains(script, want) {
+			t.Fatalf("release versioning contract missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		`version="0.0.0-ci.${GITHUB_RUN_NUMBER}"`,
+		`version="ci-${GITHUB_SHA::12}"`,
+	} {
+		if strings.Contains(workflow, forbidden) || strings.Contains(script, forbidden) {
+			t.Fatalf("release workflow must not use old non-date CI version default %q", forbidden)
+		}
+	}
+}
+
+func TestReleaseWorkflowPublishesGitHubRelease(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
 
-	if !strings.Contains(workflow, `version="0.0.0-ci.${GITHUB_RUN_NUMBER}"`) {
-		t.Fatalf("release workflow must default CI versions to a digit-prefixed package-manager-safe value")
-	}
-	if strings.Contains(workflow, `version="ci-${GITHUB_SHA::12}"`) {
-		t.Fatalf("release workflow must not default package builds to Debian-invalid ci-<sha> versions")
+	for _, want := range []string{
+		"permissions:\n  contents: write",
+		"publish-github-release:",
+		"needs:",
+		"linux-release-artifacts",
+		"linux-desktop-artifacts",
+		"windows-desktop-artifacts",
+		"macos-desktop-artifacts",
+		"actions/download-artifact@v7",
+		"release-assets",
+		"RELEASE_ASSET_SHA256SUMS",
+		"gh release create",
+		"gh release edit",
+		"gh release upload",
+		"--clobber",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow missing publish contract %q", want)
+		}
 	}
 }
 

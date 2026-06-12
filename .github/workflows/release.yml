@@ -12,7 +12,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   linux-release-artifacts:
@@ -32,13 +32,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="0.0.0-ci.${GITHUB_RUN_NUMBER}"
-          fi
+          version="$(scripts/resolve-release-version.sh "${{ inputs.version }}")"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Build cross-platform daemon binaries
@@ -115,13 +109,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="0.0.0-ci.${GITHUB_RUN_NUMBER}"
-          fi
+          version="$(scripts/resolve-release-version.sh "${{ inputs.version }}")"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Build cross-platform daemon binaries
@@ -192,13 +180,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="0.0.0-ci.${GITHUB_RUN_NUMBER}"
-          fi
+          version="$(scripts/resolve-release-version.sh "${{ inputs.version }}")"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Build cross-platform daemon binaries
@@ -288,13 +270,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="0.0.0-ci.${GITHUB_RUN_NUMBER}"
-          fi
+          version="$(scripts/resolve-release-version.sh "${{ inputs.version }}")"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Install macOS packaging checksum tools
@@ -353,3 +329,64 @@ jobs:
             build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.zip
             build/${{ steps.version.outputs.version }}/desktop-gui/SHA256SUMS
           if-no-files-found: error
+
+  publish-github-release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs:
+      - linux-release-artifacts
+      - linux-desktop-artifacts
+      - windows-desktop-artifacts
+      - macos-desktop-artifacts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          version="$(scripts/resolve-release-version.sh "${{ inputs.version }}")"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'tag=v%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: release-artifacts
+
+      - name: Stage release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find release-artifacts -maxdepth 3 -type f -print0 | while IFS= read -r -d '' file; do
+            artifact_dir="$(basename "$(dirname "$file")")"
+            base="$(basename "$file")"
+            cp "$file" "release-assets/${artifact_dir}-${base}"
+          done
+          cd release-assets
+          sha256sum * > RELEASE_ASSET_SHA256SUMS
+          ls -la
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes_file" <<NOTES
+          Automated File Sync Engine release $VERSION.
+
+          This release contains daemon and desktop GUI build artifacts produced by GitHub Actions for Linux, Windows, and macOS targets. Linux desktop installers include both WebKitGTK ABI lanes where applicable.
+          NOTES
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "File Sync Engine $VERSION" --notes-file "$notes_file"
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "File Sync Engine $VERSION" --notes-file "$notes_file"
+          fi
+          gh release upload "$TAG" release-assets/* --clobber
