@@ -94,6 +94,7 @@ for api in $VARIANTS; do
     fi
     FSE_DESKTOP_LINUX_WEBKIT_API="$api" \
     FSE_DESKTOP_WAILS_TARGETS="$TARGETS" \
+    FSE_DESKTOP_WAILS_BUILDER_IMAGE="$image" \
     FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX="$image" \
     FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_AMD64="$(builder_image_for_variant_target "$api" linux/amd64 "$image")" \
     FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_ARM64="$(builder_image_for_variant_target "$api" linux/arm64 "$image")" \

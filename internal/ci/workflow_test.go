@@ -189,6 +189,26 @@ func TestReleaseWorkflowUsesNativeLinuxArm64DesktopRunner(t *testing.T) {
 	}
 }
 
+func TestLinuxWebKitVariantScriptPassesSelectedBuilderAsDefaultWailsImage(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "build-package-desktop-linux-webkit-variants.sh"))
+	if err != nil {
+		t.Fatalf("read Linux WebKit variant script: %v", err)
+	}
+	script := string(data)
+
+	for _, want := range []string{
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE=\"$image\"",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX=\"$image\"",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_AMD64=\"$(builder_image_for_variant_target \"$api\" linux/amd64 \"$image\")\"",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_ARM64=\"$(builder_image_for_variant_target \"$api\" linux/arm64 \"$image\")\"",
+		"\"$ROOT/scripts/build-desktop-gui-wails.sh\" \"$VERSION\" \"$wails_out\"",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("Linux WebKit variant script missing Wails builder image handoff %q", want)
+		}
+	}
+}
+
 func TestReleaseWorkflowBuildsBothLinuxWebKitABIVariantArtifacts(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
 

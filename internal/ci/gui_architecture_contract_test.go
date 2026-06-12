@@ -1989,6 +1989,7 @@ func TestDesktopGUILinuxInstallerPackagerCreatesDebRpmAndAppImageHandoffs(t *tes
 		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_ARM64_WEBKIT40",
 		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_ARM64_WEBKIT41",
 		"FSE_DESKTOP_LINUX_WEBKIT_API=\"$api\"",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE=\"$image\"",
 		"scripts/build-desktop-gui-wails.sh",
 		"scripts/package-desktop-linux-installers.sh",
 	} {
