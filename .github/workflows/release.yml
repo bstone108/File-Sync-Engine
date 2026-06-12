@@ -1,0 +1,119 @@
+name: Release artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version string to embed in artifacts (defaults to tag name or short SHA)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  linux-release-artifacts:
+    name: Linux daemon and desktop artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="ci-${GITHUB_SHA::12}"
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build cross-platform daemon binaries
+        run: scripts/build-all.sh "${{ steps.version.outputs.version }}"
+
+      - name: Upload linux amd64 daemon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: file-sync-engine-daemon-linux-amd64-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            build/${{ steps.version.outputs.version }}/fse-linux-amd64
+            build/${{ steps.version.outputs.version }}/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload linux arm64 daemon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: file-sync-engine-daemon-linux-arm64-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            build/${{ steps.version.outputs.version }}/fse-linux-arm64
+            build/${{ steps.version.outputs.version }}/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Package desktop engine resources
+        run: scripts/package-desktop-engine-resources.sh "${{ steps.version.outputs.version }}"
+
+      - name: Build Linux Wails builder images
+        shell: bash
+        run: |
+          docker build \
+            -t fse-desktop-wails-builder:debian12-wails2.10.2 \
+            -f development/desktop-wails-builder/Dockerfile \
+            development/desktop-wails-builder
+          docker build \
+            -t fse-desktop-wails-builder:debian12-wails2.10.2-linux-arm64-cross \
+            -f development/desktop-wails-builder/Dockerfile.linux-arm64-cross \
+            development/desktop-wails-builder
+
+      - name: Build Linux desktop GUI Wails outputs
+        env:
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE: fse-desktop-wails-builder:debian12-wails2.10.2
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_AMD64: fse-desktop-wails-builder:debian12-wails2.10.2
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_ARM64: fse-desktop-wails-builder:debian12-wails2.10.2-linux-arm64-cross
+          FSE_DESKTOP_WAILS_TARGETS: linux/amd64 linux/arm64
+        run: scripts/build-desktop-gui-wails.sh "${{ steps.version.outputs.version }}"
+
+      - name: Install Linux desktop packaging tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm zip file ca-certificates curl
+          mkdir -p "$RUNNER_TEMP/appimage"
+          curl -fsSL -o "$RUNNER_TEMP/appimage/appimagetool-x86_64.AppImage" \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          curl -fsSL -o "$RUNNER_TEMP/appimage/runtime-aarch64" \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/runtime-aarch64
+          chmod +x "$RUNNER_TEMP/appimage/appimagetool-x86_64.AppImage" "$RUNNER_TEMP/appimage/runtime-aarch64"
+
+      - name: Package Linux desktop installers
+        env:
+          FSE_DESKTOP_APPIMAGETOOL: ${{ runner.temp }}/appimage/appimagetool-x86_64.AppImage
+          FSE_DESKTOP_APPIMAGE_RUNTIME_AMD64: ""
+          FSE_DESKTOP_APPIMAGE_RUNTIME_ARM64: ${{ runner.temp }}/appimage/runtime-aarch64
+          FSE_DESKTOP_LINUX_INSTALLER_TARGETS: linux-amd64 linux-arm64
+        run: scripts/package-desktop-linux-installers.sh "${{ steps.version.outputs.version }}"
+
+      - name: Verify Linux desktop installer checksums
+        shell: bash
+        run: |
+          cd "build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers"
+          sha256sum -c SHA256SUMS
+
+      - name: Upload Linux desktop installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fse-desktop-linux-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/
+          if-no-files-found: error

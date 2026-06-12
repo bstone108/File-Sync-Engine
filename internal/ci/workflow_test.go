@@ -41,6 +41,42 @@ func TestCrossPlatformWorkflowCoversTestHarnessAndSixTargets(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowBuildsLinuxDaemonAndDesktopArtifacts(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+
+	for _, want := range []string{
+		"workflow_dispatch:",
+		"push:",
+		"tags:",
+		"v*",
+		"linux-amd64",
+		"linux-arm64",
+		"scripts/build-all.sh",
+		"scripts/package-desktop-engine-resources.sh",
+		"scripts/build-desktop-gui-wails.sh",
+		"scripts/package-desktop-linux-installers.sh",
+		"FSE_DESKTOP_WAILS_TARGETS",
+		"FSE_DESKTOP_LINUX_INSTALLER_TARGETS",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_AMD64",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_ARM64",
+		"FSE_DESKTOP_APPIMAGE_RUNTIME_AMD64",
+		"FSE_DESKTOP_APPIMAGE_RUNTIME_ARM64",
+		"upload-artifact",
+		"file-sync-engine-daemon-linux-amd64",
+		"file-sync-engine-daemon-linux-arm64",
+		"fse-desktop-linux-installers",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("release workflow must not publish or log runtime secrets %q", forbidden)
+		}
+	}
+}
+
 func TestDockerPublishWorkflowDocumentsVersioningAndUpdateVerification(t *testing.T) {
 	workflow := readWorkflow(t, "container.yml")
 	docs := readRequiredFile(t, filepath.Join("..", "..", "docs", "DOCKER.md"))
