@@ -111,11 +111,26 @@ jobs:
           cd "build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers"
           sha256sum -c SHA256SUMS
 
-      - name: Upload Linux desktop installer artifacts
+      - name: Upload Linux amd64 desktop installer artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fse-desktop-linux-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
-          path: build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/
+          name: fse-desktop-linux-amd64-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/fse-desktop-${{ steps.version.outputs.version }}-linux-amd64.deb
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/fse-desktop-${{ steps.version.outputs.version }}-linux-amd64.rpm
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/fse-desktop-${{ steps.version.outputs.version }}-linux-amd64.AppImage
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload Linux arm64 desktop installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fse-desktop-linux-arm64-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/fse-desktop-${{ steps.version.outputs.version }}-linux-arm64.deb
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/fse-desktop-${{ steps.version.outputs.version }}-linux-arm64.rpm
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/fse-desktop-${{ steps.version.outputs.version }}-linux-arm64.AppImage
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/SHA256SUMS
           if-no-files-found: error
 
   windows-desktop-artifacts:
@@ -181,12 +196,20 @@ jobs:
           cd "build/${{ steps.version.outputs.version }}/desktop-gui"
           sha256sum -c SHA256SUMS
 
-      - name: Upload Windows desktop installer artifacts
+      - name: Upload Windows amd64 desktop installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fse-desktop-windows-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
+          name: fse-desktop-windows-amd64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
             build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-windows-amd64.zip
+            build/${{ steps.version.outputs.version }}/desktop-gui/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload Windows arm64 desktop installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fse-desktop-windows-arm64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
             build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-windows-arm64.zip
             build/${{ steps.version.outputs.version }}/desktop-gui/SHA256SUMS
           if-no-files-found: error
@@ -279,7 +302,7 @@ jobs:
       - name: Upload macOS desktop installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fse-desktop-macos-${{ matrix.arch }}-installer-${{ steps.version.outputs.version }}-${{ github.sha }}
+          name: fse-desktop-${{ matrix.target }}-installer-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
             build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.zip
             build/${{ steps.version.outputs.version }}/desktop-gui/SHA256SUMS

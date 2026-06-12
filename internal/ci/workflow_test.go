@@ -64,7 +64,8 @@ func TestReleaseWorkflowBuildsLinuxDaemonAndDesktopArtifacts(t *testing.T) {
 		"upload-artifact",
 		"file-sync-engine-daemon-linux-amd64",
 		"file-sync-engine-daemon-linux-arm64",
-		"fse-desktop-linux-installers",
+		"fse-desktop-linux-amd64-installers",
+		"fse-desktop-linux-arm64-installers",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("release workflow missing %q", want)
@@ -93,7 +94,8 @@ func TestReleaseWorkflowBuildsWindowsDesktopInstallerArtifacts(t *testing.T) {
 		"scripts/package-desktop-engine-resources.sh",
 		"scripts/build-desktop-gui-wails.sh",
 		"scripts/package-desktop-gui-release.sh",
-		"fse-desktop-windows-installers",
+		"fse-desktop-windows-amd64-installer",
+		"fse-desktop-windows-arm64-installer",
 		"upload-artifact",
 	} {
 		if !strings.Contains(workflow, want) {
@@ -103,6 +105,32 @@ func TestReleaseWorkflowBuildsWindowsDesktopInstallerArtifacts(t *testing.T) {
 	for _, forbidden := range []string{"FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey"} {
 		if strings.Contains(workflow, forbidden) {
 			t.Fatalf("release workflow must not publish or log runtime secrets %q", forbidden)
+		}
+	}
+}
+
+func TestReleaseWorkflowUploadArtifactNamesAreUnambiguousByTarget(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+
+	for _, want := range []string{
+		"name: file-sync-engine-daemon-linux-amd64-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"name: file-sync-engine-daemon-linux-arm64-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"name: fse-desktop-linux-amd64-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"name: fse-desktop-linux-arm64-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"name: fse-desktop-windows-amd64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"name: fse-desktop-windows-arm64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"name: fse-desktop-${{ matrix.target }}-installer-${{ steps.version.outputs.version }}-${{ github.sha }}",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow missing unambiguous upload artifact name %q", want)
+		}
+	}
+	for _, ambiguous := range []string{
+		"name: fse-desktop-linux-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"name: fse-desktop-windows-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
+	} {
+		if strings.Contains(workflow, ambiguous) {
+			t.Fatalf("release workflow still uses ambiguous multi-architecture artifact name %q", ambiguous)
 		}
 	}
 }
@@ -122,7 +150,7 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"FSE_DESKTOP_MACOS_ARCH: ${{ matrix.arch }}",
 		"scripts/build-desktop-gui-wails-native-macos.sh",
 		"FSE_DESKTOP_GUI_RELEASE_TARGETS: darwin-${{ matrix.arch }}",
-		"fse-desktop-macos-${{ matrix.arch }}-installer",
+		"fse-desktop-${{ matrix.target }}-installer",
 		"build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.zip",
 		"upload-artifact",
 	} {
