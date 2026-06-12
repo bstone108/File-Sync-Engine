@@ -51,21 +51,20 @@ func TestReleaseWorkflowBuildsLinuxDaemonAndDesktopArtifacts(t *testing.T) {
 		"v*",
 		"linux-amd64",
 		"linux-arm64",
+		"linux-desktop-artifacts",
+		"ubuntu-24.04-arm",
 		"scripts/build-all.sh",
 		"scripts/package-desktop-engine-resources.sh",
 		"scripts/build-desktop-gui-wails.sh",
 		"scripts/package-desktop-linux-installers.sh",
 		"FSE_DESKTOP_WAILS_TARGETS",
 		"FSE_DESKTOP_LINUX_INSTALLER_TARGETS",
-		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_AMD64",
-		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_ARM64",
-		"FSE_DESKTOP_APPIMAGE_RUNTIME_AMD64",
-		"FSE_DESKTOP_APPIMAGE_RUNTIME_ARM64",
+		"appimagetool-aarch64.AppImage",
+		"APPIMAGE_EXTRACT_AND_RUN",
 		"upload-artifact",
 		"file-sync-engine-daemon-linux-amd64",
 		"file-sync-engine-daemon-linux-arm64",
-		"fse-desktop-linux-amd64-installers",
-		"fse-desktop-linux-arm64-installers",
+		"fse-desktop-${{ matrix.target }}-installers",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("release workflow missing %q", want)
@@ -115,8 +114,7 @@ func TestReleaseWorkflowUploadArtifactNamesAreUnambiguousByTarget(t *testing.T) 
 	for _, want := range []string{
 		"name: file-sync-engine-daemon-linux-amd64-${{ steps.version.outputs.version }}-${{ github.sha }}",
 		"name: file-sync-engine-daemon-linux-arm64-${{ steps.version.outputs.version }}-${{ github.sha }}",
-		"name: fse-desktop-linux-amd64-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
-		"name: fse-desktop-linux-arm64-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"name: fse-desktop-${{ matrix.target }}-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
 		"name: fse-desktop-windows-amd64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}",
 		"name: fse-desktop-windows-arm64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}",
 		"name: fse-desktop-${{ matrix.target }}-installer-${{ steps.version.outputs.version }}-${{ github.sha }}",
@@ -132,6 +130,41 @@ func TestReleaseWorkflowUploadArtifactNamesAreUnambiguousByTarget(t *testing.T) 
 		if strings.Contains(workflow, ambiguous) {
 			t.Fatalf("release workflow still uses ambiguous multi-architecture artifact name %q", ambiguous)
 		}
+	}
+}
+
+func TestReleaseWorkflowUsesNativeLinuxArm64DesktopRunner(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+
+	for _, want := range []string{
+		"linux-desktop-artifacts:",
+		"runs-on: ${{ matrix.runner }}",
+		"target: linux-amd64",
+		"target: linux-arm64",
+		"runner: ubuntu-24.04-arm",
+		"FSE_DESKTOP_WAILS_TARGETS: linux/${{ matrix.goarch }}",
+		"FSE_DESKTOP_LINUX_INSTALLER_TARGETS: ${{ matrix.target }}",
+		"appimagetool-aarch64.AppImage",
+		"APPIMAGE_EXTRACT_AND_RUN: 1",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow missing native Linux desktop artifact contract %q", want)
+		}
+	}
+	if strings.Contains(workflow, "Dockerfile.linux-arm64-cross") || strings.Contains(workflow, "FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_ARM64") {
+		t.Fatalf("release workflow must not build Linux arm64 desktop artifacts through the amd64 cross WebKit image")
+	}
+}
+
+func TestReleaseWorkflowBuildsMacOSDaemonBeforeDesktopGoSetup(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+	daemonIndex := strings.Index(workflow, "Build cross-platform daemon binaries")
+	desktopGoIndex := strings.Index(workflow, "Set up Go for Wails desktop build")
+	if daemonIndex == -1 || desktopGoIndex == -1 {
+		t.Fatalf("release workflow missing macOS daemon build or desktop Go setup step")
+	}
+	if daemonIndex > desktopGoIndex {
+		t.Fatalf("macOS release job must build daemon with root go.mod before setup-go switches to desktop-gui/go.mod")
 	}
 }
 
