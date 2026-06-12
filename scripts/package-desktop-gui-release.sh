@@ -39,7 +39,7 @@ OUT_DIR="${4:-$ROOT/build/$VERSION/desktop-gui}"
 if [[ "$OUT_DIR" != /* ]]; then
   OUT_DIR="$CALLER_PWD/$OUT_DIR"
 fi
-DOCS_SOURCE="$ROOT/docs"
+
 
 if [[ ! -f "$ENGINE_RESOURCE_ROOT/manifest.json" ]]; then
   printf 'missing bundled engine manifest: %s\n' "$ENGINE_RESOURCE_ROOT/manifest.json" >&2
@@ -152,8 +152,7 @@ copy_target() {
   mkdir -p "$staging/app" "$staging/engine" "$staging/docs-snapshot"
   cp -a "$wails_dir"/. "$staging/app/"
   cp -a "$ENGINE_RESOURCE_ROOT"/. "$staging/engine/"
-  cp "$ROOT/README.md" "$ROOT/PROJECT_RULES.md" "$ROOT/IMPLEMENTATION_PLAN.md" "$ROOT/ATTRIBUTIONS.md" "$staging/docs-snapshot/"
-  cp "$DOCS_SOURCE"/*.md "$staging/docs-snapshot/"
+  cp "$ROOT/README.md" "$staging/docs-snapshot/"
 
   (
     cd "$staging"

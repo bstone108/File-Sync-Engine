@@ -23,8 +23,7 @@ for target in "${TARGETS[@]}"; do
   CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$OUT/$NAME" ./cmd/fse
 done
 
-cp README.md PROJECT_RULES.md IMPLEMENTATION_PLAN.md ATTRIBUTIONS.md "$OUT/docs/"
-cp docs/*.md "$OUT/docs/"
+cp README.md "$OUT/docs/"
 (
   cd "$OUT"
   sha256sum fse-* > SHA256SUMS
