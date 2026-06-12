@@ -158,13 +158,29 @@ func TestReleaseWorkflowUsesNativeLinuxArm64DesktopRunner(t *testing.T) {
 
 func TestReleaseWorkflowBuildsMacOSDaemonBeforeDesktopGoSetup(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
-	daemonIndex := strings.Index(workflow, "Build cross-platform daemon binaries")
-	desktopGoIndex := strings.Index(workflow, "Set up Go for Wails desktop build")
+	macJobIndex := strings.Index(workflow, "macos-desktop-artifacts:")
+	if macJobIndex == -1 {
+		t.Fatalf("release workflow missing macOS desktop artifact job")
+	}
+	macJob := workflow[macJobIndex:]
+	daemonIndex := strings.Index(macJob, "Build cross-platform daemon binaries")
+	desktopGoIndex := strings.Index(macJob, "Set up Go for Wails desktop build")
 	if daemonIndex == -1 || desktopGoIndex == -1 {
 		t.Fatalf("release workflow missing macOS daemon build or desktop Go setup step")
 	}
 	if daemonIndex > desktopGoIndex {
 		t.Fatalf("macOS release job must build daemon with root go.mod before setup-go switches to desktop-gui/go.mod")
+	}
+}
+
+func TestReleaseWorkflowDefaultsToPackageManagerSafeCIVersion(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+
+	if !strings.Contains(workflow, `version="0.0.0-ci.${GITHUB_RUN_NUMBER}"`) {
+		t.Fatalf("release workflow must default CI versions to a digit-prefixed package-manager-safe value")
+	}
+	if strings.Contains(workflow, `version="ci-${GITHUB_SHA::12}"`) {
+		t.Fatalf("release workflow must not default package builds to Debian-invalid ci-<sha> versions")
 	}
 }
 

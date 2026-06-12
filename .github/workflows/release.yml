@@ -37,7 +37,7 @@ jobs:
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="ci-${GITHUB_SHA::12}"
+            version="0.0.0-ci.${GITHUB_RUN_NUMBER}"
           fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
@@ -96,7 +96,7 @@ jobs:
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="ci-${GITHUB_SHA::12}"
+            version="0.0.0-ci.${GITHUB_RUN_NUMBER}"
           fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
@@ -176,7 +176,7 @@ jobs:
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="ci-${GITHUB_SHA::12}"
+            version="0.0.0-ci.${GITHUB_RUN_NUMBER}"
           fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
@@ -258,15 +258,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Go for Wails desktop build
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: desktop-gui/go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
-            desktop-gui/go.sum
-
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -281,7 +272,7 @@ jobs:
           elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="ci-${GITHUB_SHA::12}"
+            version="0.0.0-ci.${GITHUB_RUN_NUMBER}"
           fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
@@ -300,6 +291,15 @@ jobs:
 
       - name: Build cross-platform daemon binaries
         run: scripts/build-all.sh "${{ steps.version.outputs.version }}"
+
+      - name: Set up Go for Wails desktop build
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop-gui/go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            desktop-gui/go.sum
 
       - name: Package desktop engine resources
         run: scripts/package-desktop-engine-resources.sh "${{ steps.version.outputs.version }}"
