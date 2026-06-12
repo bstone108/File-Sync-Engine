@@ -268,27 +268,52 @@ func TestReleaseWorkflowBuildsMacOSDaemonBeforeDesktopGoSetup(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowUsesDateIncrementReleaseVersions(t *testing.T) {
+func TestReleaseWorkflowUsesManualDateReleaseVersions(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
 	script := readRequiredFile(t, filepath.Join("..", "..", "scripts", "resolve-release-version.sh"))
 
 	for _, want := range []string{
+		"version:",
+		"required: true",
 		"scripts/resolve-release-version.sh \"${{ inputs.version }}\"",
-		"TZ=America/Chicago date +%Y.%m.%d",
 		"YYYY.MM.DD.tNN",
-		"git tag --list \"v${release_date}.t[0-9][0-9]\"",
-		"printf -v version '%s.t%02d'",
+		"manual release version",
+		"GITHUB_REF_TYPE",
+		"GITHUB_REF_NAME#v",
 	} {
 		if !strings.Contains(workflow, want) && !strings.Contains(script, want) {
-			t.Fatalf("release versioning contract missing %q", want)
+			t.Fatalf("manual release versioning contract missing %q", want)
 		}
 	}
 	for _, forbidden := range []string{
 		`version="0.0.0-ci.${GITHUB_RUN_NUMBER}"`,
 		`version="ci-${GITHUB_SHA::12}"`,
+		"TZ=America/Chicago date +%Y.%m.%d",
+		"git tag --list",
+		"printf -v version '%s.t%02d'",
 	} {
 		if strings.Contains(workflow, forbidden) || strings.Contains(script, forbidden) {
-			t.Fatalf("release workflow must not use old non-date CI version default %q", forbidden)
+			t.Fatalf("release workflow must not auto-increment or use old CI version default %q", forbidden)
+		}
+	}
+}
+
+func TestReleaseWorkflowPreflightsAndRefusesDuplicateVersions(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+
+	for _, want := range []string{
+		"version-preflight:",
+		"outputs:",
+		"version: ${{ steps.version.outputs.version }}",
+		"tag: ${{ steps.version.outputs.tag }}",
+		"gh release view \"$tag\"",
+		"git ls-remote --exit-code --tags origin \"refs/tags/$tag\"",
+		"refusing to build duplicate release version",
+		"needs: version-preflight",
+		"${{ needs.version-preflight.outputs.version }}",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow missing duplicate-version preflight contract %q", want)
 		}
 	}
 }
@@ -300,6 +325,7 @@ func TestReleaseWorkflowPublishesGitHubRelease(t *testing.T) {
 		"permissions:\n  contents: write",
 		"publish-github-release:",
 		"needs:",
+		"version-preflight",
 		"linux-release-artifacts",
 		"linux-desktop-artifacts",
 		"windows-desktop-artifacts",
@@ -308,12 +334,15 @@ func TestReleaseWorkflowPublishesGitHubRelease(t *testing.T) {
 		"release-assets",
 		"RELEASE_ASSET_SHA256SUMS",
 		"gh release create",
-		"gh release edit",
 		"gh release upload",
-		"--clobber",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("release workflow missing publish contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{"gh release edit", "--clobber"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("release workflow must not overwrite existing release assets with %q", forbidden)
 		}
 	}
 }
