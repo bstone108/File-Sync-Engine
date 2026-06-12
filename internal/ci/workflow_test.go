@@ -88,16 +88,16 @@ func TestReleaseWorkflowBuildsLinuxDaemonAndDesktopArtifacts(t *testing.T) {
 		"ubuntu-24.04-arm",
 		"scripts/build-all.sh",
 		"scripts/package-desktop-engine-resources.sh",
-		"scripts/build-desktop-gui-wails.sh",
-		"scripts/package-desktop-linux-installers.sh",
+		"scripts/build-package-desktop-linux-webkit-variants.sh",
 		"FSE_DESKTOP_WAILS_TARGETS",
-		"FSE_DESKTOP_LINUX_INSTALLER_TARGETS",
+		"FSE_DESKTOP_LINUX_WEBKIT_TARGETS",
+		"FSE_DESKTOP_LINUX_WEBKIT_VARIANTS",
 		"appimagetool-aarch64.AppImage",
 		"APPIMAGE_EXTRACT_AND_RUN",
 		"upload-artifact",
 		"file-sync-engine-daemon-linux-amd64",
 		"file-sync-engine-daemon-linux-arm64",
-		"fse-desktop-${{ matrix.target }}-installers",
+		"fse-desktop-${{ matrix.target }}-${{ matrix.webkit_slug }}-installers",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("release workflow missing %q", want)
@@ -147,7 +147,7 @@ func TestReleaseWorkflowUploadArtifactNamesAreUnambiguousByTarget(t *testing.T) 
 	for _, want := range []string{
 		"name: file-sync-engine-daemon-linux-amd64-${{ steps.version.outputs.version }}-${{ github.sha }}",
 		"name: file-sync-engine-daemon-linux-arm64-${{ steps.version.outputs.version }}-${{ github.sha }}",
-		"name: fse-desktop-${{ matrix.target }}-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"name: fse-desktop-${{ matrix.target }}-${{ matrix.webkit_slug }}-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
 		"name: fse-desktop-windows-amd64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}",
 		"name: fse-desktop-windows-arm64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}",
 		"name: fse-desktop-${{ matrix.target }}-installer-${{ steps.version.outputs.version }}-${{ github.sha }}",
@@ -175,8 +175,8 @@ func TestReleaseWorkflowUsesNativeLinuxArm64DesktopRunner(t *testing.T) {
 		"target: linux-amd64",
 		"target: linux-arm64",
 		"runner: ubuntu-24.04-arm",
-		"FSE_DESKTOP_WAILS_TARGETS: linux/${{ matrix.goarch }}",
-		"FSE_DESKTOP_LINUX_INSTALLER_TARGETS: ${{ matrix.target }}",
+		"FSE_DESKTOP_LINUX_WEBKIT_TARGETS: linux/${{ matrix.goarch }}",
+		"FSE_DESKTOP_LINUX_WEBKIT_VARIANTS: ${{ matrix.webkit_api }}",
 		"appimagetool-aarch64.AppImage",
 		"APPIMAGE_EXTRACT_AND_RUN: 1",
 	} {
@@ -186,6 +186,40 @@ func TestReleaseWorkflowUsesNativeLinuxArm64DesktopRunner(t *testing.T) {
 	}
 	if strings.Contains(workflow, "Dockerfile.linux-arm64-cross") || strings.Contains(workflow, "FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_ARM64") {
 		t.Fatalf("release workflow must not build Linux arm64 desktop artifacts through the amd64 cross WebKit image")
+	}
+}
+
+func TestReleaseWorkflowBuildsBothLinuxWebKitABIVariantArtifacts(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+
+	for _, want := range []string{
+		"webkit_api: '4.1'",
+		"webkit_slug: webkit41",
+		"webkit_api: '4.0'",
+		"webkit_slug: webkit40",
+		"development/desktop-wails-builder/Dockerfile.linux-webkit40",
+		"FSE_DESKTOP_LINUX_WEBKIT_VARIANTS: ${{ matrix.webkit_api }}",
+		"FSE_DESKTOP_LINUX_WEBKIT_TARGETS: linux/${{ matrix.goarch }}",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_WEBKIT41",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_WEBKIT40",
+		"scripts/build-package-desktop-linux-webkit-variants.sh",
+		"linux-installers-${{ matrix.webkit_slug }}",
+		"fse-desktop-${{ matrix.target }}-${{ matrix.webkit_slug }}-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"fse-desktop-${{ steps.version.outputs.version }}-${{ matrix.target }}.deb",
+		"fse-desktop-${{ steps.version.outputs.version }}-${{ matrix.target }}.rpm",
+		"fse-desktop-${{ steps.version.outputs.version }}-${{ matrix.target }}.AppImage",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow missing Linux WebKit ABI variant artifact contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"name: fse-desktop-${{ matrix.target }}-installers-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"run: scripts/package-desktop-linux-installers.sh \"${{ steps.version.outputs.version }}\"",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("release workflow still uses single-ABI Linux desktop artifact path %q", forbidden)
+		}
 	}
 }
 

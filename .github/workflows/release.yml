@@ -63,7 +63,7 @@ jobs:
           if-no-files-found: error
 
   linux-desktop-artifacts:
-    name: Linux desktop installer artifacts (${{ matrix.target }})
+    name: Linux desktop installer artifacts (${{ matrix.target }} ${{ matrix.webkit_slug }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -73,10 +73,34 @@ jobs:
             goarch: amd64
             runner: ubuntu-latest
             appimagetool: appimagetool-x86_64.AppImage
+            webkit_api: '4.1'
+            webkit_slug: webkit41
+            webkit_dockerfile: development/desktop-wails-builder/Dockerfile
+            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.10.2
           - target: linux-arm64
             goarch: arm64
             runner: ubuntu-24.04-arm
             appimagetool: appimagetool-aarch64.AppImage
+            webkit_api: '4.1'
+            webkit_slug: webkit41
+            webkit_dockerfile: development/desktop-wails-builder/Dockerfile
+            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.10.2
+          - target: linux-amd64
+            goarch: amd64
+            runner: ubuntu-latest
+            appimagetool: appimagetool-x86_64.AppImage
+            webkit_api: '4.0'
+            webkit_slug: webkit40
+            webkit_dockerfile: development/desktop-wails-builder/Dockerfile.linux-webkit40
+            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.10.2-linux-webkit40
+          - target: linux-arm64
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            appimagetool: appimagetool-aarch64.AppImage
+            webkit_api: '4.0'
+            webkit_slug: webkit40
+            webkit_dockerfile: development/desktop-wails-builder/Dockerfile.linux-webkit40
+            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.10.2-linux-webkit40
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -106,19 +130,13 @@ jobs:
       - name: Package desktop engine resources
         run: scripts/package-desktop-engine-resources.sh "${{ steps.version.outputs.version }}"
 
-      - name: Build Linux Wails builder image
+      - name: Build Linux Wails builder image for WebKitGTK ABI lane
         shell: bash
         run: |
           docker build \
-            -t fse-desktop-wails-builder:debian12-wails2.10.2 \
-            -f development/desktop-wails-builder/Dockerfile \
+            -t "${{ matrix.webkit_builder_image }}" \
+            -f "${{ matrix.webkit_dockerfile }}" \
             development/desktop-wails-builder
-
-      - name: Build Linux desktop GUI Wails output
-        env:
-          FSE_DESKTOP_WAILS_BUILDER_IMAGE: fse-desktop-wails-builder:debian12-wails2.10.2
-          FSE_DESKTOP_WAILS_TARGETS: linux/${{ matrix.goarch }}
-        run: scripts/build-desktop-gui-wails.sh "${{ steps.version.outputs.version }}"
 
       - name: Install Linux desktop packaging tools
         shell: bash
@@ -130,28 +148,31 @@ jobs:
             "https://github.com/AppImage/AppImageKit/releases/download/continuous/${{ matrix.appimagetool }}"
           chmod +x "$RUNNER_TEMP/appimage/${{ matrix.appimagetool }}"
 
-      - name: Package Linux desktop installers
+      - name: Build and package Linux desktop GUI WebKitGTK ABI variant
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
           FSE_DESKTOP_APPIMAGETOOL: ${{ runner.temp }}/appimage/${{ matrix.appimagetool }}
-          FSE_DESKTOP_LINUX_INSTALLER_TARGETS: ${{ matrix.target }}
-        run: scripts/package-desktop-linux-installers.sh "${{ steps.version.outputs.version }}"
+          FSE_DESKTOP_LINUX_WEBKIT_VARIANTS: ${{ matrix.webkit_api }}
+          FSE_DESKTOP_LINUX_WEBKIT_TARGETS: linux/${{ matrix.goarch }}
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_WEBKIT41: ${{ matrix.webkit_builder_image }}
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE_LINUX_WEBKIT40: ${{ matrix.webkit_builder_image }}
+        run: scripts/build-package-desktop-linux-webkit-variants.sh "${{ steps.version.outputs.version }}"
 
       - name: Verify Linux desktop installer checksums
         shell: bash
         run: |
-          cd "build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers"
+          cd "build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers-${{ matrix.webkit_slug }}"
           sha256sum -c SHA256SUMS
 
       - name: Upload Linux desktop installer artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: fse-desktop-${{ matrix.target }}-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
+          name: fse-desktop-${{ matrix.target }}-${{ matrix.webkit_slug }}-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
-            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/fse-desktop-${{ steps.version.outputs.version }}-${{ matrix.target }}.deb
-            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/fse-desktop-${{ steps.version.outputs.version }}-${{ matrix.target }}.rpm
-            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/fse-desktop-${{ steps.version.outputs.version }}-${{ matrix.target }}.AppImage
-            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/SHA256SUMS
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers-${{ matrix.webkit_slug }}/fse-desktop-${{ steps.version.outputs.version }}-${{ matrix.target }}.deb
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers-${{ matrix.webkit_slug }}/fse-desktop-${{ steps.version.outputs.version }}-${{ matrix.target }}.rpm
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers-${{ matrix.webkit_slug }}/fse-desktop-${{ steps.version.outputs.version }}-${{ matrix.target }}.AppImage
+            build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers-${{ matrix.webkit_slug }}/SHA256SUMS
           if-no-files-found: error
 
   windows-desktop-artifacts:
