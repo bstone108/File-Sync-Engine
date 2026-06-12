@@ -78,8 +78,13 @@ cp -R "$ROOT/desktop-gui/." "$WORK_DIR/"
   fi
   npm run build
   FSE_DESKTOP_VERSION="$VERSION" GOOS=darwin GOARCH="$ARCH" wails build -platform darwin/$ARCH -clean
-  test -s "build/bin/fse-desktop.app/Contents/MacOS/fse-desktop"
-  cp -R build/bin/. "$TARGET_OUT/"
+  APP_BUNDLE="$(find build/bin -maxdepth 1 -type d -name '*.app' -print -quit)"
+  if [[ -z "$APP_BUNDLE" ]]; then
+    printf 'Wails did not produce a macOS .app bundle under build/bin.\n' >&2
+    exit 1
+  fi
+  test -s "$APP_BUNDLE/Contents/MacOS/fse-desktop"
+  cp -R "$APP_BUNDLE" "$TARGET_OUT/fse-desktop.app"
 )
 
 test -s "$TARGET_OUT/fse-desktop.app/Contents/MacOS/fse-desktop"
