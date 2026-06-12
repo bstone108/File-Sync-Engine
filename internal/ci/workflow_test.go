@@ -84,9 +84,6 @@ func readWorkflow(t *testing.T, name string) string {
 	path := filepath.Join("..", "..", ".github", "workflows", name)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			t.Skipf("CI workflow %s is pending because the current GitHub credential cannot push .github/workflows without workflow scope", name)
-		}
 		t.Fatalf("read CI workflow %s: %v", name, err)
 	}
 	return string(data)
