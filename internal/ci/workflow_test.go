@@ -41,6 +41,39 @@ func TestCrossPlatformWorkflowCoversTestHarnessAndSixTargets(t *testing.T) {
 	}
 }
 
+func TestWorkflowsUseNode24ReadyGitHubActions(t *testing.T) {
+	workflows := map[string]string{
+		"ci.yml":        readWorkflow(t, "ci.yml"),
+		"container.yml": readWorkflow(t, "container.yml"),
+		"release.yml":   readWorkflow(t, "release.yml"),
+	}
+
+	for name, workflow := range workflows {
+		for _, forbidden := range []string{
+			"actions/checkout@v4",
+			"actions/setup-go@v5",
+			"actions/setup-node@v4",
+			"actions/upload-artifact@v4",
+		} {
+			if strings.Contains(workflow, forbidden) {
+				t.Fatalf("%s still uses Node 20-era action %q", name, forbidden)
+			}
+		}
+	}
+
+	combined := strings.Join([]string{workflows["ci.yml"], workflows["container.yml"], workflows["release.yml"]}, "\n")
+	for _, want := range []string{
+		"actions/checkout@v6",
+		"actions/setup-go@v6",
+		"actions/setup-node@v6",
+		"actions/upload-artifact@v7",
+	} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("workflows missing Node 24-ready action %q", want)
+		}
+	}
+}
+
 func TestReleaseWorkflowBuildsLinuxDaemonAndDesktopArtifacts(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
 

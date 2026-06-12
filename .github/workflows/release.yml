@@ -20,10 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -45,7 +45,7 @@ jobs:
         run: scripts/build-all.sh "${{ steps.version.outputs.version }}"
 
       - name: Upload linux amd64 daemon artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: file-sync-engine-daemon-linux-amd64-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
@@ -54,7 +54,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload linux arm64 daemon artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: file-sync-engine-daemon-linux-arm64-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
@@ -79,10 +79,10 @@ jobs:
             appimagetool: appimagetool-aarch64.AppImage
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -144,7 +144,7 @@ jobs:
           sha256sum -c SHA256SUMS
 
       - name: Upload Linux desktop installer artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fse-desktop-${{ matrix.target }}-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
@@ -159,10 +159,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -218,7 +218,7 @@ jobs:
           sha256sum -c SHA256SUMS
 
       - name: Upload Windows amd64 desktop installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fse-desktop-windows-amd64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
@@ -227,7 +227,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload Windows arm64 desktop installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fse-desktop-windows-arm64-installer-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
@@ -250,16 +250,16 @@ jobs:
             runner: macos-14
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go for daemon builds
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
 
@@ -291,7 +291,7 @@ jobs:
         run: scripts/build-all.sh "${{ steps.version.outputs.version }}"
 
       - name: Set up Go for Wails desktop build
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: desktop-gui/go.mod
           cache: true
@@ -325,7 +325,7 @@ jobs:
           sha256sum -c SHA256SUMS
 
       - name: Upload macOS desktop installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fse-desktop-${{ matrix.target }}-installer-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
