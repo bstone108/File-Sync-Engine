@@ -405,11 +405,28 @@ jobs:
       - name: Stage release assets
         shell: bash
         run: |
+          version="${{ steps.version.outputs.version }}"
+          asset_version="${version/.t/.}"
           mkdir -p release-assets
           find release-artifacts -maxdepth 3 -type f -print0 | while IFS= read -r -d '' file; do
-            artifact_dir="$(basename "$(dirname "$file")")"
             base="$(basename "$file")"
-            cp "$file" "release-assets/${artifact_dir}-${base}"
+            if [[ "$base" == "SHA256SUMS" ]]; then
+              continue
+            fi
+            artifact_dir="$(basename "$(dirname "$file")")"
+            stem="${artifact_dir%-${GITHUB_SHA}}"
+            stem="${stem//$version/$asset_version}"
+            if [[ "$base" == *.* ]]; then
+              ext=".${base##*.}"
+            else
+              ext=""
+            fi
+            dest="release-assets/${stem}${ext}"
+            if [[ -e "$dest" ]]; then
+              printf 'release asset name collision: %s\n' "$dest" >&2
+              exit 1
+            fi
+            cp "$file" "$dest"
           done
           cd release-assets
           sha256sum * > RELEASE_ASSET_SHA256SUMS

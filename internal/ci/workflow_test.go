@@ -335,14 +335,19 @@ func TestReleaseWorkflowPublishesGitHubRelease(t *testing.T) {
 		"RELEASE_ASSET_SHA256SUMS",
 		"gh release create",
 		"gh release upload",
+		"asset_version=\"${version/.t/.}\"",
+		"if [[ \"$base\" == \"SHA256SUMS\" ]]",
+		"stem=\"${artifact_dir%-${GITHUB_SHA}}\"",
+		"stem=\"${stem//$version/$asset_version}\"",
+		"release asset name collision",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("release workflow missing publish contract %q", want)
 		}
 	}
-	for _, forbidden := range []string{"gh release edit", "--clobber"} {
+	for _, forbidden := range []string{"gh release edit", "--clobber", "release-assets/${artifact_dir}-${base}"} {
 		if strings.Contains(workflow, forbidden) {
-			t.Fatalf("release workflow must not overwrite existing release assets with %q", forbidden)
+			t.Fatalf("release workflow must not overwrite existing release assets or use noisy names with %q", forbidden)
 		}
 	}
 }
