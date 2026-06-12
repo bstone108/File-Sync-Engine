@@ -1,4 +1,6 @@
-development/
+development/*
+!development/desktop-wails-builder/
+!development/desktop-wails-builder/*
 /tmp/
 *.log
 /desktop-gui/wails-output/

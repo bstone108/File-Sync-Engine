@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+# Legacy WebKitGTK 4.0 linux-arm64 Wails cross-builder for amd64 hosts.
+# Build this after the legacy WebKitGTK 4.0 base builder exists.
+FROM fse-desktop-wails-builder:debian12-wails2.10.2-linux-webkit40
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN dpkg --add-architecture arm64 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+        pkg-config \
+        libgtk-3-dev:arm64 \
+        libwebkit2gtk-4.0-dev:arm64 \
+        libayatana-appindicator3-dev:arm64 \
+        librsvg2-dev:arm64 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CC=aarch64-linux-gnu-gcc
+ENV CXX=aarch64-linux-gnu-g++
+ENV PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+ENV FSE_DESKTOP_LINUX_WEBKIT_API=4.0
+ENV FSE_DESKTOP_WAILS_CROSS_LINUX_ARM64=1
+ENV FSE_DESKTOP_WAILS_TARGETS="linux/arm64"
+
+RUN command -v aarch64-linux-gnu-gcc \
+    && command -v aarch64-linux-gnu-g++ \
+    && PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig pkg-config --exists gtk+-3.0 webkit2gtk-4.0
+
+WORKDIR /tmp/work
+CMD ["wails", "doctor"]

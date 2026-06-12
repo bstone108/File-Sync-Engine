@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+# Isolated Windows ARM64 Wails builder layer for the file synchronization engine.
+# Build this image from an isolated/container context; do not install these tools on the Hermes host.
+FROM fse-desktop-wails-builder:debian12-wails2.10.2
+
+ARG LLVM_MINGW_VERSION=20250114
+ARG LLVM_MINGW_ARCHIVE=llvm-mingw-20250114-ucrt-ubuntu-20.04-x86_64.tar.xz
+ARG LLVM_MINGW_SHA256=
+
+RUN set -eux; \
+    mkdir -p /tmp/llvm-mingw /opt; \
+    curl -fsSL "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${LLVM_MINGW_ARCHIVE}" -o "/tmp/llvm-mingw/${LLVM_MINGW_ARCHIVE}"; \
+    if [ -n "${LLVM_MINGW_SHA256}" ]; then echo "${LLVM_MINGW_SHA256}  /tmp/llvm-mingw/${LLVM_MINGW_ARCHIVE}" | sha256sum -c -; fi; \
+    tar -C /opt -xf "/tmp/llvm-mingw/${LLVM_MINGW_ARCHIVE}"; \
+    mv "/opt/${LLVM_MINGW_ARCHIVE%.tar.xz}" /opt/llvm-mingw; \
+    ln -s /opt/llvm-mingw/bin/aarch64-w64-mingw32-gcc /usr/local/bin/aarch64-w64-mingw32-gcc; \
+    ln -s /opt/llvm-mingw/bin/aarch64-w64-mingw32-g++ /usr/local/bin/aarch64-w64-mingw32-g++; \
+    printf '#!/usr/bin/env sh\nexec /opt/llvm-mingw/bin/aarch64-w64-mingw32-gcc "$@"\n' > /usr/local/bin/llvm-mingw; \
+    chmod +x /usr/local/bin/llvm-mingw; \
+    /opt/llvm-mingw/bin/aarch64-w64-mingw32-gcc --version; \
+    rm -rf /tmp/llvm-mingw
+
+ENV PATH=/opt/llvm-mingw/bin:/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV FSE_DESKTOP_WAILS_TARGETS="windows/arm64"
+
+CMD ["wails", "doctor"]

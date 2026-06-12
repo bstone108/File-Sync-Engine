@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1
+# Isolated Darwin/macOS Wails builder layer for the file synchronization engine.
+# This layer intentionally requires a caller-supplied Apple SDK archive. Do not
+# commit SDK contents or download them from this repository/script.
+FROM fse-desktop-wails-builder:debian12-wails2.10.2
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG OSXCROSS_REPO=https://github.com/tpoechtrager/osxcross.git
+ARG OSXCROSS_REF=master
+
+# Build dependencies for osxcross. The base image already contains Go, Node/npm,
+# Wails, Linux WebKit/GTK dependencies, and Windows cross compilers.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        clang \
+        cmake \
+        libssl-dev \
+        llvm-dev \
+        patch \
+        python3 \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+RUN git clone --depth 1 --branch "${OSXCROSS_REF}" "${OSXCROSS_REPO}" osxcross
+
+# The build script stages the externally supplied SDK tarball into the isolated
+# Docker context with a version-bearing name such as MacOSX26.5.sdk.tar.xz.
+# Preserve the compression suffix so osxcross recognizes the archive type, and
+# keep the SDK version in the filename so osxcross can infer SDK_VERSION before
+# validating the archive.
+COPY MacOSX*.sdk.tar* /opt/osxcross/tarballs/
+COPY patch-osxcross-sdk.py /opt/osxcross/patch-osxcross-sdk.py
+
+WORKDIR /opt/osxcross
+# Upstream osxcross can lag newly supplied Apple SDK patch releases. The
+# current legal SDK handoff is macOS 26.5; accept future 26.x SDK tarballs on
+# the existing Darwin 25-family build path instead of failing as "Unsupported SDK".
+RUN python3 /opt/osxcross/patch-osxcross-sdk.py
+ENV UNATTENDED=1
+ENV OSXCROSS_NO_INCLUDE_PATH_WARNINGS=1
+RUN ./build.sh
+
+ENV OSXCROSS_ROOT=/opt/osxcross/target
+ENV PATH=/opt/osxcross/target/bin:/go/bin:/usr/local/go/bin:$PATH
+ENV CC_DARWIN_AMD64=o64-clang
+ENV CXX_DARWIN_AMD64=o64-clang++
+ENV CC_DARWIN_ARM64=oa64-clang
+ENV CXX_DARWIN_ARM64=oa64-clang++
+ENV FSE_DESKTOP_WAILS_TARGETS="darwin/amd64 darwin/arm64"
+
+CMD ["sh", "-lc", "o64-clang --version && oa64-clang --version && wails doctor"]
