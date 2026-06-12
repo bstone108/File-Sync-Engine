@@ -107,6 +107,48 @@ func TestReleaseWorkflowBuildsWindowsDesktopInstallerArtifacts(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+	script := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails-native-macos.sh"))
+
+	for _, want := range []string{
+		"macos-desktop-artifacts",
+		"macOS desktop installer artifacts",
+		"runs-on: ${{ matrix.runner }}",
+		"macos-13",
+		"macos-14",
+		"darwin-amd64",
+		"darwin-arm64",
+		"FSE_DESKTOP_MACOS_ARCH: ${{ matrix.arch }}",
+		"scripts/build-desktop-gui-wails-native-macos.sh",
+		"FSE_DESKTOP_GUI_RELEASE_TARGETS: darwin-${{ matrix.arch }}",
+		"fse-desktop-macos-${{ matrix.arch }}-installer",
+		"build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.zip",
+		"upload-artifact",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow missing macOS artifact contract %q", want)
+		}
+	}
+	for _, want := range []string{
+		"native macOS runner",
+		"GOOS=darwin",
+		"GOARCH=\"$ARCH\"",
+		"wails build -platform darwin/$ARCH",
+		"desktop-gui/wails-output/darwin-$ARCH",
+		"fse-desktop.app/Contents/MacOS/fse-desktop",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("native macOS Wails script missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Dockerfile.darwin-osxcross", "osxcross", "FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey"} {
+		if strings.Contains(workflow, forbidden) || strings.Contains(script, forbidden) {
+			t.Fatalf("macOS native artifact path must not depend on forbidden text %q", forbidden)
+		}
+	}
+}
+
 func TestDockerPublishWorkflowDocumentsVersioningAndUpdateVerification(t *testing.T) {
 	workflow := readWorkflow(t, "container.yml")
 	docs := readRequiredFile(t, filepath.Join("..", "..", "docs", "DOCKER.md"))

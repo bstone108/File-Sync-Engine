@@ -190,3 +190,97 @@ jobs:
             build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-windows-arm64.zip
             build/${{ steps.version.outputs.version }}/desktop-gui/SHA256SUMS
           if-no-files-found: error
+
+  macos-desktop-artifacts:
+    name: macOS desktop installer artifacts (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: darwin-amd64
+            runner: macos-13
+          - arch: arm64
+            target: darwin-arm64
+            runner: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go for daemon builds
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Go for Wails desktop build
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop-gui/go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            desktop-gui/go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="ci-${GITHUB_SHA::12}"
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install Wails CLI and packaging tools
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          brew install coreutils
+          if [ -d /opt/homebrew/opt/coreutils/libexec/gnubin ]; then
+            echo "/opt/homebrew/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+          fi
+          if [ -d /usr/local/opt/coreutils/libexec/gnubin ]; then
+            echo "/usr/local/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+          fi
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build cross-platform daemon binaries
+        run: scripts/build-all.sh "${{ steps.version.outputs.version }}"
+
+      - name: Package desktop engine resources
+        run: scripts/package-desktop-engine-resources.sh "${{ steps.version.outputs.version }}"
+
+      - name: Build native macOS desktop GUI output
+        env:
+          FSE_DESKTOP_MACOS_ARCH: ${{ matrix.arch }}
+        run: scripts/build-desktop-gui-wails-native-macos.sh "${{ steps.version.outputs.version }}"
+
+      - name: Package macOS desktop installer
+        env:
+          FSE_DESKTOP_GUI_RELEASE_TARGETS: darwin-${{ matrix.arch }}
+        run: scripts/package-desktop-gui-release.sh "${{ steps.version.outputs.version }}"
+
+      - name: Verify macOS desktop installer checksum
+        shell: bash
+        run: |
+          cd "build/${{ steps.version.outputs.version }}/desktop-gui"
+          sha256sum -c SHA256SUMS
+
+      - name: Upload macOS desktop installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fse-desktop-macos-${{ matrix.arch }}-installer-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.zip
+            build/${{ steps.version.outputs.version }}/desktop-gui/SHA256SUMS
+          if-no-files-found: error
