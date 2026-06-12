@@ -233,7 +233,7 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"macos-desktop-artifacts",
 		"macOS desktop installer artifacts",
 		"runs-on: ${{ matrix.runner }}",
-		"macos-13",
+		"macos-15-intel",
 		"macos-14",
 		"darwin-amd64",
 		"darwin-arm64",
@@ -247,6 +247,9 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("release workflow missing macOS artifact contract %q", want)
 		}
+	}
+	if strings.Contains(workflow, "macos-13") {
+		t.Fatalf("release workflow must not use retired/absent macos-13 runner labels")
 	}
 	for _, want := range []string{
 		"native macOS runner",
