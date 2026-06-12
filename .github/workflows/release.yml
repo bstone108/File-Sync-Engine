@@ -117,3 +117,76 @@ jobs:
           name: fse-desktop-linux-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: build/${{ steps.version.outputs.version }}/desktop-gui/linux-installers/
           if-no-files-found: error
+
+  windows-desktop-artifacts:
+    name: Windows desktop installer artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="ci-${GITHUB_SHA::12}"
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build cross-platform daemon binaries
+        run: scripts/build-all.sh "${{ steps.version.outputs.version }}"
+
+      - name: Package desktop engine resources
+        run: scripts/package-desktop-engine-resources.sh "${{ steps.version.outputs.version }}"
+
+      - name: Build Windows Wails builder images
+        shell: bash
+        run: |
+          docker build \
+            -t fse-desktop-wails-builder:debian12-wails2.10.2 \
+            -f development/desktop-wails-builder/Dockerfile \
+            development/desktop-wails-builder
+          docker build \
+            -t fse-desktop-wails-builder:debian12-wails2.10.2-windows-arm64-llvm-mingw \
+            -f development/desktop-wails-builder/Dockerfile.windows-arm64-llvm-mingw \
+            development/desktop-wails-builder
+
+      - name: Build Windows desktop GUI Wails outputs
+        env:
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE: fse-desktop-wails-builder:debian12-wails2.10.2
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE_WINDOWS_AMD64: fse-desktop-wails-builder:debian12-wails2.10.2
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE_WINDOWS_ARM64: fse-desktop-wails-builder:debian12-wails2.10.2-windows-arm64-llvm-mingw
+          FSE_DESKTOP_WAILS_TARGETS: windows/amd64 windows/arm64
+        run: scripts/build-desktop-gui-wails.sh "${{ steps.version.outputs.version }}"
+
+      - name: Package Windows desktop installers
+        env:
+          FSE_DESKTOP_GUI_RELEASE_TARGETS: windows-amd64,windows-arm64
+        run: scripts/package-desktop-gui-release.sh "${{ steps.version.outputs.version }}"
+
+      - name: Verify Windows desktop installer checksums
+        shell: bash
+        run: |
+          cd "build/${{ steps.version.outputs.version }}/desktop-gui"
+          sha256sum -c SHA256SUMS
+
+      - name: Upload Windows desktop installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fse-desktop-windows-installers-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-windows-amd64.zip
+            build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-windows-arm64.zip
+            build/${{ steps.version.outputs.version }}/desktop-gui/SHA256SUMS
+          if-no-files-found: error

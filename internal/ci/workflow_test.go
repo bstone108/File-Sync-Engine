@@ -77,6 +77,36 @@ func TestReleaseWorkflowBuildsLinuxDaemonAndDesktopArtifacts(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowBuildsWindowsDesktopInstallerArtifacts(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+
+	for _, want := range []string{
+		"windows-desktop-artifacts",
+		"Windows desktop installer artifacts",
+		"windows-amd64",
+		"windows-arm64",
+		"Dockerfile.windows-arm64-llvm-mingw",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_WINDOWS_AMD64",
+		"FSE_DESKTOP_WAILS_BUILDER_IMAGE_WINDOWS_ARM64",
+		"FSE_DESKTOP_WAILS_TARGETS: windows/amd64 windows/arm64",
+		"FSE_DESKTOP_GUI_RELEASE_TARGETS: windows-amd64,windows-arm64",
+		"scripts/package-desktop-engine-resources.sh",
+		"scripts/build-desktop-gui-wails.sh",
+		"scripts/package-desktop-gui-release.sh",
+		"fse-desktop-windows-installers",
+		"upload-artifact",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow missing Windows artifact contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{"FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("release workflow must not publish or log runtime secrets %q", forbidden)
+		}
+	}
+}
+
 func TestDockerPublishWorkflowDocumentsVersioningAndUpdateVerification(t *testing.T) {
 	workflow := readWorkflow(t, "container.yml")
 	docs := readRequiredFile(t, filepath.Join("..", "..", "docs", "DOCKER.md"))
