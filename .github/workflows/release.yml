@@ -276,6 +276,18 @@ jobs:
           fi
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
+      - name: Build cross-platform daemon binaries
+        run: scripts/build-all.sh "${{ steps.version.outputs.version }}"
+
+      - name: Set up Go for Wails desktop build
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop-gui/go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            desktop-gui/go.sum
+
       - name: Install Wails CLI and packaging tools
         shell: bash
         run: |
@@ -288,18 +300,6 @@ jobs:
             echo "/usr/local/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
           fi
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-
-      - name: Build cross-platform daemon binaries
-        run: scripts/build-all.sh "${{ steps.version.outputs.version }}"
-
-      - name: Set up Go for Wails desktop build
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: desktop-gui/go.mod
-          cache: true
-          cache-dependency-path: |
-            go.sum
-            desktop-gui/go.sum
 
       - name: Package desktop engine resources
         run: scripts/package-desktop-engine-resources.sh "${{ steps.version.outputs.version }}"
