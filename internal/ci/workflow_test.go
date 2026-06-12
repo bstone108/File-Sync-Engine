@@ -276,7 +276,7 @@ func TestReleaseWorkflowUsesManualDateReleaseVersions(t *testing.T) {
 		"version:",
 		"required: true",
 		"scripts/resolve-release-version.sh \"${{ inputs.version }}\"",
-		"YYYY.MM.DD.tNN",
+		"YYYY.MM.DD.NN",
 		"manual release version",
 		"GITHUB_REF_TYPE",
 		"GITHUB_REF_NAME#v",
@@ -290,7 +290,9 @@ func TestReleaseWorkflowUsesManualDateReleaseVersions(t *testing.T) {
 		`version="ci-${GITHUB_SHA::12}"`,
 		"TZ=America/Chicago date +%Y.%m.%d",
 		"git tag --list",
-		"printf -v version '%s.t%02d'",
+		"printf -v version '%s." + "t" + "%02d'",
+		"YYYY.MM.DD." + "t" + "NN",
+		"\\." + "t" + "[0-9]",
 	} {
 		if strings.Contains(workflow, forbidden) || strings.Contains(script, forbidden) {
 			t.Fatalf("release workflow must not auto-increment or use old CI version default %q", forbidden)
@@ -335,10 +337,8 @@ func TestReleaseWorkflowPublishesGitHubRelease(t *testing.T) {
 		"RELEASE_ASSET_SHA256SUMS",
 		"gh release create",
 		"gh release upload",
-		"asset_version=\"${version/.t/.}\"",
 		"if [[ \"$base\" == \"SHA256SUMS\" ]]",
 		"stem=\"${artifact_dir%-${GITHUB_SHA}}\"",
-		"stem=\"${stem//$version/$asset_version}\"",
 		"release asset name collision",
 	} {
 		if !strings.Contains(workflow, want) {

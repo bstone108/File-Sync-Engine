@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Manual release version to build, format YYYY.MM.DD.tNN. Required for workflow_dispatch; tag pushes use the tag name.
+        description: Manual main-branch release version to build, format YYYY.MM.DD.NN. Required for workflow_dispatch; tag pushes use the tag name.
         required: true
         type: string
 
@@ -406,7 +406,6 @@ jobs:
         shell: bash
         run: |
           version="${{ steps.version.outputs.version }}"
-          asset_version="${version/.t/.}"
           mkdir -p release-assets
           find release-artifacts -maxdepth 3 -type f -print0 | while IFS= read -r -d '' file; do
             base="$(basename "$file")"
@@ -415,7 +414,6 @@ jobs:
             fi
             artifact_dir="$(basename "$(dirname "$file")")"
             stem="${artifact_dir%-${GITHUB_SHA}}"
-            stem="${stem//$version/$asset_version}"
             if [[ "$base" == *.* ]]; then
               ext=".${base##*.}"
             else
