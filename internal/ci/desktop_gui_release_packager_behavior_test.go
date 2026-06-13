@@ -112,7 +112,15 @@ func TestDesktopGUIReleasePackagerCanPackageExplicitVerifiedTargetSubset(t *test
 
 	cmd := exec.Command("bash", "scripts/package-desktop-gui-release.sh", "0.1.99-test", wailsRoot, engineRoot, outDir)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "FSE_DESKTOP_GUI_RELEASE_TARGETS=linux-amd64,windows-arm64")
+	fakeBin := filepath.Join(tmp, "bin")
+	mustWriteExecutable(t, filepath.Join(fakeBin, "makensis"), `#!/usr/bin/env bash
+set -euo pipefail
+script="${@: -1}"
+out="$(grep '^OutFile ' "$script" | sed 's/^OutFile "//; s/"$//')"
+mkdir -p "$(dirname "$out")"
+printf 'fake nsis installer for %s\n' "$script" > "$out"
+`)
+	cmd.Env = append(os.Environ(), "FSE_DESKTOP_GUI_RELEASE_TARGETS=linux-amd64,windows-arm64", "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("packager failed for explicit verified target subset:\n%s", output)
@@ -123,6 +131,10 @@ func TestDesktopGUIReleasePackagerCanPackageExplicitVerifiedTargetSubset(t *test
 			t.Fatalf("missing non-empty archive for %s at %s (info=%v err=%v)\noutput:\n%s", target, zipPath, info, err, output)
 		}
 	}
+	installerPath := filepath.Join(outDirAbs, "fse-desktop-0.1.99-test-windows-arm64-installer.exe")
+	if info, err := os.Stat(installerPath); err != nil || info.Size() == 0 {
+		t.Fatalf("missing non-empty Windows installer at %s (info=%v err=%v)\noutput:\n%s", installerPath, info, err, output)
+	}
 	if _, err := os.Stat(filepath.Join(outDirAbs, "fse-desktop-0.1.99-test-darwin-amd64.zip")); !os.IsNotExist(err) {
 		t.Fatalf("subset packaging unexpectedly wrote a darwin archive: %v\noutput:\n%s", err, output)
 	}
@@ -130,7 +142,7 @@ func TestDesktopGUIReleasePackagerCanPackageExplicitVerifiedTargetSubset(t *test
 	if err != nil {
 		t.Fatalf("missing SHA256SUMS for subset packaging: %v\noutput:\n%s", err, output)
 	}
-	if got := string(sha); !strings.Contains(got, "linux-amd64") || !strings.Contains(got, "windows-arm64") || strings.Contains(got, "darwin") {
+	if got := string(sha); !strings.Contains(got, "linux-amd64") || !strings.Contains(got, "windows-arm64.zip") || !strings.Contains(got, "windows-arm64-installer.exe") || strings.Contains(got, "darwin") {
 		t.Fatalf("unexpected subset SHA256SUMS contents:\n%s\noutput:\n%s", got, output)
 	}
 }
@@ -149,5 +161,15 @@ func mustWriteFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func mustWriteExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir parent for %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write executable %s: %v", path, err)
 	}
 }

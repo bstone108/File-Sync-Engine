@@ -5,8 +5,9 @@ usage() {
   cat >&2 <<'USAGE'
 Usage: scripts/package-desktop-gui-release.sh <version> [wails-output-root] [engine-resource-root] [out-dir]
 
-Packages already-built Wails desktop outputs plus verified bundled engine resources
-into one reviewable zip per desktop target under build/<version>/desktop-gui/.
+Packages already-built Wails desktop outputs plus verified bundled engine resources.
+Windows targets produce both a zip package and an actual NSIS installer .exe.
+Other desktop targets produce one reviewable zip per target under build/<version>/desktop-gui/.
 This script does not run Wails, npm, Go builds, or install toolchains. Produce the
 Wails outputs separately in an isolated build environment, then point this script
 at that output root.
@@ -39,7 +40,6 @@ OUT_DIR="${4:-$ROOT/build/$VERSION/desktop-gui}"
 if [[ "$OUT_DIR" != /* ]]; then
   OUT_DIR="$CALLER_PWD/$OUT_DIR"
 fi
-
 
 if [[ ! -f "$ENGINE_RESOURCE_ROOT/manifest.json" ]]; then
   printf 'missing bundled engine manifest: %s\n' "$ENGINE_RESOURCE_ROOT/manifest.json" >&2
@@ -106,12 +106,23 @@ expected_wails_executable() {
   esac
 }
 
+is_windows_target() {
+  case "$1" in
+    windows-amd64|windows-arm64) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 preflight_inputs() {
   local missing=0
   local target engine_rel wails_dir wails_executable
+  local needs_windows_installer=0
   for entry in "${TARGETS[@]}"; do
     target="${entry%%:*}"
     engine_rel="${entry#*:}"
+    if is_windows_target "$target"; then
+      needs_windows_installer=1
+    fi
     wails_dir="$WAILS_OUTPUT_ROOT/$target"
     if [[ ! -d "$wails_dir" ]]; then
       printf 'missing Wails output for %s: %s\n' "$target" "$wails_dir" >&2
@@ -131,6 +142,10 @@ preflight_inputs() {
       missing=1
     fi
   done
+  if [[ "$needs_windows_installer" -eq 1 ]] && ! command -v makensis >/dev/null 2>&1; then
+    printf 'missing Windows installer tool: makensis. Install NSIS before packaging Windows installer targets.\n' >&2
+    missing=1
+  fi
   if [[ "$missing" -ne 0 ]]; then
     printf 'desktop GUI release packaging aborted before replacing output directory; produce all missing inputs first.\n' >&2
     exit 1
@@ -141,6 +156,45 @@ preflight_inputs
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
+
+build_windows_installer() {
+  local target="$1"
+  local staging="$2"
+  local installer_name="fse-desktop-${VERSION}-${target}-installer.exe"
+  local nsis_dir="$OUT_DIR/.nsis"
+  local nsis_script="$nsis_dir/$target.nsi"
+  mkdir -p "$nsis_dir"
+
+  cat > "$nsis_script" <<NSIS
+Unicode true
+Name "File Sync Engine Desktop"
+OutFile "$OUT_DIR/$installer_name"
+InstallDir "\$PROGRAMFILES64\\File Sync Engine Desktop"
+RequestExecutionLevel admin
+SetCompressor /SOLID lzma
+
+Section "Install"
+  SetOutPath "\$INSTDIR"
+  File /r "$staging/app"
+  File /r "$staging/engine"
+  File /r "$staging/docs-snapshot"
+  CreateDirectory "\$SMPROGRAMS\\File Sync Engine"
+  CreateShortCut "\$SMPROGRAMS\\File Sync Engine\\File Sync Engine Desktop.lnk" "\$INSTDIR\\app\\fse-desktop.exe"
+  CreateShortCut "\$DESKTOP\\File Sync Engine Desktop.lnk" "\$INSTDIR\\app\\fse-desktop.exe"
+  WriteUninstaller "\$INSTDIR\\Uninstall.exe"
+SectionEnd
+
+Section "Uninstall"
+  Delete "\$SMPROGRAMS\\File Sync Engine\\File Sync Engine Desktop.lnk"
+  RMDir "\$SMPROGRAMS\\File Sync Engine"
+  Delete "\$DESKTOP\\File Sync Engine Desktop.lnk"
+  RMDir /r "\$INSTDIR"
+SectionEnd
+NSIS
+
+  makensis -V2 "$nsis_script"
+  printf '%s\n' "$installer_name"
+}
 
 copy_target() {
   local target="$1"
@@ -159,16 +213,25 @@ copy_target() {
     zip -qr "$OUT_DIR/$zip_name" app engine docs-snapshot
   )
   printf '%s\n' "$zip_name"
+  if is_windows_target "$target"; then
+    build_windows_installer "$target" "$staging"
+  fi
 }
 
 for entry in "${TARGETS[@]}"; do
   copy_target "${entry%%:*}" "${entry#*:}"
 done
 
-rm -rf "$OUT_DIR/.staging"
+rm -rf "$OUT_DIR/.staging" "$OUT_DIR/.nsis"
 (
   cd "$OUT_DIR"
-  sha256sum fse-desktop-${VERSION}-*.zip > SHA256SUMS
+  shopt -s nullglob
+  artifacts=(fse-desktop-${VERSION}-*.zip fse-desktop-${VERSION}-*-installer.exe)
+  if [[ "${#artifacts[@]}" -eq 0 ]]; then
+    printf 'no desktop GUI release artifacts were produced.\n' >&2
+    exit 1
+  fi
+  sha256sum "${artifacts[@]}" > SHA256SUMS
 )
 
-printf 'desktop GUI release archives written to %s\n' "$OUT_DIR"
+printf 'desktop GUI release artifacts written to %s\n' "$OUT_DIR"
