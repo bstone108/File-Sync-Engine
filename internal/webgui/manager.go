@@ -396,34 +396,26 @@ func extractZip(packagePath string, dest string) error {
 		return err
 	}
 	for _, f := range r.File {
-		absTarget, err := safeZipEntryTarget(cleanDest, f.Name)
+		entryName := f.Name
+		if entryName == "" || strings.Contains(entryName, "\\") || strings.Contains(entryName, ":") {
+			return fmt.Errorf("unsafe web GUI package path %q", entryName)
+		}
+		cleanName := path.Clean(entryName)
+		if cleanName == "." || cleanName == ".." || path.IsAbs(cleanName) || strings.HasPrefix(cleanName, "../") {
+			return fmt.Errorf("unsafe web GUI package path %q", entryName)
+		}
+		absTarget, err := filepath.Abs(filepath.Join(cleanDest, filepath.FromSlash(cleanName)))
 		if err != nil {
 			return err
+		}
+		if absTarget != cleanDest && !strings.HasPrefix(absTarget, cleanDest+string(os.PathSeparator)) {
+			return fmt.Errorf("unsafe web GUI package path %q", entryName)
 		}
 		if err := extractZipEntry(f, absTarget); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func safeZipEntryTarget(dest string, entryName string) (string, error) {
-	if entryName == "" || strings.Contains(entryName, "\\") || strings.Contains(entryName, ":") {
-		return "", fmt.Errorf("unsafe web GUI package path %q", entryName)
-	}
-	cleanName := path.Clean(entryName)
-	if cleanName == "." || cleanName == ".." || path.IsAbs(cleanName) || strings.HasPrefix(cleanName, "../") {
-		return "", fmt.Errorf("unsafe web GUI package path %q", entryName)
-	}
-	target := filepath.Join(dest, filepath.FromSlash(cleanName))
-	absTarget, err := filepath.Abs(target)
-	if err != nil {
-		return "", err
-	}
-	if absTarget != dest && !strings.HasPrefix(absTarget, dest+string(os.PathSeparator)) {
-		return "", fmt.Errorf("unsafe web GUI package path %q", entryName)
-	}
-	return absTarget, nil
 }
 
 func extractZipEntry(f *zip.File, absTarget string) error {
