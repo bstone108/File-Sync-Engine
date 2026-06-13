@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -400,11 +399,11 @@ func extractZip(packagePath string, dest string) error {
 		if entryName == "" || strings.Contains(entryName, "\\") || strings.Contains(entryName, ":") {
 			return fmt.Errorf("unsafe web GUI package path %q", entryName)
 		}
-		cleanName := path.Clean(entryName)
-		if cleanName == "." || cleanName == ".." || path.IsAbs(cleanName) || strings.HasPrefix(cleanName, "../") {
+		cleanName := filepath.Clean(entryName)
+		if cleanName == "." || cleanName == ".." || filepath.IsAbs(cleanName) || strings.HasPrefix(cleanName, ".."+string(os.PathSeparator)) {
 			return fmt.Errorf("unsafe web GUI package path %q", entryName)
 		}
-		absTarget, err := filepath.Abs(filepath.Join(cleanDest, filepath.FromSlash(cleanName)))
+		absTarget, err := filepath.Abs(filepath.Join(cleanDest, cleanName))
 		if err != nil {
 			return err
 		}
