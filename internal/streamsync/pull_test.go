@@ -391,24 +391,42 @@ func TestPullFolderNegotiatesHighestPeerEncryptionLevel(t *testing.T) {
 	}
 
 	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
+	recordingClient := &recordingReadWriteCloser{ReadWriteCloser: clientConn}
+	defer recordingClient.Close()
 	server := NewServer(ServerConfig{NodeID: "node-a", BlockSize: 8, Folders: map[string]string{"docs": remoteRoot}, Identity: serverIdentity, EncryptionLevel: 4, TrustedPeerPublicKeys: map[string]string{"node-b": clientIdentity.PublicKey}})
 	serverErr := make(chan error, 1)
 	go func() {
 		serverErr <- server.Serve(context.Background(), serverConn)
 	}()
 
-	result, err := PullFolder(context.Background(), clientConn, PullOptions{NodeID: "node-b", FolderID: "docs", LocalRoot: localRoot, Identity: clientIdentity, EncryptionLevel: 8, PeerPublicKey: serverIdentity.PublicKey})
+	result, err := PullFolder(context.Background(), recordingClient, PullOptions{NodeID: "node-b", FolderID: "docs", LocalRoot: localRoot, Identity: clientIdentity, EncryptionLevel: 8, PeerPublicKey: serverIdentity.PublicKey})
 	if err != nil {
 		t.Fatalf("PullFolder: %v", err)
 	}
 	if result.NegotiatedEncryptionLevel != 8 {
 		t.Fatalf("negotiated encryption level = %d", result.NegotiatedEncryptionLevel)
 	}
-	clientConn.Close()
+	if writes := recordingClient.String(); strings.Contains(writes, "folder_index") || strings.Contains(writes, "block_request") {
+		t.Fatalf("negotiated encryption level >0 leaked plaintext protocol payloads after hello: %q", writes)
+	}
+	recordingClient.Close()
 	if err := <-serverErr; err != nil {
 		t.Fatalf("server: %v", err)
 	}
+}
+
+type recordingReadWriteCloser struct {
+	io.ReadWriteCloser
+	writes strings.Builder
+}
+
+func (r *recordingReadWriteCloser) Write(p []byte) (int, error) {
+	r.writes.Write(p)
+	return r.ReadWriteCloser.Write(p)
+}
+
+func (r *recordingReadWriteCloser) String() string {
+	return r.writes.String()
 }
 
 func TestPullFolderEnforcesNegotiatedReceiveCapOnFetchedBlocks(t *testing.T) {

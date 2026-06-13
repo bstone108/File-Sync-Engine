@@ -53,10 +53,11 @@ type Identity struct {
 }
 
 type SignedHello struct {
-	NodeID          string
-	PublicKey       string
-	EncryptionLevel int
-	Signature       string
+	NodeID           string
+	PublicKey        string
+	SessionPublicKey string
+	EncryptionLevel  int
+	Signature        string
 }
 
 func GenerateIdentity() (Identity, error) {
@@ -71,6 +72,10 @@ func GenerateIdentity() (Identity, error) {
 }
 
 func SignHello(identity Identity, nodeID string, encryptionLevel int, nonce []byte) (SignedHello, error) {
+	return SignSessionHello(identity, nodeID, encryptionLevel, "", nonce)
+}
+
+func SignSessionHello(identity Identity, nodeID string, encryptionLevel int, sessionPublicKey string, nonce []byte) (SignedHello, error) {
 	if err := ValidateEncryptionLevel(encryptionLevel); err != nil {
 		return SignedHello{}, err
 	}
@@ -78,7 +83,7 @@ func SignHello(identity Identity, nodeID string, encryptionLevel int, nonce []by
 	if err != nil {
 		return SignedHello{}, err
 	}
-	hello := SignedHello{NodeID: nodeID, PublicKey: identity.PublicKey, EncryptionLevel: encryptionLevel}
+	hello := SignedHello{NodeID: nodeID, PublicKey: identity.PublicKey, SessionPublicKey: sessionPublicKey, EncryptionLevel: encryptionLevel}
 	hello.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, helloPayload(hello, nonce)))
 	return hello, nil
 }
@@ -124,7 +129,7 @@ func ValidateEncryptionLevel(level int) error {
 }
 
 func helloPayload(hello SignedHello, nonce []byte) []byte {
-	return []byte(fmt.Sprintf("fse-peer-hello-v1\n%s\n%s\n%d\n%s", hello.NodeID, hello.PublicKey, hello.EncryptionLevel, string(nonce)))
+	return []byte(fmt.Sprintf("fse-peer-hello-v1\n%s\n%s\n%s\n%d\n%s", hello.NodeID, hello.PublicKey, hello.SessionPublicKey, hello.EncryptionLevel, string(nonce)))
 }
 
 func decodePublicKey(encoded string) (ed25519.PublicKey, error) {

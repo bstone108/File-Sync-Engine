@@ -2,6 +2,9 @@ package protocol
 
 import (
 	"bufio"
+	"crypto/cipher"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,14 +49,15 @@ type Message struct {
 }
 
 type Hello struct {
-	ProtocolVersion int             `json:"protocolVersion"`
-	NodeID          string          `json:"nodeID"`
-	Capabilities    []string        `json:"capabilities,omitempty"`
-	PublicKey       string          `json:"publicKey,omitempty"`
-	EncryptionLevel int             `json:"encryptionLevel"`
-	Transfer        *TransferLimits `json:"transfer,omitempty"`
-	Nonce           string          `json:"nonce,omitempty"`
-	Signature       string          `json:"signature,omitempty"`
+	ProtocolVersion  int             `json:"protocolVersion"`
+	NodeID           string          `json:"nodeID"`
+	Capabilities     []string        `json:"capabilities,omitempty"`
+	PublicKey        string          `json:"publicKey,omitempty"`
+	SessionPublicKey string          `json:"sessionPublicKey,omitempty"`
+	EncryptionLevel  int             `json:"encryptionLevel"`
+	Transfer         *TransferLimits `json:"transfer,omitempty"`
+	Nonce            string          `json:"nonce,omitempty"`
+	Signature        string          `json:"signature,omitempty"`
 }
 
 type TransferLimits struct {
@@ -211,12 +215,22 @@ type Error struct {
 }
 
 type Codec struct {
-	r *bufio.Reader
-	w io.Writer
+	r               *bufio.Reader
+	w               io.Writer
+	sendAEAD        cipher.AEAD
+	recvAEAD        cipher.AEAD
+	sendNoncePrefix []byte
+	recvNoncePrefix []byte
+	sendSeq         uint64
+	recvSeq         uint64
 }
 
 func NewCodec(r io.Reader, w io.Writer) *Codec {
 	return &Codec{r: bufio.NewReader(r), w: w}
+}
+
+func NewEncryptedCodec(r io.Reader, w io.Writer, sendAEAD cipher.AEAD, recvAEAD cipher.AEAD, sendNoncePrefix []byte, recvNoncePrefix []byte) *Codec {
+	return &Codec{r: bufio.NewReader(r), w: w, sendAEAD: sendAEAD, recvAEAD: recvAEAD, sendNoncePrefix: append([]byte(nil), sendNoncePrefix...), recvNoncePrefix: append([]byte(nil), recvNoncePrefix...)}
 }
 
 func (c *Codec) Write(msg Message) error {
@@ -229,6 +243,9 @@ func (c *Codec) Write(msg Message) error {
 	}
 	if len(data) > MaxMessageBytes {
 		return fmt.Errorf("message too large: %d bytes", len(data))
+	}
+	if c.sendAEAD != nil {
+		data = c.seal(data)
 	}
 	data = append(data, '\n')
 	_, err = c.w.Write(data)
@@ -243,6 +260,13 @@ func (c *Codec) Read() (Message, error) {
 	if len(line) > MaxMessageBytes {
 		return Message{}, fmt.Errorf("message too large: %d bytes", len(line))
 	}
+	if c.recvAEAD != nil {
+		plain, err := c.open(line[:len(line)-1])
+		if err != nil {
+			return Message{}, err
+		}
+		line = plain
+	}
 	var msg Message
 	if err := json.Unmarshal(line, &msg); err != nil {
 		return Message{}, err
@@ -251,6 +275,37 @@ func (c *Codec) Read() (Message, error) {
 		return Message{}, err
 	}
 	return msg, nil
+}
+
+func (c *Codec) seal(plain []byte) []byte {
+	nonce := c.nonce(c.sendNoncePrefix, c.sendSeq, c.sendAEAD.NonceSize())
+	c.sendSeq++
+	sealed := c.sendAEAD.Seal(nil, nonce, plain, nil)
+	encoded := make([]byte, base64.RawStdEncoding.EncodedLen(len(sealed)))
+	base64.RawStdEncoding.Encode(encoded, sealed)
+	return encoded
+}
+
+func (c *Codec) open(encoded []byte) ([]byte, error) {
+	sealed := make([]byte, base64.RawStdEncoding.DecodedLen(len(encoded)))
+	n, err := base64.RawStdEncoding.Decode(sealed, encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode encrypted message: %w", err)
+	}
+	nonce := c.nonce(c.recvNoncePrefix, c.recvSeq, c.recvAEAD.NonceSize())
+	c.recvSeq++
+	plain, err := c.recvAEAD.Open(nil, nonce, sealed[:n], nil)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt message: %w", err)
+	}
+	return plain, nil
+}
+
+func (c *Codec) nonce(prefix []byte, seq uint64, size int) []byte {
+	nonce := make([]byte, size)
+	copy(nonce, prefix)
+	binary.BigEndian.PutUint64(nonce[size-8:], seq)
+	return nonce
 }
 
 func validateMessage(msg Message) error {
