@@ -1,6 +1,7 @@
 package ci
 
 import (
+	"archive/zip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,8 +108,11 @@ func TestDesktopGUIReleasePackagerCanPackageExplicitVerifiedTargetSubset(t *test
 
 	mustWriteFile(t, filepath.Join(wailsRoot, "linux-amd64", "fse-desktop"), "linux-amd64")
 	mustWriteFile(t, filepath.Join(wailsRoot, "windows-arm64", "fse-desktop.exe"), "windows-arm64")
+	mustWriteFile(t, filepath.Join(engineRoot, "manifest.json"), `{"entries":[{"target":"linux-amd64","relativePath":"linux/amd64/fse"},{"target":"windows-arm64","relativePath":"windows/arm64/fse.exe"},{"target":"windows-amd64","relativePath":"windows/amd64/fse.exe"}]}`)
 	mustWriteFile(t, filepath.Join(engineRoot, "linux", "amd64", "fse"), "linux engine")
 	mustWriteFile(t, filepath.Join(engineRoot, "windows", "arm64", "fse.exe"), "windows engine")
+	mustWriteFile(t, filepath.Join(engineRoot, "windows", "amd64", "fse.exe"), "wrong windows engine")
+	mustWriteFile(t, filepath.Join(engineRoot, "linux", "arm64", "fse"), "wrong linux engine")
 
 	cmd := exec.Command("bash", "scripts/package-desktop-gui-release.sh", "0.1.99-test", wailsRoot, engineRoot, outDir)
 	cmd.Dir = root
@@ -134,6 +138,20 @@ printf 'fake nsis installer for %s\n' "$script" > "$out"
 	installerPath := filepath.Join(outDirAbs, "fse-desktop-0.1.99-test-windows-arm64-installer.exe")
 	if info, err := os.Stat(installerPath); err != nil || info.Size() == 0 {
 		t.Fatalf("missing non-empty Windows installer at %s (info=%v err=%v)\noutput:\n%s", installerPath, info, err, output)
+	}
+	linuxZip := filepath.Join(outDirAbs, "fse-desktop-0.1.99-test-linux-amd64.zip")
+	if zipContains(t, linuxZip, "engine/windows/amd64/fse.exe") || zipContains(t, linuxZip, "engine/linux/arm64/fse") {
+		t.Fatalf("linux package included an engine for another OS/architecture")
+	}
+	if !zipContains(t, linuxZip, "engine/linux/amd64/fse") {
+		t.Fatalf("linux package did not include its target engine")
+	}
+	windowsZip := filepath.Join(outDirAbs, "fse-desktop-0.1.99-test-windows-arm64.zip")
+	if zipContains(t, windowsZip, "engine/windows/amd64/fse.exe") || zipContains(t, windowsZip, "engine/linux/amd64/fse") {
+		t.Fatalf("windows package included an engine for another OS/architecture")
+	}
+	if !zipContains(t, windowsZip, "engine/windows/arm64/fse.exe") {
+		t.Fatalf("windows package did not include its target engine")
 	}
 	if _, err := os.Stat(filepath.Join(outDirAbs, "fse-desktop-0.1.99-test-darwin-amd64.zip")); !os.IsNotExist(err) {
 		t.Fatalf("subset packaging unexpectedly wrote a darwin archive: %v\noutput:\n%s", err, output)
@@ -172,4 +190,19 @@ func mustWriteExecutable(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write executable %s: %v", path, err)
 	}
+}
+
+func zipContains(t *testing.T, path, name string) bool {
+	t.Helper()
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatalf("open zip %s: %v", path, err)
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		if file.Name == name {
+			return true
+		}
+	}
+	return false
 }

@@ -127,6 +127,53 @@ appimage_runtime_for_arch() {
   esac
 }
 
+
+stage_linux_engine_resources() {
+  local target="$1"
+  local arch="$2"
+  local dest="$3"
+  local engine_rel="linux/$arch/fse"
+  mkdir -p "$dest/linux/$arch"
+  cp "$ENGINE_RESOURCE_ROOT/$engine_rel" "$dest/$engine_rel"
+  chmod 0755 "$dest/$engine_rel"
+  python3 - "$ENGINE_RESOURCE_ROOT/manifest.json" "$dest/manifest.json" "$target" "$engine_rel" <<'PYSCRIPT'
+import hashlib
+import json
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2])
+target = sys.argv[3]
+engine_rel = sys.argv[4]
+try:
+    manifest = json.loads(source.read_text(encoding="utf-8"))
+except json.JSONDecodeError:
+    manifest = {}
+entries = manifest.get("entries") if isinstance(manifest, dict) else None
+if isinstance(entries, list):
+    entries = [entry for entry in entries if entry.get("target") == target or entry.get("relativePath") == engine_rel]
+else:
+    entries = []
+engine_path = dest.parent / engine_rel
+sha = hashlib.sha256(engine_path.read_bytes()).hexdigest()
+if not entries:
+    entries = [{"target": target, "relativePath": engine_rel, "expectedExecutable": "fse"}]
+for entry in entries:
+    entry["target"] = target
+    entry["relativePath"] = engine_rel
+    entry["expectedSHA256"] = sha
+manifest = dict(manifest) if isinstance(manifest, dict) else {}
+manifest["entries"] = entries
+manifest["packagedTarget"] = target
+dest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PYSCRIPT
+  (
+    cd "$dest"
+    sha256sum "$engine_rel" > SHA256SUMS
+  )
+}
+
 stage_payload() {
   local target="$1"
   local arch="$2"
@@ -145,7 +192,7 @@ stage_payload() {
 
   mkdir -p "$staging$INSTALL_ROOT/app" "$staging$INSTALL_ROOT/engine" "$staging/usr/share/applications"
   cp -a "$wails_dir"/. "$staging$INSTALL_ROOT/app/"
-  cp -a "$ENGINE_RESOURCE_ROOT"/. "$staging$INSTALL_ROOT/engine/"
+  stage_linux_engine_resources "$target" "$arch" "$staging$INSTALL_ROOT/engine"
   cat > "$staging/usr/share/applications/fse-desktop.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application

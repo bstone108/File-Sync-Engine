@@ -154,6 +154,52 @@ preflight_inputs() {
 
 preflight_inputs
 
+
+stage_target_engine_resources() {
+  local target="$1"
+  local engine_rel="$2"
+  local dest="$3"
+  mkdir -p "$dest/$(dirname "$engine_rel")"
+  cp "$ENGINE_RESOURCE_ROOT/$engine_rel" "$dest/$engine_rel"
+  chmod 0755 "$dest/$engine_rel"
+  python3 - "$ENGINE_RESOURCE_ROOT/manifest.json" "$dest/manifest.json" "$target" "$engine_rel" <<'PYSCRIPT'
+import hashlib
+import json
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2])
+target = sys.argv[3]
+engine_rel = sys.argv[4]
+try:
+    manifest = json.loads(source.read_text(encoding="utf-8"))
+except json.JSONDecodeError:
+    manifest = {}
+entries = manifest.get("entries") if isinstance(manifest, dict) else None
+if isinstance(entries, list):
+    entries = [entry for entry in entries if entry.get("target") == target or entry.get("relativePath") == engine_rel]
+else:
+    entries = []
+engine_path = dest.parent / engine_rel
+sha = hashlib.sha256(engine_path.read_bytes()).hexdigest()
+if not entries:
+    entries = [{"target": target, "relativePath": engine_rel, "expectedExecutable": pathlib.Path(engine_rel).name}]
+for entry in entries:
+    entry["target"] = target
+    entry["relativePath"] = engine_rel
+    entry["expectedSHA256"] = sha
+manifest = dict(manifest) if isinstance(manifest, dict) else {}
+manifest["entries"] = entries
+manifest["packagedTarget"] = target
+dest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PYSCRIPT
+  (
+    cd "$dest"
+    sha256sum "$engine_rel" > SHA256SUMS
+  )
+}
+
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
@@ -205,7 +251,7 @@ copy_target() {
 
   mkdir -p "$staging/app" "$staging/engine" "$staging/docs-snapshot"
   cp -a "$wails_dir"/. "$staging/app/"
-  cp -a "$ENGINE_RESOURCE_ROOT"/. "$staging/engine/"
+  stage_target_engine_resources "$target" "$engine_rel" "$staging/engine"
   cp "$ROOT/README.md" "$staging/docs-snapshot/"
 
   (
