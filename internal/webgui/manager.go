@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -384,8 +385,8 @@ func verifyPackageChecksum(path string, expected string) error {
 	return nil
 }
 
-func extractZip(path string, dest string) error {
-	r, err := zip.OpenReader(path)
+func extractZip(packagePath string, dest string) error {
+	r, err := zip.OpenReader(packagePath)
 	if err != nil {
 		return err
 	}
@@ -395,26 +396,37 @@ func extractZip(path string, dest string) error {
 		return err
 	}
 	for _, f := range r.File {
-		if err := extractZipEntry(f, cleanDest); err != nil {
+		absTarget, err := safeZipEntryTarget(cleanDest, f.Name)
+		if err != nil {
+			return err
+		}
+		if err := extractZipEntry(f, absTarget); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func extractZipEntry(f *zip.File, dest string) error {
-	name := filepath.Clean(f.Name)
-	if name == "." || filepath.IsAbs(name) || strings.HasPrefix(name, ".."+string(os.PathSeparator)) || name == ".." {
-		return fmt.Errorf("unsafe web GUI package path %q", f.Name)
+func safeZipEntryTarget(dest string, entryName string) (string, error) {
+	if entryName == "" || strings.Contains(entryName, "\\") || strings.Contains(entryName, ":") {
+		return "", fmt.Errorf("unsafe web GUI package path %q", entryName)
 	}
-	target := filepath.Join(dest, name)
+	cleanName := path.Clean(entryName)
+	if cleanName == "." || cleanName == ".." || path.IsAbs(cleanName) || strings.HasPrefix(cleanName, "../") {
+		return "", fmt.Errorf("unsafe web GUI package path %q", entryName)
+	}
+	target := filepath.Join(dest, filepath.FromSlash(cleanName))
 	absTarget, err := filepath.Abs(target)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if absTarget != dest && !strings.HasPrefix(absTarget, dest+string(os.PathSeparator)) {
-		return fmt.Errorf("unsafe web GUI package path %q", f.Name)
+		return "", fmt.Errorf("unsafe web GUI package path %q", entryName)
 	}
+	return absTarget, nil
+}
+
+func extractZipEntry(f *zip.File, absTarget string) error {
 	mode := f.FileInfo().Mode()
 	if f.FileInfo().IsDir() {
 		return os.MkdirAll(absTarget, mode.Perm())

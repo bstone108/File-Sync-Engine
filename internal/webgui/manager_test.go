@@ -61,6 +61,32 @@ func TestInstallLocalPackageRejectsChecksumMismatchAndZipSlip(t *testing.T) {
 	}
 }
 
+func TestInstallLocalPackageRejectsCrossPlatformUnsafeZipNames(t *testing.T) {
+	dir := t.TempDir()
+	installDir := filepath.Join(dir, "web", "current")
+	cases := []string{
+		`..\escape.txt`,
+		`assets\..\escape.txt`,
+		`C:\Users\Public\escape.txt`,
+		`\absolute\escape.txt`,
+	}
+	for _, entryName := range cases {
+		t.Run(entryName, func(t *testing.T) {
+			pkgPath := filepath.Join(dir, "bad-web.zip")
+			checksum := writeZipPackage(t, pkgPath, map[string]string{
+				entryName:    "owned",
+				"index.html": "bad",
+			})
+			if _, err := InstallLocalPackage(InstallOptions{PackagePath: pkgPath, InstallDir: installDir, Version: "1.2.3", ChecksumSHA256: checksum}); err == nil {
+				t.Fatalf("expected unsafe package path %q to be rejected", entryName)
+			}
+			if _, err := os.Stat(filepath.Join(installDir, entryName)); !os.IsNotExist(err) {
+				t.Fatalf("unsafe zip entry %q was created under install root: %v", entryName, err)
+			}
+		})
+	}
+}
+
 func TestInstallRemotePackageFetchesHTTPSAndVerifiesChecksum(t *testing.T) {
 	dir := t.TempDir()
 	pkgPath := filepath.Join(dir, "fse-web.zip")
