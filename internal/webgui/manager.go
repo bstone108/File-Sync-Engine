@@ -396,7 +396,7 @@ func extractZip(packagePath string, dest string) error {
 	}
 	for _, f := range r.File {
 		entryName := f.Name
-		if entryName == "" || strings.Contains(entryName, "\\") || strings.Contains(entryName, ":") {
+		if entryName == "" || strings.Contains(entryName, "..") || strings.Contains(entryName, "\\") || strings.Contains(entryName, ":") {
 			return fmt.Errorf("unsafe web GUI package path %q", entryName)
 		}
 		cleanName := filepath.Clean(entryName)
