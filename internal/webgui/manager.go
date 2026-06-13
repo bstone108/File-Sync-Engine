@@ -411,35 +411,39 @@ func extractZip(packagePath string, dest string) error {
 		if absTarget != cleanDest && !strings.HasPrefix(absTarget, cleanDest+string(os.PathSeparator)) {
 			return fmt.Errorf("unsafe web GUI package path %q", entryName)
 		}
-		if err := extractZipEntry(f, absTarget); err != nil {
+		mode := f.FileInfo().Mode()
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(absTarget, mode.Perm()); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(absTarget), 0o755); err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(absTarget, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+		if err != nil {
+			_ = rc.Close()
+			return err
+		}
+		if _, err := io.Copy(out, rc); err != nil {
+			_ = out.Close()
+			_ = rc.Close()
+			return err
+		}
+		if err := rc.Close(); err != nil {
+			_ = out.Close()
+			return err
+		}
+		if err := out.Close(); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func extractZipEntry(f *zip.File, absTarget string) error {
-	mode := f.FileInfo().Mode()
-	if f.FileInfo().IsDir() {
-		return os.MkdirAll(absTarget, mode.Perm())
-	}
-	if err := os.MkdirAll(filepath.Dir(absTarget), 0o755); err != nil {
-		return err
-	}
-	rc, err := f.Open()
-	if err != nil {
-		return err
-	}
-	defer rc.Close()
-	out, err := os.OpenFile(absTarget, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, rc); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 func generateSelfSignedCertificate(certFile, keyFile, listen string) error {
