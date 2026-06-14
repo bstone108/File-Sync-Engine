@@ -118,6 +118,20 @@ func TestJSONStoreReportsDeterministicFolderChangesSinceCursor(t *testing.T) {
 	}
 }
 
+func TestSummaryPathCapacityRejectsOverflow(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	if _, err := summaryPathCapacity(maxInt, 1); err == nil {
+		t.Fatalf("expected overflow error")
+	}
+	got, err := summaryPathCapacity(2, 3)
+	if err != nil {
+		t.Fatalf("summaryPathCapacity valid counts: %v", err)
+	}
+	if got != 5 {
+		t.Fatalf("summaryPathCapacity = %d, want 5", got)
+	}
+}
+
 func TestFolderSummaryAtCursorUsesHistoricalManifestRevision(t *testing.T) {
 	oldAlpha := block.Manifest{Path: "alpha.txt", Size: 3, BlockSize: 3, Blocks: []block.Block{{Index: 0, Size: 3, Hash: []byte{1}}}}
 	beta := block.Manifest{Path: "beta.txt", Size: 4, BlockSize: 4, Blocks: []block.Block{{Index: 0, Size: 4, Hash: []byte{2}}}}

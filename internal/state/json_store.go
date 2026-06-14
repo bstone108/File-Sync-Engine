@@ -2274,6 +2274,17 @@ func cloneSnapshot(in snapshot) snapshot {
 	return out
 }
 
+func summaryPathCapacity(fileCount int, tombstoneCount int) (int, error) {
+	maxInt := int(^uint(0) >> 1)
+	if fileCount < 0 || tombstoneCount < 0 {
+		return 0, fmt.Errorf("folder summary counts must be non-negative")
+	}
+	if tombstoneCount > maxInt-fileCount {
+		return 0, fmt.Errorf("folder summary path count overflows int: files=%d tombstones=%d", fileCount, tombstoneCount)
+	}
+	return fileCount + tombstoneCount, nil
+}
+
 func peerFolderSummary(snap snapshot, peerID string, folderID string) (FolderSummary, error) {
 	return folderSummary(snapshot{
 		Folders:    map[string]map[string]block.Manifest{folderID: snap.PeerFolders[peerID][folderID]},
@@ -2288,7 +2299,11 @@ func folderSummary(snap snapshot, folderID string) (FolderSummary, error) {
 	revisions := snap.Revisions[folderID]
 	tombstones := snap.Tombstones[folderID]
 	h := sha256.New()
-	paths := make([]string, 0, len(files)+len(tombstones))
+	pathCap, err := summaryPathCapacity(len(files), len(tombstones))
+	if err != nil {
+		return FolderSummary{}, err
+	}
+	paths := make([]string, 0, pathCap)
 	for rel := range files {
 		paths = append(paths, "f\x00"+rel)
 	}
