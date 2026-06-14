@@ -108,6 +108,36 @@ func TestFolderFileAndBlockRejectPathTraversal(t *testing.T) {
 	}
 }
 
+func TestFolderFileAndBlockRejectSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	outsideFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideFile, filepath.Join(root, "link.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	server := NewServer(State{NodeName: "node-a", FoldersState: []FolderState{{ID: "docs", Path: root, Mode: "sendonly", Status: "configured"}}}, "secret")
+
+	cases := []string{
+		"/v1/folder-file?folder=docs&path=link.txt",
+		"/v1/folder-block?folder=docs&path=link.txt&index=0&blockSize=4",
+	}
+	for _, path := range cases {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("X-FSE-API-Key", "secret")
+		rec := httptest.NewRecorder()
+		server.Router().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		if got := rec.Body.String(); got == "outside secret" {
+			t.Fatalf("%s leaked outside file content", path)
+		}
+	}
+}
+
 func TestFolderBlockDownloadRejectsOutOfRangeIndex(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "small.txt"), []byte("abc"), 0o600); err != nil {

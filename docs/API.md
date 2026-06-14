@@ -509,7 +509,7 @@ Returns the current scanner result for a configured folder, including relative f
 GET /v1/folder-file?folder=<folder-id>&path=<relative-path>
 ```
 
-Downloads one file from a configured folder. The path must be relative and must stay inside the folder root. This remains available for diagnostics and compatibility, but peer sync now prefers verified block requests.
+Downloads one file from a configured folder. The path must be relative, must stay inside the folder root after symlink resolution, and symlinks that resolve outside the share are rejected. This remains available for diagnostics and compatibility, but peer sync now prefers verified block requests.
 
 ## Prototype peer block download
 
@@ -517,7 +517,7 @@ Downloads one file from a configured folder. The path must be relative and must 
 GET /v1/folder-block?folder=<folder-id>&path=<relative-path>&index=<block-index>&blockSize=<bytes>
 ```
 
-Downloads a single block from a configured folder file. The current peer pull path uses this endpoint and verifies each block against the remote manifest hash before staging and atomically renaming the completed file.
+Downloads a single block from a configured folder file. The path uses the same relative-path and symlink-escape checks as full-file downloads. The current peer pull path uses this endpoint and verifies each block against the remote manifest hash before staging and atomically renaming the completed file.
 
 ## Planned endpoints
 

@@ -1763,12 +1763,22 @@ func (s *Server) handleFolderFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown folder", http.StatusNotFound)
 		return
 	}
-	path, ok := safeFolderPath(folder.Path, r.URL.Query().Get("path"))
+	file, ok, err := openSafeFolderFile(folder.Path, r.URL.Query().Get("path"))
 	if !ok {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
-	http.ServeFile(w, r, path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
 func (s *Server) handleFolderBlock(w http.ResponseWriter, r *http.Request) {
@@ -1777,11 +1787,16 @@ func (s *Server) handleFolderBlock(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown folder", http.StatusNotFound)
 		return
 	}
-	path, ok := safeFolderPath(folder.Path, r.URL.Query().Get("path"))
+	file, ok, err := openSafeFolderFile(folder.Path, r.URL.Query().Get("path"))
 	if !ok {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	defer file.Close()
 	blockSize, err := strconv.Atoi(r.URL.Query().Get("blockSize"))
 	if err != nil || blockSize <= 0 {
 		http.Error(w, "invalid blockSize", http.StatusBadRequest)
@@ -1792,12 +1807,6 @@ func (s *Server) handleFolderBlock(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid index", http.StatusBadRequest)
 		return
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1885,10 +1894,49 @@ func safeFolderPath(root, rel string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	if cleanPath != cleanRoot && !strings.HasPrefix(cleanPath, cleanRoot+string(os.PathSeparator)) {
+	if !pathWithinRoot(cleanRoot, cleanPath) {
 		return "", false
 	}
 	return cleanPath, true
+}
+
+func openSafeFolderFile(root, rel string) (http.File, bool, error) {
+	path, ok := safeFolderPath(root, rel)
+	if !ok {
+		return nil, false, nil
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, false, err
+	}
+	resolvedRoot, err = filepath.Abs(resolvedRoot)
+	if err != nil {
+		return nil, false, err
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, true, err
+	}
+	resolvedPath, err = filepath.Abs(resolvedPath)
+	if err != nil {
+		return nil, false, err
+	}
+	if !pathWithinRoot(resolvedRoot, resolvedPath) {
+		return nil, false, nil
+	}
+	relToRoot, err := filepath.Rel(resolvedRoot, resolvedPath)
+	if err != nil || relToRoot == "." || relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(os.PathSeparator)) {
+		return nil, false, err
+	}
+	file, err := http.Dir(resolvedRoot).Open(filepath.ToSlash(relToRoot))
+	if err != nil {
+		return nil, true, err
+	}
+	return file, true, nil
+}
+
+func pathWithinRoot(root, path string) bool {
+	return path == root || strings.HasPrefix(path, root+string(os.PathSeparator))
 }
 
 func (s *Server) addSubscriber(ch chan Event) {
