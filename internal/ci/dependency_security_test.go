@@ -18,6 +18,7 @@ func TestGoModulesPinPatchedSecurityDependencyVersions(t *testing.T) {
 		{"go.mod", "github.com/quic-go/quic-go v0.59.1"},
 		{"go.mod", "github.com/quic-go/webtransport-go v0.10.0"},
 		{"go.mod", "github.com/golang/glog v1.2.4"},
+		{"go.mod", "go.opentelemetry.io/otel v1.41.0"},
 	}
 	for _, check := range checks {
 		content := readTextFile(t, filepath.Join(root, check.rel))
