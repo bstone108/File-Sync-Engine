@@ -23,6 +23,7 @@ export type WindowsStartupTrayBridgeOptions = {
   gate: BundledEngineRuntimeGate;
   lifecycleSettings: BundledDaemonLifecycleSettings;
   appName?: string;
+  guiExecutablePath?: string;
 };
 
 export function renderWindowsProtocolHandlerCommand(appName: string, exePath: string): string {
@@ -68,7 +69,7 @@ export async function buildWindowsStartupTrayBridge(
     tray,
     registerProtocolHandlerCommand: renderWindowsProtocolHandlerCommand(
       options.appName ?? 'File Synchronization Engine',
-      gate.expected.executable
+      options.guiExecutablePath ?? 'fse-desktop.exe'
     ),
     openGuiCommand: renderWindowsOpenGuiCommand(),
     serviceManager: 'Service Control Manager',

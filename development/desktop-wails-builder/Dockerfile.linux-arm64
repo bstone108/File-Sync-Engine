@@ -4,7 +4,7 @@
 # builds use target-native GTK/WebKit headers and libraries instead of mixing
 # x86_64 pkg-config output into an aarch64 cross compile. Do not install these
 # tools on the Hermes host.
-FROM --platform=linux/arm64 golang:1.23-bookworm
+FROM --platform=linux/arm64 golang:1.25-bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG WAILS_VERSION=v2.10.2

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Isolated desktop GUI Wails builder for the file synchronization engine.
 # Build this image from an isolated/container context; do not install these tools on the Hermes host.
-FROM golang:1.23-bookworm
+FROM golang:1.25-bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG WAILS_VERSION=v2.10.2

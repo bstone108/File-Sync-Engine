@@ -24,6 +24,7 @@ export type LinuxStartupTrayBridgeOptions = {
   gate: BundledEngineRuntimeGate;
   lifecycleSettings: BundledDaemonLifecycleSettings;
   appName?: string;
+  guiExecutablePath?: string;
   desktopFileName?: string;
 };
 
@@ -82,7 +83,7 @@ export async function buildLinuxStartupTrayBridge(
     tray,
     registerDesktopEntryCommand: renderLinuxDesktopEntryCommand(
       options.appName ?? 'File Synchronization Engine',
-      gate.expected.executable,
+      options.guiExecutablePath ?? 'fse-desktop',
       options.desktopFileName
     ),
     openGuiCommand: renderLinuxOpenGuiCommand(),

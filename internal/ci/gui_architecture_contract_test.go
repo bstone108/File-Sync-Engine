@@ -1282,7 +1282,7 @@ func TestDesktopGUIWailsBuilderImageDefinitionIsProjectOwnedAndIsolated(t *testi
 	doc := readRequiredFile(t, filepath.Join(root, "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
 
 	for _, want := range []string{
-		"FROM golang:1.23-bookworm",
+		"FROM golang:1.25-bookworm",
 		"nodejs",
 		"npm",
 		"libwebkit2gtk-4.1-dev",
@@ -1296,7 +1296,7 @@ func TestDesktopGUIWailsBuilderImageDefinitionIsProjectOwnedAndIsolated(t *testi
 		}
 	}
 	for _, want := range []string{
-		"FROM --platform=linux/arm64 golang:1.23-bookworm",
+		"FROM --platform=linux/arm64 golang:1.25-bookworm",
 		"libgtk-3-dev",
 		"libwebkit2gtk-4.1-dev",
 		"FSE_DESKTOP_WAILS_NATIVE_LINUX_ARM64=1",

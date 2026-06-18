@@ -2,7 +2,7 @@
 # Legacy WebKitGTK 4.0 Linux desktop GUI Wails builder.
 # Use this only for producing compatibility artifacts for older distributions
 # that still ship the webkit2gtk-4.0 ABI/runtime packages.
-FROM golang:1.23-bookworm
+FROM golang:1.25-bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG WAILS_VERSION=v2.10.2
