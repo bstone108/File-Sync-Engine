@@ -361,6 +361,24 @@ func TestReleaseWorkflowPublishesGitHubRelease(t *testing.T) {
 	}
 }
 
+func TestDesktopStabilizationDocsRequirePlatformSmokeEvidenceBeforeTestReady(t *testing.T) {
+	desktopDocs := readRequiredFile(t, filepath.Join("..", "..", "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
+	externalMatrix := readRequiredFile(t, filepath.Join("..", "..", "docs", "EXTERNAL_TESTING_MATRIX.md"))
+
+	for _, want := range []string{
+		"Current desktop artifacts are not test-ready until platform smoke evidence exists",
+		"macOS ARM damaged-app launch check",
+		"Windows native desktop shell availability check",
+		"bundled daemon launch/adoption",
+		"GUI-to-daemon API control",
+		"first-use setup reaches sync-ready state",
+	} {
+		if !strings.Contains(desktopDocs, want) && !strings.Contains(externalMatrix, want) {
+			t.Fatalf("desktop stabilization docs missing smoke-evidence contract %q", want)
+		}
+	}
+}
+
 func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
 	script := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails-native-macos.sh"))

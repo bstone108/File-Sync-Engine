@@ -53,6 +53,8 @@ The desktop GUI build/release flow must produce real working packages for every 
 
 Release artifacts should be unambiguous per OS/architecture, should include checksums, should support reproducible packaging handoffs, and should not require installing build tooling on the Hermes host. If extra GUI toolchains are needed, use `/development` or an isolated container/QEMU/chroot environment. Scaffolds, contracts, docs, and packaging scripts are not enough by themselves; the release must contain built GUI packages/artifacts that can actually run for each target.
 
+**Current desktop artifacts are not test-ready until platform smoke evidence exists.** A successful CI build or package upload only proves packaging mechanics. Desktop stabilization must keep the artifacts classified as unproven until each relevant platform inventory records app launch, daemon launch/adoption, GUI-to-daemon API control, visible logs/errors, and first-use setup reaching a sync-ready state. The current known failure inventory must include the macOS ARM damaged-app launch check, Windows native desktop shell availability check, bundled daemon launch/adoption, GUI-to-daemon API control, and first-use setup reaches sync-ready state before any desktop package is called usable.
+
 Linux has extra package requirements for each architecture:
 
 - a `.deb` package;
