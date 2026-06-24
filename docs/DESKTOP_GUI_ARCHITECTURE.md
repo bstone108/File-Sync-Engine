@@ -55,6 +55,18 @@ Release artifacts should be unambiguous per OS/architecture, should include chec
 
 **Current desktop artifacts are not test-ready until platform smoke evidence exists.** A successful CI build or package upload only proves packaging mechanics. Desktop stabilization must keep the artifacts classified as unproven until each relevant platform inventory records app launch, daemon launch/adoption, GUI-to-daemon API control, visible logs/errors, and first-use setup reaching a sync-ready state. The current known failure inventory must include the macOS ARM damaged-app launch check, Windows native desktop shell availability check, bundled daemon launch/adoption, GUI-to-daemon API control, and first-use setup reaches sync-ready state before any desktop package is called usable.
 
+## Current platform failure inventory
+
+Inventory status: unproven until smoke-tested on host or VM. Each row must record whether the app launches, daemon launches/adopts, API connects and GUI can control daemon, logs/errors are visible, and first-use setup reaches sync-ready state before that platform is called usable.
+
+| Platform | Current status | Known failure/evidence needed |
+| --- | --- | --- |
+| Windows amd64/arm64 | Broken/unproven. | Known failure: Windows builds report `native desktop shell is not available`. Smoke inventory still needs app launches, daemon launches/adopts, API connects and GUI can control daemon, logs/errors are visible, and first-use setup reaches sync-ready state. |
+| macOS arm64 | Broken/unproven. | Known failure: macOS Apple Silicon packages can report `app is damaged and can't be opened`. Smoke inventory still needs launch evidence after packaging/signing/quarantine handling, daemon launches/adopts, API connects and GUI can control daemon, visible logs/errors, and first-use setup reaches sync-ready state. |
+| macOS amd64 | Unproven. | Intel impact of the damaged-app failure is unknown until a real macOS Intel host or runner smoke proves app launch, daemon launch/adoption, API control, visible logs/errors, and sync-ready setup. |
+| Linux amd64 | Unproven. | Release artifacts/package installation exist, but the desktop package still needs a host/VM smoke proving app launch, daemon launch/adoption, API control, visible logs/errors, first-use setup, and `.deb`/`.rpm`/`.AppImage` behavior. |
+| Linux arm64 | Unproven. | Release artifacts/package installation exist, but the desktop package still needs an arm64 host/VM smoke proving app launch, daemon launch/adoption, API control, visible logs/errors, first-use setup, and `.deb`/`.rpm`/`.AppImage` behavior. |
+
 Linux has extra package requirements for each architecture:
 
 - a `.deb` package;

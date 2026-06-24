@@ -379,6 +379,31 @@ func TestDesktopStabilizationDocsRequirePlatformSmokeEvidenceBeforeTestReady(t *
 	}
 }
 
+func TestDesktopStabilizationDocsCarryPlatformFailureInventory(t *testing.T) {
+	desktopDocs := readRequiredFile(t, filepath.Join("..", "..", "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
+
+	for _, want := range []string{
+		"## Current platform failure inventory",
+		"| Windows amd64/arm64 |",
+		"| macOS arm64 |",
+		"| macOS amd64 |",
+		"| Linux amd64 |",
+		"| Linux arm64 |",
+		"app launches",
+		"daemon launches/adopts",
+		"API connects and GUI can control daemon",
+		"logs/errors are visible",
+		"first-use setup reaches sync-ready state",
+		"Known failure: Windows builds report `native desktop shell is not available`",
+		"Known failure: macOS Apple Silicon packages can report `app is damaged and can't be opened`",
+		"Inventory status: unproven until smoke-tested on host or VM",
+	} {
+		if !strings.Contains(desktopDocs, want) {
+			t.Fatalf("desktop stabilization docs missing platform failure inventory contract %q", want)
+		}
+	}
+}
+
 func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
 	script := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails-native-macos.sh"))
