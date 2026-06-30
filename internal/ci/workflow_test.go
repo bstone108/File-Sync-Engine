@@ -435,6 +435,8 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"GOOS=darwin",
 		"GOARCH=\"$ARCH\"",
 		"wails build -platform darwin/$ARCH",
+		"codesign --force --deep --sign -",
+		"codesign --verify --deep --strict",
 		"desktop-gui/wails-output/darwin-$ARCH",
 		"fse-desktop.app/Contents/MacOS/fse-desktop",
 	} {

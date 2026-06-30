@@ -54,7 +54,7 @@ if [[ "$host_arch" != "$ARCH" ]]; then
   exit 1
 fi
 
-for tool in go npm wails; do
+for tool in go npm wails codesign; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'required macOS desktop build tool not found on PATH: %s\n' "$tool" >&2
     exit 1
@@ -84,6 +84,8 @@ cp -R "$ROOT/desktop-gui/." "$WORK_DIR/"
     exit 1
   fi
   test -s "$APP_BUNDLE/Contents/MacOS/fse-desktop"
+  codesign --force --deep --sign - "$APP_BUNDLE"
+  codesign --verify --deep --strict "$APP_BUNDLE"
   cp -R "$APP_BUNDLE" "$TARGET_OUT/fse-desktop.app"
 )
 
