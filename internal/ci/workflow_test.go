@@ -404,6 +404,44 @@ func TestDesktopStabilizationDocsCarryPlatformFailureInventory(t *testing.T) {
 	}
 }
 
+func TestDesktopWailsBuildScriptsStageOnlyTargetEngineResource(t *testing.T) {
+	containerScript := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails.sh"))
+	nativeMacScript := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails-native-macos.sh"))
+
+	for name, script := range map[string]string{
+		"container Wails script":     containerScript,
+		"native macOS Wails script":  nativeMacScript,
+	} {
+		for _, want := range []string{
+			"stage_target_engine_resource_subset()",
+			"linux/amd64:linux/amd64/fse",
+			"linux/arm64:linux/arm64/fse",
+			"darwin/amd64:darwin/amd64/fse",
+			"darwin/arm64:darwin/arm64/fse",
+			"windows/amd64:windows/amd64/fse.exe",
+			"windows/arm64:windows/arm64/fse.exe",
+		} {
+			if !strings.Contains(script, want) {
+				t.Fatalf("%s missing target-only engine resource staging contract %q", name, want)
+			}
+		}
+	}
+	for _, want := range []string{
+		"stage_target_engine_resource_subset \"$FSE_DESKTOP_WAILS_PLATFORM\" /tmp/work/resources/engine",
+	} {
+		if !strings.Contains(containerScript, want) {
+			t.Fatalf("container Wails script must prune copied GUI resources before Wails build; missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"stage_target_engine_resource_subset \"darwin/$ARCH\" \"$WORK_DIR/resources/engine\"",
+	} {
+		if !strings.Contains(nativeMacScript, want) {
+			t.Fatalf("native macOS Wails script must prune copied GUI resources before Wails build; missing %q", want)
+		}
+	}
+}
+
 func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
 	script := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails-native-macos.sh"))

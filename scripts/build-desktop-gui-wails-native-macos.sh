@@ -65,9 +65,46 @@ TARGET="darwin-$ARCH"
 TARGET_OUT="$OUTPUT_ROOT/$TARGET"
 WORK_DIR="${RUNNER_TEMP:-/tmp}/fse-desktop-macos-$TARGET"
 
+stage_target_engine_resource_subset() {
+  local platform="$1"
+  local resource_root="$2"
+  local engine_rel=""
+
+  if [[ ! -d "$resource_root" ]]; then
+    return 0
+  fi
+
+  case "$platform" in
+    linux/amd64) engine_rel="linux/amd64/fse" ;; # linux/amd64:linux/amd64/fse
+    linux/arm64) engine_rel="linux/arm64/fse" ;; # linux/arm64:linux/arm64/fse
+    darwin/amd64) engine_rel="darwin/amd64/fse" ;; # darwin/amd64:darwin/amd64/fse
+    darwin/arm64) engine_rel="darwin/arm64/fse" ;; # darwin/arm64:darwin/arm64/fse
+    windows/amd64) engine_rel="windows/amd64/fse.exe" ;; # windows/amd64:windows/amd64/fse.exe
+    windows/arm64) engine_rel="windows/arm64/fse.exe" ;; # windows/arm64:windows/arm64/fse.exe
+    *)
+      printf 'unsupported desktop engine resource target: %s\n' "$platform" >&2
+      exit 1
+      ;;
+  esac
+
+  if [[ ! -f "$resource_root/$engine_rel" ]]; then
+    printf 'missing target desktop engine resource for %s: %s\n' "$platform" "$resource_root/$engine_rel" >&2
+    exit 1
+  fi
+
+  local tmp_root="${resource_root}.target-only.$$"
+  rm -rf "$tmp_root"
+  mkdir -p "$tmp_root/$(dirname "$engine_rel")"
+  cp "$resource_root/$engine_rel" "$tmp_root/$engine_rel"
+  chmod 0755 "$tmp_root/$engine_rel"
+  rm -rf "$resource_root"
+  mv "$tmp_root" "$resource_root"
+}
+
 rm -rf "$WORK_DIR" "$TARGET_OUT"
 mkdir -p "$WORK_DIR" "$TARGET_OUT"
 cp -R "$ROOT/desktop-gui/." "$WORK_DIR/"
+stage_target_engine_resource_subset "darwin/$ARCH" "$WORK_DIR/resources/engine"
 
 (
   cd "$WORK_DIR"
