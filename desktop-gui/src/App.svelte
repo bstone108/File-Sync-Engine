@@ -4,6 +4,8 @@
     fetchDaemonStatus,
     fetchDaemonFolders,
     fetchDaemonPeers,
+    fetchDaemonLogs,
+    fetchBackupJobs,
     fetchAPITrustStatus,
     browseFilesystemDirectories,
     fetchRemoteMeshSettings,
@@ -13,7 +15,12 @@
     pinActiveAPICertificate,
     queueRemoteMeshSettingsCommand,
     readDaemonConfig,
+    runBackupScrub,
     runMaintenanceScrub,
+    runSnapshotRestore,
+    runSnapshotRetention,
+    planSnapshotRestore,
+    sendSnapshotCommand,
     sendDiscoveryCommand,
     sendFolderCommand,
     sendPeerCommand,
@@ -25,6 +32,9 @@
     type DaemonStatus,
     type DaemonFolder,
     type DaemonPeer,
+    type DaemonEvent,
+    type SnapshotMarker,
+    type RestorePlanResponse,
     type IdentityPairingPackage,
     type FilesystemBrowseEntry,
     type MeshSettingsCommandResponse,
@@ -108,6 +118,20 @@
   let status: DaemonStatus | null = null;
   let daemonFolders: DaemonFolder[] = [];
   let daemonPeers: DaemonPeer[] = [];
+  let daemonEvents: DaemonEvent[] = [];
+  let warningsMessage = 'Recent daemon events have not been loaded.';
+  let snapshotMarkers: SnapshotMarker[] = [];
+  let snapshotFolderID = '';
+  let snapshotDescription = '';
+  let selectedSnapshotID = '';
+  let restorePaths = '';
+  let restoreDestination = '';
+  let restorePlan: RestorePlanResponse | null = null;
+  let reviewedRestoreRequestKey = '';
+  $: currentRestoreRequestKey = JSON.stringify({ snapshotId: selectedSnapshotID.trim(), paths: selectedRestorePaths(), alternatePath: restoreDestination.trim() || undefined });
+  let retentionKeepLast = 10;
+  let maintenanceBackupMessage = 'Snapshot and backup state has not been loaded.';
+  let backupJobsSummary = '';
   let apiTrustStatus: APITrustStatus | null = null;
   let daemonConfig: DaemonConfig | null = null;
   let controlMessage = '';
@@ -739,6 +763,100 @@
   async function submitConfigPatchForm() {
     const settings = daemonConnectionSettings;
     await runControlCommand('config', 'config patch', async () => patchDaemonConfig(settings, validateConfigPatchForm()));
+  }
+
+  async function refreshWarningsAndLogs() {
+    loading = true;
+    try {
+      const response = await fetchDaemonLogs(daemonConnectionSettings);
+      daemonEvents = [...(response.entries ?? [])].reverse();
+      warningsMessage = `Loaded ${daemonEvents.length} recent daemon event${daemonEvents.length === 1 ? '' : 's'}.`;
+    } catch (error) {
+      warningsMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function selectedRestorePaths(): string[] | undefined {
+    const paths = restorePaths.split(/\r?\n|,/).map((path) => path.trim()).filter(Boolean);
+    return paths.length ? paths : undefined;
+  }
+
+  async function refreshSnapshotsAndJobs() {
+    loading = true;
+    try {
+      const [snapshots, jobs] = await Promise.all([
+        sendSnapshotCommand(daemonConnectionSettings, { action: 'list' }),
+        fetchBackupJobs(daemonConnectionSettings, selectedSnapshotID)
+      ]);
+      snapshotMarkers = snapshots.markers ?? [];
+      backupJobsSummary = `${jobs.restoreJobs?.length ?? 0} restore, ${jobs.retentionJobs?.length ?? 0} retention, ${jobs.repairJobs?.length ?? 0} repair job(s)`;
+      maintenanceBackupMessage = `Loaded ${snapshotMarkers.length} snapshot marker(s) and ${backupJobsSummary}.`;
+    } catch (error) {
+      maintenanceBackupMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function createSnapshot() {
+    loading = true;
+    try {
+      const response = await sendSnapshotCommand(daemonConnectionSettings, { action: 'create', folderId: requireNonEmpty(snapshotFolderID, 'Folder ID'), description: snapshotDescription.trim() || undefined });
+      snapshotMarkers = response.markers ?? [];
+      maintenanceBackupMessage = 'Snapshot marker created; backup protection may continue asynchronously and is shown in daemon status/jobs.';
+    } catch (error) {
+      maintenanceBackupMessage = error instanceof Error ? error.message : String(error);
+    } finally { loading = false; }
+  }
+
+  async function previewRestore() {
+    loading = true;
+    try {
+      restorePlan = await planSnapshotRestore(daemonConnectionSettings, { snapshotId: requireNonEmpty(selectedSnapshotID, 'Snapshot ID'), paths: selectedRestorePaths(), alternatePath: restoreDestination.trim() || undefined });
+      reviewedRestoreRequestKey = currentRestoreRequestKey;
+      maintenanceBackupMessage = `Restore preview contains ${restorePlan.files?.length ?? 0} file(s); no files were changed.`;
+    } catch (error) {
+      restorePlan = null;
+      reviewedRestoreRequestKey = '';
+      maintenanceBackupMessage = error instanceof Error ? error.message : String(error);
+    } finally { loading = false; }
+  }
+
+  async function executeRestore() {
+    loading = true;
+    try {
+      if (!restorePlan || reviewedRestoreRequestKey !== currentRestoreRequestKey) throw new Error('Restore inputs changed after preview; preview the restore again before running it.');
+      const response = await runSnapshotRestore(daemonConnectionSettings, { snapshotId: requireNonEmpty(selectedSnapshotID, 'Snapshot ID'), paths: selectedRestorePaths(), alternatePath: restoreDestination.trim() || undefined });
+      maintenanceBackupMessage = `Restore accepted: ${response.restoredFiles ?? 0}/${response.totalFiles ?? 0} files restored; ${response.remainingFiles ?? 0} remaining.`;
+      await refreshSnapshotsAndJobs();
+    } catch (error) {
+      maintenanceBackupMessage = error instanceof Error ? error.message : String(error);
+    } finally { loading = false; }
+  }
+
+  async function executeRetention() {
+    loading = true;
+    try {
+      if (!Number.isInteger(retentionKeepLast) || retentionKeepLast < 1) throw new Error('Keep-last count must be at least 1.');
+      const response = await runSnapshotRetention(daemonConnectionSettings, retentionKeepLast);
+      maintenanceBackupMessage = `Retention accepted; ${response.deprecatedSnapshots ?? 0} snapshot(s) deprecated and ${response.deletedSnapshots ?? 0} deleted.`;
+      await refreshSnapshotsAndJobs();
+    } catch (error) {
+      maintenanceBackupMessage = error instanceof Error ? error.message : String(error);
+    } finally { loading = false; }
+  }
+
+  async function executeBackupScrub() {
+    loading = true;
+    try {
+      const response = await runBackupScrub(daemonConnectionSettings);
+      maintenanceBackupMessage = `Backup scrub completed: ${JSON.stringify(response)}`;
+      await refreshSnapshotsAndJobs();
+    } catch (error) {
+      maintenanceBackupMessage = error instanceof Error ? error.message : String(error);
+    } finally { loading = false; }
   }
 
   async function refreshBundledDaemonGate() {
@@ -1707,14 +1825,59 @@
     {#if activeView === 'warnings'}
       <section class="connection-card">
         <h2>Selected-host warnings & logs</h2>
-        <p>Structured log/event rendering is not implemented in this desktop slice. Use the daemon log path shown in lifecycle failures; no controls on this page pretend to fetch data.</p>
+        <p>Recent structured daemon events are loaded through the authenticated native API bridge. Secrets and raw credential material are not shown.</p>
+        <button type="button" on:click={refreshWarningsAndLogs} disabled={loading || !hasDaemonCredential}>Refresh warnings & logs</button>
+        <p>{warningsMessage}</p>
+        {#if daemonEvents.length === 0}
+          <p>No recent events are available.</p>
+        {:else}
+          <ul class="event-list" aria-label="Recent daemon events">
+            {#each daemonEvents as event}
+              <li><strong>{event.type}</strong> · {event.time}{event.folderID ? ` · folder ${event.folderID}` : ''}{event.peerID ? ` · peer ${event.peerID}` : ''}<br />{event.message ?? event.path ?? 'No additional detail'}</li>
+            {/each}
+          </ul>
+        {/if}
       </section>
     {/if}
 
     {#if activeView === 'maintenance'}
       <section class="connection-card">
         <h2>Selected-host maintenance & backups</h2>
-        <p>Maintenance scrub and optional web GUI lifecycle controls are real and available under Daemon settings. Snapshot, restore, retention, and backup management UI are not implemented here and no action is offered for them.</p>
+        <p>Create and inspect snapshots, preview restores before writing, run an explicit restore, apply deprecate-first retention, and scrub backup protection through the authenticated daemon API.</p>
+        <div class="lifecycle-actions">
+          <button type="button" on:click={refreshSnapshotsAndJobs} disabled={loading || !hasDaemonCredential}>Refresh snapshots & jobs</button>
+          <button type="button" on:click={executeBackupScrub} disabled={loading || !hasDaemonCredential}>Run backup scrub</button>
+        </div>
+        <p>{maintenanceBackupMessage}</p>
+        {#if backupJobsSummary}<p>Jobs: {backupJobsSummary}</p>{/if}
+        <form class="control-form" on:submit|preventDefault={createSnapshot}>
+          <h3>Create snapshot</h3>
+          <label>Folder ID<input bind:value={snapshotFolderID} autocomplete="off" /></label>
+          <label>Description<input bind:value={snapshotDescription} autocomplete="off" /></label>
+          <button type="submit" disabled={loading || !hasDaemonCredential}>Create snapshot</button>
+        </form>
+        {#if snapshotMarkers.length > 0}
+          <label>Snapshot
+            <select bind:value={selectedSnapshotID}>
+              <option value="">Select a snapshot</option>
+              {#each snapshotMarkers as marker}<option value={marker.id}>{marker.id} · {marker.folderId}{marker.deprecated ? ' · deprecated' : ''}</option>{/each}
+            </select>
+          </label>
+        {:else}
+          <label>Snapshot ID<input bind:value={selectedSnapshotID} autocomplete="off" /></label>
+        {/if}
+        <label>Restore paths (optional, comma or newline separated)<textarea bind:value={restorePaths} rows="3"></textarea></label>
+        <label>Alternate destination (optional)<input bind:value={restoreDestination} autocomplete="off" /></label>
+        <div class="lifecycle-actions">
+          <button type="button" on:click={previewRestore} disabled={loading || !hasDaemonCredential || !selectedSnapshotID}>Preview restore</button>
+          <button type="button" class="danger" on:click={executeRestore} disabled={loading || !hasDaemonCredential || !restorePlan || reviewedRestoreRequestKey !== currentRestoreRequestKey}>Run reviewed restore</button>
+        </div>
+        {#if restorePlan}<p>Reviewed plan: {restorePlan.files?.length ?? 0} file(s) to {restorePlan.destination}. The restore button applies this selected snapshot/path request without database reversion.</p>{/if}
+        <form class="control-form" on:submit|preventDefault={executeRetention}>
+          <h3>Snapshot retention</h3>
+          <label>Keep newest snapshots<input type="number" min="1" step="1" bind:value={retentionKeepLast} /></label>
+          <button type="submit" disabled={loading || !hasDaemonCredential}>Run deprecate-first retention</button>
+        </form>
       </section>
     {/if}
 

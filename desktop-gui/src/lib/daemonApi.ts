@@ -149,6 +149,39 @@ export type CommandResponse = {
   [key: string]: unknown;
 };
 
+export type DaemonEvent = {
+  type: string;
+  time: string;
+  folderID?: string;
+  peerID?: string;
+  path?: string;
+  message?: string;
+  progress?: Record<string, number>;
+};
+
+export type DaemonLogsResponse = { entries: DaemonEvent[] };
+export type SnapshotMarker = {
+  id: string;
+  folderId: string;
+  cursor: number;
+  description?: string;
+  pinned?: boolean;
+  deprecated?: boolean;
+  [key: string]: unknown;
+};
+export type SnapshotResponse = { markers: SnapshotMarker[] };
+export type RestorePlanResponse = {
+  snapshotId: string;
+  folderId: string;
+  destination: string;
+  files: Array<{ path: string; destinationPath: string; size: number; missingBlocks?: unknown[] }>;
+  [key: string]: unknown;
+};
+export type RestoreResponse = { jobId?: string; totalFiles?: number; restoredFiles?: number; remainingFiles?: number; [key: string]: unknown };
+export type SnapshotRetentionResponse = { jobId?: string; deprecatedSnapshots?: number; deletedSnapshots?: number; sweepEligibleBlocks?: number; [key: string]: unknown };
+export type BackupScrubResponse = { archive?: Record<string, unknown>; checkpoints?: Record<string, unknown>; repairPlan?: Record<string, unknown>; [key: string]: unknown };
+export type BackupJobsResponse = { restoreJobs: unknown[]; retentionJobs: unknown[]; repairJobs: unknown[] };
+
 function baseURL(settings: DaemonConnectionSettings): string {
   return settings.apiBaseURL.replace(/\/+$/, '');
 }
@@ -331,4 +364,41 @@ export async function queueRemoteMeshSettingsCommand(
     method: 'POST',
     body: jsonBody(command)
   });
+}
+
+export async function fetchDaemonLogs(settings: DaemonConnectionSettings): Promise<DaemonLogsResponse> {
+  return await daemonAPIRequest<DaemonLogsResponse>(settings, '/v1/logs');
+}
+
+export async function sendSnapshotCommand(
+  settings: DaemonConnectionSettings,
+  command: { action: 'list' | 'create' | 'pin' | 'deprecate' | 'delete'; id?: string; folderId?: string; description?: string }
+): Promise<SnapshotResponse> {
+  return await daemonAPIRequest<SnapshotResponse>(settings, '/v1/snapshots', { method: 'POST', body: jsonBody(command) });
+}
+
+export async function planSnapshotRestore(
+  settings: DaemonConnectionSettings,
+  request: { snapshotId: string; paths?: string[]; destinationRoot?: string; alternatePath?: string }
+): Promise<RestorePlanResponse> {
+  return await daemonAPIRequest<RestorePlanResponse>(settings, '/v1/restore-plans', { method: 'POST', body: jsonBody(request) });
+}
+
+export async function runSnapshotRestore(
+  settings: DaemonConnectionSettings,
+  request: { snapshotId: string; paths?: string[]; destinationRoot?: string; alternatePath?: string; revertDatabase?: boolean }
+): Promise<RestoreResponse> {
+  return await daemonAPIRequest<RestoreResponse>(settings, '/v1/restores', { method: 'POST', body: jsonBody(request) });
+}
+
+export async function runSnapshotRetention(settings: DaemonConnectionSettings, keepLast: number): Promise<SnapshotRetentionResponse> {
+  return await daemonAPIRequest<SnapshotRetentionResponse>(settings, '/v1/snapshot-retention', { method: 'POST', body: jsonBody({ keepLast }) });
+}
+
+export async function runBackupScrub(settings: DaemonConnectionSettings): Promise<BackupScrubResponse> {
+  return await daemonAPIRequest<BackupScrubResponse>(settings, '/v1/backup/scrub', { method: 'POST', body: jsonBody({}) });
+}
+
+export async function fetchBackupJobs(settings: DaemonConnectionSettings, snapshotId = ''): Promise<BackupJobsResponse> {
+  return await daemonAPIRequest<BackupJobsResponse>(settings, '/v1/backup/jobs', { method: 'POST', body: jsonBody({ snapshotId: snapshotId || undefined }) });
 }
