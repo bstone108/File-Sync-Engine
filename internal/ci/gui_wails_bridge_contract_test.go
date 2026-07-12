@@ -11,8 +11,9 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 	mainTS := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "main.ts"))
 	bridge := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "wailsNativeShell.ts"))
 	appSvelte := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))
+	daemonAPI := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "daemonApi.ts"))
 
-	sources := mainTS + bridge + appSvelte
+	sources := mainTS + bridge + appSvelte + daemonAPI
 	for _, want := range []string{
 		"installWailsNativeShellBridge();",
 		"window.go?.main?.App",
@@ -22,6 +23,10 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 		"GetGUIOwnedNonServiceDaemonSession",
 		"GetGUIOwnedNonServiceDaemonState",
 		"StopGUIOwnedNonServiceDaemonThroughAPI",
+		"DiscoverLocalDaemon",
+		"ControlLocalDaemon",
+		"DaemonAPIRequest",
+		"X-FSE-API-Key",
 		"onMount(() =>",
 		"ensureLocalDaemonConnection",
 		"preferExistingReachableDaemon: true",

@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import {
     fetchDaemonStatus,
+    fetchDaemonFolders,
+    fetchDaemonPeers,
     fetchAPITrustStatus,
     browseFilesystemDirectories,
     fetchRemoteMeshSettings,
@@ -21,6 +23,8 @@
     type APITrustStatus,
     type DaemonConfig,
     type DaemonStatus,
+    type DaemonFolder,
+    type DaemonPeer,
     type IdentityPairingPackage,
     type FilesystemBrowseEntry,
     type MeshSettingsCommandResponse,
@@ -28,6 +32,7 @@
   } from './lib/daemonApi';
   import {
     adoptGUIOwnedNonServiceDaemon,
+    controlLocalDaemon,
     getDaemonStartupIntegrationStatus,
     getDaemonTrayStatus,
     getFirstLaunchDaemonRegistrationStatus,
@@ -97,7 +102,12 @@
 
   let apiBaseURL = 'https://127.0.0.1:22420';
   let apiKey = '';
+  let localCredentialRef = '';
+  $: daemonConnectionSettings = { apiBaseURL, apiKey: apiKey || undefined, credentialRef: localCredentialRef || undefined };
+  $: hasDaemonCredential = Boolean(localCredentialRef || apiKey);
   let status: DaemonStatus | null = null;
+  let daemonFolders: DaemonFolder[] = [];
+  let daemonPeers: DaemonPeer[] = [];
   let apiTrustStatus: APITrustStatus | null = null;
   let daemonConfig: DaemonConfig | null = null;
   let controlMessage = '';
@@ -320,6 +330,7 @@
     const selected = managedDaemonInstances.find((instance) => instance.id === instanceID);
     if (selected) {
       apiBaseURL = selected.apiBaseURL;
+      if (selected.kind === 'remote') localCredentialRef = '';
     }
   }
 
@@ -332,7 +343,7 @@
     remoteBrowseLoading = true;
     remoteBrowseMessage = `Browsing directories on ${selectedManagedInstance.label} through the selected remote host's authenticated API.`;
     try {
-      const response = await browseFilesystemDirectories({ apiBaseURL, apiKey }, path);
+      const response = await browseFilesystemDirectories(daemonConnectionSettings, path);
       remoteBrowsePath = response.path;
       remoteBrowseEntries = response.entries ?? [];
       remoteBrowseMessage = `Remote folder browse loaded ${remoteBrowseEntries.length} director${remoteBrowseEntries.length === 1 ? 'y' : 'ies'} from ${response.path}; manual path entry remains available when the selected host is offline.`;
@@ -369,7 +380,7 @@
   async function refreshRemoteMeshStatus() {
     remoteMeshStatusMessage = 'Refreshing remote mesh document and pending-change status for the selected host.';
     try {
-      const response = await fetchRemoteMeshSettings({ apiBaseURL, apiKey }, selectedManagedInstance.id);
+      const response = await fetchRemoteMeshSettings(daemonConnectionSettings, selectedManagedInstance.id);
       remoteMeshDocuments = response.documents ?? [];
       remoteMeshStatusMessage = `Remote mesh document status refreshed for ${selectedManagedInstance.label}; ${remoteMeshDocuments.length} cached per-node settings document(s) available for online, relay-reachable, and offline instances.`;
     } catch (error) {
@@ -380,7 +391,7 @@
   async function queueSelectedRemoteMeshSettingsChange() {
     remoteMeshStatusMessage = 'Queueing durable pending settings change for mesh replication.';
     try {
-      const queued = await queueRemoteMeshSettingsCommand({ apiBaseURL, apiKey }, {
+      const queued = await queueRemoteMeshSettingsCommand(daemonConnectionSettings, {
         action: 'queue',
         targetNodeId: selectedManagedInstance.id,
         originNodeId: 'desktop-gui-selected-host',
@@ -436,12 +447,20 @@
     }
   }
 
+  async function refreshOperationalState() {
+    [status, daemonFolders, daemonPeers] = await Promise.all([
+      fetchDaemonStatus(daemonConnectionSettings),
+      fetchDaemonFolders(daemonConnectionSettings),
+      fetchDaemonPeers(daemonConnectionSettings)
+    ]);
+  }
+
   async function connectToDaemon() {
     loading = true;
     errorMessage = '';
     status = null;
     try {
-      status = await fetchDaemonStatus({ apiBaseURL, apiKey });
+      await refreshOperationalState();
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -454,7 +473,7 @@
     controlMessage = '';
     markLocalControlOperationPending('config', 'config read');
     try {
-      daemonConfig = await readDaemonConfig({ apiBaseURL, apiKey });
+      daemonConfig = await readDaemonConfig(daemonConnectionSettings);
       markLocalControlOperationCompleted('config', 'config read', { status: 'completed', message: 'Loaded redacted daemon config through the local encrypted API.' });
       controlMessage = 'Loaded redacted daemon config through the local encrypted API.';
     } catch (error) {
@@ -470,7 +489,7 @@
     controlMessage = '';
     markLocalControlOperationPending('apiTrust', 'API certificate trust status');
     try {
-      apiTrustStatus = await fetchAPITrustStatus({ apiBaseURL, apiKey });
+      apiTrustStatus = await fetchAPITrustStatus(daemonConnectionSettings);
       markLocalControlOperationCompleted('apiTrust', 'API certificate trust status', apiTrustStatus);
       controlMessage = apiTrustStatus.message ?? 'Loaded API certificate trust status without exposing API keys or private key material.';
     } catch (error) {
@@ -483,7 +502,7 @@
 
   async function pinActiveAPICertificateForSelectedHost() {
     await runControlCommand('apiTrust', 'pin active API certificate', async () => {
-      const response = await pinActiveAPICertificate({ apiBaseURL, apiKey });
+      const response = await pinActiveAPICertificate(daemonConnectionSettings);
       apiTrustStatus = response;
       return response;
     });
@@ -553,7 +572,7 @@
     pairingMessage = '';
     try {
       const groupID = requireNonEmpty(pairingGroupID, 'Identity group ID');
-      pairingPackage = await generateIdentityPairingPackage({ apiBaseURL, apiKey }, groupID);
+      pairingPackage = await generateIdentityPairingPackage(daemonConnectionSettings, groupID);
       pairingExportText = exportIdentityPackageAsCopyableText(pairingPackage);
       const download = buildIdentityPackageDownload(pairingPackage);
       pairingDownloadFilename = download.filename;
@@ -594,7 +613,7 @@
     try {
       const imported = parsedPairingImport ?? parseImportedIdentityPackageText(pairingImportText);
       parsedPairingImport = imported;
-      const response = await importIdentityPairingPackage({ apiBaseURL, apiKey }, imported);
+      const response = await importIdentityPairingPackage(daemonConnectionSettings, imported);
       pairingImportSummary = `Imported identity package for group ${response.groupId} from ${response.remoteDiscoveryId}; peer-pair key ${response.keyId ?? 'pending'} prepared at level ${response.peerPairEncryptionLevel}.`;
       pairingMessage = response.message ?? 'Identity package import accepted by daemon-owned import execution.';
     } catch (error) {
@@ -677,7 +696,7 @@
       const response = await action();
       markLocalControlOperationAccepted(area, command, response);
       controlMessage = `Local engine command accepted: ${command}`;
-      status = await fetchDaemonStatus({ apiBaseURL, apiKey });
+      await refreshOperationalState();
       markLocalControlOperationCompleted(area, command, response);
     } catch (error) {
       markLocalControlOperationFailed(area, command, error);
@@ -688,37 +707,37 @@
   }
 
   async function submitPeerForm() {
-    const settings = { apiBaseURL, apiKey };
+    const settings = daemonConnectionSettings;
     await runControlCommand('peer', `peer ${peerFormAction}`, async () => sendPeerCommand(settings, validatePeerCommandForm()));
   }
 
   async function submitFolderForm() {
-    const settings = { apiBaseURL, apiKey };
+    const settings = daemonConnectionSettings;
     await runControlCommand('folder', `folder ${folderFormAction}`, async () => sendFolderCommand(settings, validateFolderCommandForm()));
   }
 
   async function submitDiscoveryForm() {
-    const settings = { apiBaseURL, apiKey };
+    const settings = daemonConnectionSettings;
     await runControlCommand('discovery', 'discovery update', async () => sendDiscoveryCommand(settings, validateDiscoveryCommandForm()));
   }
 
   async function submitTransferForm() {
-    const settings = { apiBaseURL, apiKey };
+    const settings = daemonConnectionSettings;
     await runControlCommand('transfer', `transfer ${transferFormAction}`, async () => sendTransferCommand(settings, validateTransferCommandForm()));
   }
 
   async function submitMaintenanceForm() {
-    const settings = { apiBaseURL, apiKey };
+    const settings = daemonConnectionSettings;
     await runControlCommand('maintenance', 'maintenance scrub', async () => runMaintenanceScrub(settings, validateMaintenanceCommandForm()));
   }
 
   async function submitWebGUIForm() {
-    const settings = { apiBaseURL, apiKey };
+    const settings = daemonConnectionSettings;
     await runControlCommand('webGUI', `web GUI ${webGUIFormAction}`, async () => sendWebGUICommand(settings, validateWebGUICommandForm()));
   }
 
   async function submitConfigPatchForm() {
-    const settings = { apiBaseURL, apiKey };
+    const settings = daemonConnectionSettings;
     await runControlCommand('config', 'config patch', async () => patchDaemonConfig(settings, validateConfigPatchForm()));
   }
 
@@ -817,6 +836,8 @@
   }
 
   function reflectLocalDaemonSession(session: GUIManagedNonServiceDaemonSession) {
+    localCredentialRef = session.credentialRef;
+    apiKey = '';
     managedDaemonInstances = managedDaemonInstances.map((instance) => instance.kind === 'local' ? {
       ...instance,
       apiBaseURL: session.encryptedApiBaseURL,
@@ -850,6 +871,7 @@
       apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
       reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
       guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
+      await refreshOperationalState();
     } catch (error) {
       try {
         guiOwnedNonServiceDaemonSession = await requestGUIOwnedNonServiceDaemonLaunch({
@@ -859,6 +881,7 @@
         apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
         reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
         guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
+        await refreshOperationalState();
       } catch (launchError) {
         guiOwnedNonServiceDaemonMessage = launchError instanceof Error ? launchError.message : String(launchError);
       }
@@ -881,7 +904,10 @@
         return;
       }
       guiOwnedNonServiceDaemonSession = await adoptGUIOwnedNonServiceDaemon(existing.sessionID);
+      apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
+      reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
       guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
+      await refreshOperationalState();
     } catch (error) {
       guiOwnedNonServiceDaemonMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -900,6 +926,7 @@
       guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
       apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
       reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
+      await refreshOperationalState();
     } catch (error) {
       guiOwnedNonServiceDaemonMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -911,16 +938,27 @@
     lifecycleLoading = true;
     guiOwnedNonServiceDaemonMessage = 'Restarting local engine through its API…';
     try {
-      if (guiOwnedNonServiceDaemonSession?.pid) {
-        await stopGUIOwnedNonServiceDaemonThroughAPI(guiOwnedNonServiceDaemonSession.sessionID);
+      if (guiOwnedNonServiceDaemonSession?.kind === 'service') {
+        const runtimeState = await controlLocalDaemon('restart', guiOwnedNonServiceDaemonSession.sessionID);
+        guiOwnedNonServiceDaemonSession = {
+          ...guiOwnedNonServiceDaemonSession,
+          connectionState: runtimeState.connectionState,
+          nodeName: runtimeState.nodeName,
+          message: runtimeState.message
+        };
+      } else {
+        if (guiOwnedNonServiceDaemonSession?.pid) {
+          await stopGUIOwnedNonServiceDaemonThroughAPI(guiOwnedNonServiceDaemonSession.sessionID);
+        }
+        guiOwnedNonServiceDaemonSession = await requestGUIOwnedNonServiceDaemonLaunch({
+          sessionMode: 'persistent-user-daemon',
+          preferExistingReachableDaemon: false
+        });
       }
-      guiOwnedNonServiceDaemonSession = await requestGUIOwnedNonServiceDaemonLaunch({
-        sessionMode: 'persistent-user-daemon',
-        preferExistingReachableDaemon: false
-      });
       apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
       reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
       guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
+      await refreshOperationalState();
     } catch (error) {
       guiOwnedNonServiceDaemonMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -936,7 +974,12 @@
     lifecycleLoading = true;
     guiOwnedNonServiceDaemonMessage = '';
     try {
-      guiOwnedNonServiceDaemonSession = await stopGUIOwnedNonServiceDaemonThroughAPI(guiOwnedNonServiceDaemonSession.sessionID);
+      if (guiOwnedNonServiceDaemonSession.kind === 'service') {
+        const runtimeState = await controlLocalDaemon('stop', guiOwnedNonServiceDaemonSession.sessionID);
+        guiOwnedNonServiceDaemonSession = { ...guiOwnedNonServiceDaemonSession, connectionState: 'stopped', message: runtimeState.message };
+      } else {
+        guiOwnedNonServiceDaemonSession = await stopGUIOwnedNonServiceDaemonThroughAPI(guiOwnedNonServiceDaemonSession.sessionID);
+      }
       guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
       managedDaemonInstances = managedDaemonInstances.map((instance) => instance.kind === 'local'
         ? { ...instance, connectionState: 'offline', statusSummary: guiOwnedNonServiceDaemonMessage }
@@ -1052,16 +1095,25 @@
     {#if guiOwnedNonServiceDaemonSession}
       <dl class="host-status-grid" aria-label="Local engine state">
         <dt>Node</dt><dd>{guiOwnedNonServiceDaemonSession.nodeName ?? 'Starting'}</dd>
-        <dt>Process</dt><dd>{guiOwnedNonServiceDaemonSession.pid > 0 ? `PID ${guiOwnedNonServiceDaemonSession.pid}` : 'Stopped'}</dd>
+        <dt>Process</dt><dd>{guiOwnedNonServiceDaemonSession.kind === 'service' ? `${guiOwnedNonServiceDaemonSession.manager ?? 'service manager'} · ${guiOwnedNonServiceDaemonSession.serviceName ?? guiOwnedNonServiceDaemonSession.sessionID}` : guiOwnedNonServiceDaemonSession.pid > 0 ? `PID ${guiOwnedNonServiceDaemonSession.pid}` : 'Stopped'}</dd>
         <dt>API</dt><dd>{guiOwnedNonServiceDaemonSession.encryptedApiBaseURL}</dd>
       </dl>
     {/if}
     <div class="lifecycle-actions">
       <button type="button" on:click={ensureLocalDaemonConnection} disabled={lifecycleLoading || guiOwnedNonServiceDaemonSession?.connectionState === 'running'}>Start local engine</button>
-      <button type="button" on:click={stopGUIOwnedNonServiceDaemon} disabled={lifecycleLoading || !guiOwnedNonServiceDaemonSession?.pid}>Stop</button>
+      <button type="button" on:click={stopGUIOwnedNonServiceDaemon} disabled={lifecycleLoading || !guiOwnedNonServiceDaemonSession || guiOwnedNonServiceDaemonSession.connectionState !== 'running'}>Stop</button>
       <button type="button" on:click={restartLocalDaemon} disabled={lifecycleLoading}>Restart connection</button>
     </div>
     <small>The engine runs separately and continues syncing when this window closes.</small>
+    {#if status}
+      <dl class="host-status-grid" aria-label="Daemon operational summary">
+        <dt>Daemon</dt><dd>{status.status ?? 'running'}</dd>
+        <dt>Folders</dt><dd>{daemonFolders.length}</dd>
+        <dt>Peers</dt><dd>{daemonPeers.length}</dd>
+        <dt>Started</dt><dd>{status.startedAt ?? 'unknown'}</dd>
+      </dl>
+      <button type="button" on:click={refreshOperationalState} disabled={loading || !hasDaemonCredential}>Refresh folders, peers, and status</button>
+    {/if}
   </section>
 
   {#if selectedManagedInstance.kind === 'remote'}
@@ -1070,7 +1122,7 @@
     <p>Connect to {selectedManagedInstance.label} through its authenticated API.</p>
     <label>API URL<input bind:value={apiBaseURL} name="apiBaseURL" autocomplete="off" /></label>
     <label>API key<input bind:value={apiKey} name="apiKey" type="password" autocomplete="off" /></label>
-    <button type="button" on:click={connectToDaemon} disabled={loading || apiKey.length === 0}>{loading ? 'Connecting…' : 'Connect'}</button>
+    <button type="button" on:click={connectToDaemon} disabled={loading || !hasDaemonCredential}>{loading ? 'Connecting…' : 'Connect'}</button>
     {#if errorMessage}<p class="error">{errorMessage}</p>{/if}
     {#if status}<pre>{JSON.stringify(status, null, 2)}</pre>{/if}
   </section>
@@ -1101,7 +1153,7 @@
       Normal selected-host engine control stays inside the authenticated daemon API: redacted config, peers, folders, discovery,
       transfers, maintenance, optional web GUI lifecycle, and non-secret config patches do not require manual config-file edits or command-line switches.
     </p>
-    <button type="button" on:click={refreshDaemonConfig} disabled={loading || apiKey.length === 0}>Read redacted config</button>
+    <button type="button" on:click={refreshDaemonConfig} disabled={loading || !hasDaemonCredential}>Read redacted config</button>
 
     <form class="control-form" on:submit|preventDefault={submitPeerForm} aria-label="Peer form">
       <h3>Peer form</h3>
@@ -1121,7 +1173,7 @@
         Peer endpoint
         <input bind:value={peerFormEndpoint} name="peerFormEndpoint" autocomplete="off" placeholder="tcp://host:port or https://host" />
       </label>
-      <button type="submit" disabled={loading || apiKey.length === 0}>Submit peer command</button>
+      <button type="submit" disabled={loading || !hasDaemonCredential}>Submit peer command</button>
       <p class="operation-status" data-phase={getLocalControlOperationState('peer').phase} aria-label="Peer operation status">
         {renderLocalControlOperationSummary(getLocalControlOperationState('peer'))}
         {#if getLocalControlOperationState('peer').detail}
@@ -1156,7 +1208,7 @@
           <option value="recvonly">recvonly</option>
         </select>
       </label>
-      <button type="submit" disabled={loading || apiKey.length === 0}>Submit folder command</button>
+      <button type="submit" disabled={loading || !hasDaemonCredential}>Submit folder command</button>
       <p class="operation-status" data-phase={getLocalControlOperationState('folder').phase} aria-label="Folder operation status">
         {renderLocalControlOperationSummary(getLocalControlOperationState('folder'))}
         {#if getLocalControlOperationState('folder').detail}
@@ -1179,7 +1231,7 @@
         <input type="checkbox" bind:checked={discoveryFormLocal} name="discoveryFormLocal" />
         Local/LAN discovery enabled
       </label>
-      <button type="submit" disabled={loading || apiKey.length === 0}>Submit discovery update</button>
+      <button type="submit" disabled={loading || !hasDaemonCredential}>Submit discovery update</button>
       <p class="operation-status" data-phase={getLocalControlOperationState('discovery').phase} aria-label="Discovery operation status">
         {renderLocalControlOperationSummary(getLocalControlOperationState('discovery'))}
         {#if getLocalControlOperationState('discovery').detail}
@@ -1206,7 +1258,7 @@
         Peer ID scope
         <input bind:value={transferFormPeerID} name="transferFormPeerID" autocomplete="off" />
       </label>
-      <button type="submit" disabled={loading || apiKey.length === 0}>Submit transfer command</button>
+      <button type="submit" disabled={loading || !hasDaemonCredential}>Submit transfer command</button>
       <p class="operation-status" data-phase={getLocalControlOperationState('transfer').phase} aria-label="Transfer operation status">
         {renderLocalControlOperationSummary(getLocalControlOperationState('transfer'))}
         {#if getLocalControlOperationState('transfer').detail}
@@ -1221,7 +1273,7 @@
         Optional folder ID
         <input bind:value={maintenanceFormFolderID} name="maintenanceFormFolderID" autocomplete="off" />
       </label>
-      <button type="submit" disabled={loading || apiKey.length === 0}>Run maintenance scrub</button>
+      <button type="submit" disabled={loading || !hasDaemonCredential}>Run maintenance scrub</button>
       <p class="operation-status" data-phase={getLocalControlOperationState('maintenance').phase} aria-label="Maintenance operation status">
         {renderLocalControlOperationSummary(getLocalControlOperationState('maintenance'))}
         {#if getLocalControlOperationState('maintenance').detail}
@@ -1242,7 +1294,7 @@
           <option value="stop">stop</option>
         </select>
       </label>
-      <button type="submit" disabled={loading || apiKey.length === 0}>Submit web GUI command</button>
+      <button type="submit" disabled={loading || !hasDaemonCredential}>Submit web GUI command</button>
       <p class="operation-status" data-phase={getLocalControlOperationState('webGUI').phase} aria-label="Web GUI operation status">
         {renderLocalControlOperationSummary(getLocalControlOperationState('webGUI'))}
         {#if getLocalControlOperationState('webGUI').detail}
@@ -1263,7 +1315,7 @@
           <option value="off">off</option>
         </select>
       </label>
-      <button type="submit" disabled={loading || apiKey.length === 0}>Submit non-secret config patch</button>
+      <button type="submit" disabled={loading || !hasDaemonCredential}>Submit non-secret config patch</button>
       <p class="operation-status" data-phase={getLocalControlOperationState('config').phase} aria-label="Config operation status">
         {renderLocalControlOperationSummary(getLocalControlOperationState('config'))}
         {#if getLocalControlOperationState('config').detail}
@@ -1278,8 +1330,8 @@
         Fetch the active certificate fingerprint for the selected host, then pin it only after the user verifies the TOFU pairing context. API keys and private key material are never displayed here.
       </p>
       <div class="lifecycle-actions">
-        <button type="button" on:click={refreshAPITrustStatus} disabled={loading || apiKey.length === 0}>Fetch API trust status</button>
-        <button type="button" on:click={pinActiveAPICertificateForSelectedHost} disabled={loading || apiKey.length === 0 || !apiTrustStatus?.certificateSha256}>Pin active certificate</button>
+        <button type="button" on:click={refreshAPITrustStatus} disabled={loading || !hasDaemonCredential}>Fetch API trust status</button>
+        <button type="button" on:click={pinActiveAPICertificateForSelectedHost} disabled={loading || !hasDaemonCredential || !apiTrustStatus?.certificateSha256}>Pin active certificate</button>
       </div>
       <p class="operation-status" data-phase={getLocalControlOperationState('apiTrust').phase} aria-label="API trust operation status">
         {renderLocalControlOperationSummary(getLocalControlOperationState('apiTrust'))}
@@ -1419,7 +1471,17 @@
     {#if activeView === 'folders'}
       <section class="connection-card">
         <h2>Selected-host folders</h2>
-        <p>Folder roots, sync modes, and sync groups for {selectedManagedInstance.label} belong here. Folder commands remain available from daemon settings until the richer folder table lands.</p>
+        <p>Live folder roots and modes from {selectedManagedInstance.label}. Add, update, and remove operations are available under Daemon settings and refresh this list after completion.</p>
+        <button type="button" on:click={refreshOperationalState} disabled={loading || !hasDaemonCredential}>Refresh folders</button>
+        {#if daemonFolders.length === 0}
+          <p>No folders are configured.</p>
+        {:else}
+          <ul aria-label="Configured folders">
+            {#each daemonFolders as folder}
+              <li><strong>{folder.id}</strong> · {folder.path ?? 'path unavailable'} · {folder.mode ?? 'mode unavailable'} · {folder.status ?? 'configured'}</li>
+            {/each}
+          </ul>
+        {/if}
       </section>
       <section class="connection-card remote-folder-browse">
         <h2>Remote folder browse</h2>
@@ -1433,10 +1495,10 @@
           <input bind:value={remoteBrowsePath} placeholder={folderFormPath || '/'} autocomplete="off" />
         </label>
         <div class="lifecycle-actions">
-          <button type="button" on:click={() => browseRemoteFolderTree()} disabled={remoteBrowseLoading || !canBrowseSelectedHostFilesystem || apiKey.length === 0}>
+          <button type="button" on:click={() => browseRemoteFolderTree()} disabled={remoteBrowseLoading || !canBrowseSelectedHostFilesystem || !hasDaemonCredential}>
             {remoteBrowseLoading ? 'Browsing…' : 'Browse selected host'}
           </button>
-          <button type="button" on:click={() => browseRemoteFolderTree(folderFormPath)} disabled={remoteBrowseLoading || !canBrowseSelectedHostFilesystem || apiKey.length === 0 || folderFormPath.length === 0}>
+          <button type="button" on:click={() => browseRemoteFolderTree(folderFormPath)} disabled={remoteBrowseLoading || !canBrowseSelectedHostFilesystem || !hasDaemonCredential || folderFormPath.length === 0}>
             Browse manual path
           </button>
         </div>
@@ -1461,7 +1523,17 @@
     {#if activeView === 'peers'}
       <section class="connection-card">
         <h2>Selected-host peers & identity</h2>
-        <p>Peer lists, discovery, identity pairing, and remote-instance onboarding for {selectedManagedInstance.label} belong here instead of being buried in one long settings page.</p>
+        <p>Peer lists, discovery, identity pairing, and remote-instance onboarding for {selectedManagedInstance.label}. Add, update, and remove operations are available under Daemon settings.</p>
+        <button type="button" on:click={refreshOperationalState} disabled={loading || !hasDaemonCredential}>Refresh peers</button>
+        {#if daemonPeers.length === 0}
+          <p>No peers are configured.</p>
+        {:else}
+          <ul aria-label="Configured peers">
+            {#each daemonPeers as peer}
+              <li><strong>{peer.id}</strong> · {peer.endpoint ?? 'endpoint unavailable'} · {peer.status ?? 'configured'}</li>
+            {/each}
+          </ul>
+        {/if}
         <p>Newly discovered same-identity peers appear in the host list as soon as any trustworthy identifier is known, even when the only initial data is a unique Peer ID/code.</p>
         <button type="button" on:click={autoPopulateLoadedSharedIdentityInstances}>Automatically populate reachable same-identity instances</button>
         <button type="button" on:click={() => hydrateDiscoveredIdentityPeers()}>Show newly discovered same-identity peers</button>
@@ -1524,8 +1596,8 @@
         <p>Each identity-linked daemon will publish a per-node settings document so offline instances can be inspected or queued for later adoption through trusted relays instead of requiring direct reachability.</p>
         <p>Design boundary: the config file remains local import/export; remote edits become durable pending changes against the selected node's canonical document and must be authenticated, validated, applied, and acknowledged by that owner node.</p>
         <div class="lifecycle-actions">
-          <button type="button" on:click={refreshRemoteMeshStatus} disabled={loading || apiKey.length === 0}>Refresh remote mesh status</button>
-          <button type="button" on:click={queueSelectedRemoteMeshSettingsChange} disabled={loading || apiKey.length === 0}>Queue selected-host settings change</button>
+          <button type="button" on:click={refreshRemoteMeshStatus} disabled={loading || !hasDaemonCredential}>Refresh remote mesh status</button>
+          <button type="button" on:click={queueSelectedRemoteMeshSettingsChange} disabled={loading || !hasDaemonCredential}>Queue selected-host settings change</button>
         </div>
         <dl>
           <dt>per-node settings document</dt>
@@ -1628,21 +1700,21 @@
     {#if activeView === 'transfers'}
       <section class="connection-card">
         <h2>Selected-host transfers</h2>
-        <p>Transfer queues, active rates, pauses, cancellations, and source/path explanations for {selectedManagedInstance.label} will be scoped to the selected host here.</p>
+        <p>Transfer queue listing and live rate history are not exposed by the current daemon API. Pause, resume, and cancel controls are real and available under Daemon settings; their operation status reports accepted, completed, or actionable failure states.</p>
       </section>
     {/if}
 
     {#if activeView === 'warnings'}
       <section class="connection-card">
         <h2>Selected-host warnings & logs</h2>
-        <p>Maintenance warnings, inaccessible files, structured logs, and recent daemon events for {selectedManagedInstance.label} get a dedicated readable home.</p>
+        <p>Structured log/event rendering is not implemented in this desktop slice. Use the daemon log path shown in lifecycle failures; no controls on this page pretend to fetch data.</p>
       </section>
     {/if}
 
     {#if activeView === 'maintenance'}
       <section class="connection-card">
         <h2>Selected-host maintenance & backups</h2>
-        <p>Scrub, repair, snapshot, restore, retention, backup availability, and optional web GUI package operations for {selectedManagedInstance.label} are grouped here.</p>
+        <p>Maintenance scrub and optional web GUI lifecycle controls are real and available under Daemon settings. Snapshot, restore, retention, and backup management UI are not implemented here and no action is offered for them.</p>
       </section>
     {/if}
 

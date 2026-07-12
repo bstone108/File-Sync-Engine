@@ -43,6 +43,30 @@ export type DaemonStartupIntegrationStatus = {
   message: string;
 };
 
+export type LocalDaemonRuntimeState = {
+  connectionState: string;
+  nodeName?: string;
+  pid: number;
+  sessionID?: string;
+  source?: string;
+  kind?: string;
+  manager?: string;
+  serviceName?: string;
+  apiBaseURL?: string;
+  credentialRef?: string;
+  message: string;
+};
+
+export type NativeDaemonAPIRequest = {
+  apiBaseURL: string;
+  credentialRef: string;
+  method: string;
+  path: string;
+  body?: unknown;
+};
+
+export type NativeDaemonAPIResponse = { status: number; body: unknown };
+
 export type NativeDesktopShell = {
   readBundledEngineResourceManifest(): Promise<BundledEngineResourceManifest>;
   observeBundledEngineResources(): Promise<BundledEngineResourceObservation[]>;
@@ -50,6 +74,9 @@ export type NativeDesktopShell = {
   getFirstLaunchDaemonRegistrationStatus(): Promise<FirstLaunchDaemonRegistrationStatus>;
   getDaemonTrayStatus(): Promise<DaemonTrayStatus>;
   getDaemonStartupIntegrationStatus(): Promise<DaemonStartupIntegrationStatus>;
+  discoverLocalDaemon(): Promise<LocalDaemonRuntimeState>;
+  controlLocalDaemon(request: { action: 'status' | 'start' | 'stop' | 'restart'; source?: string }): Promise<LocalDaemonRuntimeState>;
+  daemonAPIRequest(request: NativeDaemonAPIRequest): Promise<NativeDaemonAPIResponse>;
   requestGUIOwnedNonServiceDaemonLaunch(
     request: GUIOwnedNonServiceDaemonLaunchRequest
   ): Promise<GUIManagedNonServiceDaemonSession>;
@@ -154,6 +181,18 @@ export async function getDaemonStartupIntegrationStatus(
   shell = getNativeDesktopShell()
 ): Promise<DaemonStartupIntegrationStatus> {
   return await shell.getDaemonStartupIntegrationStatus();
+}
+
+export async function discoverLocalDaemon(shell = getNativeDesktopShell()): Promise<LocalDaemonRuntimeState> {
+  return await shell.discoverLocalDaemon();
+}
+
+export async function controlLocalDaemon(
+  action: 'status' | 'start' | 'stop' | 'restart',
+  source?: string,
+  shell = getNativeDesktopShell()
+): Promise<LocalDaemonRuntimeState> {
+  return await shell.controlLocalDaemon({ action, source });
 }
 
 export async function openGuiFromDaemonTray(shell = getNativeDesktopShell()): Promise<void> {

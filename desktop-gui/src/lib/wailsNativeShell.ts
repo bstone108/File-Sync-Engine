@@ -6,6 +6,9 @@ type WailsAppBindings = {
   GetGUIOwnedNonServiceDaemonSession(): Promise<unknown>;
   GetGUIOwnedNonServiceDaemonState(): Promise<unknown>;
   StopGUIOwnedNonServiceDaemonThroughAPI(sessionID: string): Promise<unknown>;
+  DiscoverLocalDaemon(): Promise<unknown>;
+  ControlLocalDaemon(request: unknown): Promise<unknown>;
+  DaemonAPIRequest(request: unknown): Promise<unknown>;
 };
 
 declare global {
@@ -24,6 +27,9 @@ export function installWailsNativeShellBridge(): boolean {
   if (!app) return false;
 
   window.fseDesktopShell = {
+    discoverLocalDaemon: () => app.DiscoverLocalDaemon() as ReturnType<NativeDesktopShell['discoverLocalDaemon']>,
+    controlLocalDaemon: (request) => app.ControlLocalDaemon(request) as ReturnType<NativeDesktopShell['controlLocalDaemon']>,
+    daemonAPIRequest: (request) => app.DaemonAPIRequest(request) as ReturnType<NativeDesktopShell['daemonAPIRequest']>,
     requestGUIOwnedNonServiceDaemonLaunch: (request) =>
       app.RequestGUIOwnedNonServiceDaemonLaunch(request) as ReturnType<NativeDesktopShell['requestGUIOwnedNonServiceDaemonLaunch']>,
     adoptGUIOwnedNonServiceDaemon: (sessionID) =>

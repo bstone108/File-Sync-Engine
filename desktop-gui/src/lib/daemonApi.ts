@@ -1,14 +1,21 @@
 export type DaemonConnectionSettings = {
   apiBaseURL: string;
-  apiKey: string;
+  apiKey?: string;
+  credentialRef?: string;
 };
 
 export type DaemonStatus = {
   nodeName?: string;
   startedAt?: string;
-  folders?: unknown[];
-  peers?: unknown[];
+  status?: string;
+  folders?: number;
+  peers?: number;
+  maintenance?: Record<string, unknown>;
+  backup?: Record<string, unknown>;
 };
+
+export type DaemonFolder = { id: string; path?: string; mode?: string; status?: string; [key: string]: unknown };
+export type DaemonPeer = { id: string; endpoint?: string; status?: string; [key: string]: unknown };
 
 export type DaemonConfig = Record<string, unknown>;
 export type DaemonConfigPatch = Record<string, unknown>;
@@ -151,8 +158,22 @@ async function daemonAPIRequest<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
+  const nativeShell = typeof window === 'undefined' ? undefined : window.fseDesktopShell;
+  if (settings.credentialRef && nativeShell) {
+    const response = await nativeShell.daemonAPIRequest({
+      apiBaseURL: settings.apiBaseURL,
+      credentialRef: settings.credentialRef,
+      method: init.method ?? 'GET',
+      path,
+      body: init.body === undefined ? undefined : JSON.parse(String(init.body))
+    });
+    return (typeof response.body === 'string' ? JSON.parse(response.body) : response.body) as T;
+  }
+  if (!settings.apiKey) {
+    throw new Error('No native credential reference or API key is available for the selected daemon.');
+  }
   const headers = new Headers(init.headers);
-  headers.set('X-API-Key', settings.apiKey);
+  headers.set('X-FSE-API-Key', settings.apiKey);
   headers.set('Accept', 'application/json');
   if (init.body !== undefined && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
@@ -170,6 +191,14 @@ function jsonBody(body: unknown): string {
 
 export async function fetchDaemonStatus(settings: DaemonConnectionSettings): Promise<DaemonStatus> {
   return await daemonAPIRequest<DaemonStatus>(settings, '/v1/status');
+}
+
+export async function fetchDaemonFolders(settings: DaemonConnectionSettings): Promise<DaemonFolder[]> {
+  return await daemonAPIRequest<DaemonFolder[]>(settings, '/v1/folders');
+}
+
+export async function fetchDaemonPeers(settings: DaemonConnectionSettings): Promise<DaemonPeer[]> {
+  return await daemonAPIRequest<DaemonPeer[]>(settings, '/v1/peers');
 }
 
 export async function readDaemonConfig(settings: DaemonConnectionSettings): Promise<DaemonConfig> {

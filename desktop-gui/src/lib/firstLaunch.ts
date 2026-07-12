@@ -26,13 +26,16 @@ export type FirstLaunchDaemonRegistrationResult = {
 export type GUIManagedNonServiceDaemonSession = {
   sessionID: string;
   pid: number;
+  kind?: 'service' | 'portable' | string;
+  manager?: string;
+  serviceName?: string;
   encryptedApiBaseURL: `https://${string}`;
   credentialRef: string;
-  configPath: string;
-  statePath: string;
-  sessionMode: 'persistent-user-daemon' | 'temporary-session-only';
-  launchedAt: string;
-  reconnectOnNextLaunch: boolean;
+  configPath?: string;
+  statePath?: string;
+  sessionMode: 'persistent-user-daemon' | 'temporary-session-only' | 'installed-service';
+  launchedAt?: string;
+  reconnectOnNextLaunch?: boolean;
   message: string;
   connectionState: 'starting' | 'running' | 'stopped' | 'unreachable' | string;
   nodeName?: string;

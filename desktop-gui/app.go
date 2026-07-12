@@ -36,6 +36,9 @@ type DesktopRuntimeInfo struct {
 type GUIManagedNonServiceDaemonSession struct {
 	SessionID             string `json:"sessionID"`
 	PID                   int    `json:"pid"`
+	Kind                  string `json:"kind,omitempty"`
+	Manager               string `json:"manager,omitempty"`
+	ServiceName           string `json:"serviceName,omitempty"`
 	EncryptedAPIBaseURL   string `json:"encryptedApiBaseURL"`
 	CredentialRef         string `json:"credentialRef"`
 	ConfigPath            string `json:"configPath"`
@@ -52,7 +55,13 @@ type DaemonRuntimeState struct {
 	ConnectionState string `json:"connectionState"`
 	NodeName        string `json:"nodeName,omitempty"`
 	PID             int    `json:"pid"`
-	SessionID       string `json:"sessionID"`
+	SessionID       string `json:"sessionID,omitempty"`
+	Source          string `json:"source,omitempty"`
+	Kind            string `json:"kind,omitempty"`
+	Manager         string `json:"manager,omitempty"`
+	ServiceName     string `json:"serviceName,omitempty"`
+	APIBaseURL      string `json:"apiBaseURL,omitempty"`
+	CredentialRef   string `json:"credentialRef,omitempty"`
 	Message         string `json:"message"`
 }
 
@@ -64,11 +73,16 @@ type GUIOwnedNonServiceDaemonLaunchRequest struct {
 type desktopNativeRuntime struct {
 	resourceRoot       string
 	stateRoot          string
+	platform           string
 	launcher           func(command string, args []string, env []string) (int, error)
+	commandRunner      func(name string, args ...string) ([]byte, error)
 	stopClient         *http.Client
+	apiClient          *http.Client
 	credentialResolver func(ref string) (string, error)
 	statusClient       *http.Client
 	probeSession       func(GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error)
+	probeCandidate     func(localDaemonCandidate) (DaemonRuntimeState, error)
+	serviceCandidates  []localDaemonCandidate
 	readinessAttempts  int
 }
 
@@ -98,6 +112,14 @@ func (a *App) RequestGUIOwnedNonServiceDaemonLaunch(request GUIOwnedNonServiceDa
 		return GUIManagedNonServiceDaemonSession{}, fmt.Errorf("unsupported GUI-owned daemon session mode: %s", mode)
 	}
 	if request.PreferExistingReachableDaemon {
+		if discovered, err := a.DiscoverLocalDaemon(); err == nil && discovered.ConnectionState == "running" && discovered.Kind == "service" {
+			return GUIManagedNonServiceDaemonSession{
+				SessionID: discovered.Source, Kind: "service", Manager: discovered.Manager, ServiceName: discovered.ServiceName,
+				EncryptedAPIBaseURL: discovered.APIBaseURL, CredentialRef: discovered.CredentialRef,
+				SessionMode: "installed-service", ConnectionState: "running", NodeName: discovered.NodeName,
+				Message: "Connected to reachable installed service daemon; no second portable daemon was started.",
+			}, nil
+		}
 		if existing, err := rt.loadSession(); err == nil && existing.SessionID != "" && existing.PID > 0 {
 			if state, probeErr := rt.probe(existing); probeErr == nil {
 				existing.ConnectionState = state.ConnectionState
