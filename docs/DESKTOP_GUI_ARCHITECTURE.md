@@ -2,6 +2,8 @@
 
 This document locks the first desktop GUI stack and packaging approach for the file synchronization engine. It is a planning/contract slice, not a completed GUI implementation.
 
+The production Svelte entrypoint now installs a bridge from Wails' generated `window.go.main.App` bindings to the frontend `window.fseDesktopShell` contract before the app starts. Non-service daemon launch/adopt/stop controls therefore call the bound Go backend in packaged desktop builds instead of failing with `native desktop shell is not available`. Launch still creates a separate daemon process, and the Go backend verifies the target-specific packaged daemon is an executable file before starting it. Installed-service, tray, credential-vault, and full release-manifest bridge methods remain incomplete native integrations and return explicit not-implemented errors rather than fake state.
+
 ## Chosen stack
 
 The desktop GUI should use **Wails + Svelte/TypeScript** as the first implementation stack.

@@ -17,6 +17,7 @@ import {
   type FirstLaunchDaemonRegistrationResult,
   type FirstLaunchDaemonRegistrationStatus,
   type GUIManagedNonServiceDaemonSession,
+  type DaemonRuntimeState,
   type GUIOwnedNonServiceDaemonBridge,
   type GUIOwnedNonServiceDaemonLaunchRequest
 } from './firstLaunch';
@@ -54,6 +55,7 @@ export type NativeDesktopShell = {
   ): Promise<GUIManagedNonServiceDaemonSession>;
   adoptGUIOwnedNonServiceDaemon(sessionID: string): Promise<GUIManagedNonServiceDaemonSession>;
   getGUIOwnedNonServiceDaemonSession(): Promise<GUIManagedNonServiceDaemonSession | null>;
+  getGUIOwnedNonServiceDaemonState(): Promise<DaemonRuntimeState>;
   stopGUIOwnedNonServiceDaemonThroughAPI(sessionID: string): Promise<GUIManagedNonServiceDaemonSession>;
   openGuiFromDaemonTray(): Promise<void>;
   showMainWindowFromDaemonTray(): Promise<void>;
@@ -115,8 +117,7 @@ export async function requestGUIOwnedNonServiceDaemonLaunch(
   request: GUIOwnedNonServiceDaemonLaunchRequest,
   shell = getNativeDesktopShell()
 ): Promise<GUIManagedNonServiceDaemonSession> {
-  const gate = await loadBundledDaemonGate(shell);
-  return await requestGUIOwnedNonServiceDaemonLaunchThroughBridge(gate, shell as GUIOwnedNonServiceDaemonBridge, request);
+  return await shell.requestGUIOwnedNonServiceDaemonLaunch(request);
 }
 
 export async function adoptGUIOwnedNonServiceDaemon(
@@ -130,6 +131,12 @@ export async function getGUIOwnedNonServiceDaemonSession(
   shell = getNativeDesktopShell()
 ): Promise<GUIManagedNonServiceDaemonSession | null> {
   return await shell.getGUIOwnedNonServiceDaemonSession();
+}
+
+export async function getGUIOwnedNonServiceDaemonState(
+  shell = getNativeDesktopShell()
+): Promise<DaemonRuntimeState> {
+  return await shell.getGUIOwnedNonServiceDaemonState();
 }
 
 export async function stopGUIOwnedNonServiceDaemonThroughAPI(

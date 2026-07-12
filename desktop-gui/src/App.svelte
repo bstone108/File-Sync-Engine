@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import {
     fetchDaemonStatus,
     fetchAPITrustStatus,
@@ -31,6 +32,7 @@
     getDaemonTrayStatus,
     getFirstLaunchDaemonRegistrationStatus,
     getGUIOwnedNonServiceDaemonSession,
+    getGUIOwnedNonServiceDaemonState,
     installBundledDaemonForCurrentOS,
     loadBundledDaemonGate,
     openGuiFromDaemonTray,
@@ -814,6 +816,59 @@
     }
   }
 
+  function reflectLocalDaemonSession(session: GUIManagedNonServiceDaemonSession) {
+    managedDaemonInstances = managedDaemonInstances.map((instance) => instance.kind === 'local' ? {
+      ...instance,
+      apiBaseURL: session.encryptedApiBaseURL,
+      connectionState: session.connectionState === 'running' ? 'online' : 'connecting',
+      statusSummary: session.connectionState === 'running'
+        ? `${session.nodeName ?? 'Local engine'} is reachable through the native authenticated API bridge.`
+        : session.message
+    } : instance);
+  }
+
+  async function ensureLocalDaemonConnection() {
+    lifecycleLoading = true;
+    guiOwnedNonServiceDaemonMessage = 'Checking for a reachable local engine…';
+    try {
+      const runtimeState = await getGUIOwnedNonServiceDaemonState();
+      if (runtimeState.connectionState === 'running' && runtimeState.sessionID) {
+        const existing = await getGUIOwnedNonServiceDaemonSession();
+        if (!existing) throw new Error('The native shell reported a running engine without a reconnectable session.');
+        guiOwnedNonServiceDaemonSession = await adoptGUIOwnedNonServiceDaemon(existing.sessionID);
+        guiOwnedNonServiceDaemonSession = {
+          ...guiOwnedNonServiceDaemonSession,
+          connectionState: runtimeState.connectionState,
+          nodeName: runtimeState.nodeName
+        };
+      } else {
+        guiOwnedNonServiceDaemonSession = await requestGUIOwnedNonServiceDaemonLaunch({
+          sessionMode: 'persistent-user-daemon',
+          preferExistingReachableDaemon: true
+        });
+      }
+      apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
+      guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
+    } catch (error) {
+      try {
+        guiOwnedNonServiceDaemonSession = await requestGUIOwnedNonServiceDaemonLaunch({
+          sessionMode: 'persistent-user-daemon',
+          preferExistingReachableDaemon: true
+        });
+        apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
+        guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
+      } catch (launchError) {
+        guiOwnedNonServiceDaemonMessage = launchError instanceof Error ? launchError.message : String(launchError);
+      }
+    } finally {
+      lifecycleLoading = false;
+    }
+  }
+
+  onMount(() => {
+    void ensureLocalDaemonConnection();
+  });
+
   async function adoptGUIOwnedNonServiceDaemonSession() {
     lifecycleLoading = true;
     guiOwnedNonServiceDaemonMessage = '';
@@ -1259,7 +1314,7 @@
       </select>
     </label>
     <div class="lifecycle-actions">
-      <button type="button" on:click={launchGUIOwnedNonServiceDaemon} disabled={lifecycleLoading || !bundleGate?.bundleVerified}>
+      <button type="button" on:click={launchGUIOwnedNonServiceDaemon} disabled={lifecycleLoading}>
         Launch separate non-service daemon
       </button>
       <button type="button" on:click={adoptGUIOwnedNonServiceDaemonSession} disabled={lifecycleLoading}>
