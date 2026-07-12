@@ -16,14 +16,13 @@ export type RemoteInstanceCredentialSecret = {
 
 export type CredentialVaultBridge = {
   storeRemoteInstanceCredential(record: RemoteInstanceCredentialRecord, secret: RemoteInstanceCredentialSecret): Promise<RemoteInstanceCredentialRecord>;
-  resolveRemoteInstanceCredential(credentialRef: string): Promise<RemoteInstanceCredentialSecret>;
   deleteRemoteInstanceCredential(credentialRef: string): Promise<void>;
 };
 
 export const credentialVaultPlatformNotes: Record<CredentialVaultPlatform, string> = {
-  windows: 'Windows Credential Manager stores remote daemon API credentials outside the instance registry.',
-  macos: 'macOS Keychain stores remote daemon API credentials outside the instance registry.',
-  linux: 'Freedesktop Secret Service stores remote daemon API credentials outside the instance registry.'
+  windows: 'Windows Credential Manager integration is not implemented in this build; remote API-key onboarding fails closed.',
+  macos: 'macOS Keychain integration is not implemented in this build; remote API-key onboarding fails closed.',
+  linux: 'Freedesktop Secret Service stores remote daemon API credentials outside the instance registry; locked keyrings require the user to unlock and retry.'
 };
 
 export function buildRemoteInstanceCredentialRef(instanceID: string): string {
@@ -35,7 +34,7 @@ export function buildRemoteInstanceCredentialRef(instanceID: string): string {
 }
 
 export function remoteCredentialStorageBoundary(): string {
-  return 'api key material is never persisted in the instance registry; only credentialRef metadata is stored there while the native shell writes secrets to Windows Credential Manager, macOS Keychain, or Freedesktop Secret Service.';
+  return 'api key material is never persisted in the instance registry or returned to the frontend after onboarding; Linux stores it in Freedesktop Secret Service and the native API proxy resolves it only for authenticated requests.';
 }
 
 export async function storeRemoteInstanceCredential(
@@ -50,16 +49,6 @@ export async function storeRemoteInstanceCredential(
     throw new Error('remote instance credential secret is required');
   }
   return await bridge.storeRemoteInstanceCredential(record, secret);
-}
-
-export async function resolveRemoteInstanceCredential(
-  bridge: CredentialVaultBridge,
-  credentialRef: string
-): Promise<RemoteInstanceCredentialSecret> {
-  if (!credentialRef) {
-    throw new Error('credentialRef is required before resolving a remote instance credential');
-  }
-  return await bridge.resolveRemoteInstanceCredential(credentialRef);
 }
 
 export async function deleteRemoteInstanceCredential(bridge: CredentialVaultBridge, credentialRef: string): Promise<void> {

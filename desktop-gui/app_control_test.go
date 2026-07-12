@@ -12,7 +12,92 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestRemoteCredentialVaultStoresMetadataWithoutReturningSecret(t *testing.T) {
+	var storedService, storedAccount, storedSecret string
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{
+		platform: "linux",
+		credentialVaultSet: func(service, account, secret string) error {
+			storedService, storedAccount, storedSecret = service, account, secret
+			return nil
+		},
+	}
+	record := RemoteInstanceCredentialRecord{
+		CredentialRef: "desktop-vault:remote:home-nas",
+		InstanceID:    "remote-home-nas",
+		Label:         "Home NAS",
+		CreatedAt:     time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		UpdatedAt:     time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}
+	got, err := app.StoreRemoteInstanceCredential(record, RemoteInstanceCredentialSecret{CredentialRef: record.CredentialRef, SecretValue: "remote-api-secret"})
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if got.Platform != "linux" || got.CredentialRef != record.CredentialRef || storedService != remoteCredentialVaultService || storedAccount != record.CredentialRef || storedSecret != "remote-api-secret" {
+		t.Fatalf("record=%#v service=%q account=%q secret=%q", got, storedService, storedAccount, storedSecret)
+	}
+	encoded, _ := json.Marshal(got)
+	if strings.Contains(string(encoded), "remote-api-secret") {
+		t.Fatalf("metadata leaked secret: %s", encoded)
+	}
+}
+
+func TestRemoteCredentialVaultRejectsMalformedReferenceBeforeBackendCall(t *testing.T) {
+	calls := 0
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{credentialVaultSet: func(string, string, string) error { calls++; return nil }}
+	_, err := app.StoreRemoteInstanceCredential(
+		RemoteInstanceCredentialRecord{CredentialRef: "desktop-vault:local-api-key", InstanceID: "remote-a", Label: "Remote A"},
+		RemoteInstanceCredentialSecret{CredentialRef: "desktop-vault:local-api-key", SecretValue: "secret"},
+	)
+	if err == nil || calls != 0 {
+		t.Fatalf("expected fail-closed validation, err=%v calls=%d", err, calls)
+	}
+}
+
+func TestDaemonAPIProxyResolvesRemoteCredentialInsideNativeBoundary(t *testing.T) {
+	var auth string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("X-FSE-API-Key")
+		_ = json.NewEncoder(w).Encode(map[string]any{"nodeName": "remote-node"})
+	}))
+	defer server.Close()
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{
+		apiClient: server.Client(),
+		credentialVaultGet: func(service, account string) (string, error) {
+			if service != remoteCredentialVaultService || account != "desktop-vault:remote:home-nas" {
+				t.Fatalf("service=%q account=%q", service, account)
+			}
+			return "vault-api-secret", nil
+		},
+	}
+	response, err := app.DaemonAPIRequest(NativeDaemonAPIRequest{APIBaseURL: server.URL, CredentialRef: "desktop-vault:remote:home-nas", Method: "GET", Path: "/v1/status"})
+	if err != nil {
+		t.Fatalf("proxy: %v", err)
+	}
+	if auth != "vault-api-secret" || strings.Contains(string(response.Body), "vault-api-secret") {
+		t.Fatalf("auth=%q body=%s", auth, response.Body)
+	}
+}
+
+func TestDeleteRemoteCredentialUsesVaultAndTreatsMissingAsSuccess(t *testing.T) {
+	deleted := ""
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{credentialVaultDelete: func(service, account string) error {
+		deleted = service + ":" + account
+		return errCredentialNotFound
+	}}
+	if err := app.DeleteRemoteInstanceCredential("desktop-vault:remote:home-nas"); err != nil {
+		t.Fatalf("delete missing credential: %v", err)
+	}
+	if deleted != remoteCredentialVaultService+":desktop-vault:remote:home-nas" {
+		t.Fatalf("deleted=%q", deleted)
+	}
+}
 
 func TestBundledManifestInspectionReadsAndHashesPackagedResources(t *testing.T) {
 	tmp := t.TempDir()

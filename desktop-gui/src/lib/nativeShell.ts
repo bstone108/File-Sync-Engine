@@ -23,7 +23,6 @@ import {
 } from './firstLaunch';
 import {
   deleteRemoteInstanceCredential as deleteCredentialThroughBridge,
-  resolveRemoteInstanceCredential as resolveCredentialThroughBridge,
   storeRemoteInstanceCredential as storeCredentialThroughBridge,
   type RemoteInstanceCredentialRecord,
   type RemoteInstanceCredentialSecret
@@ -104,7 +103,6 @@ export type NativeDesktopShell = {
   openGuiFromDaemonTray(): Promise<void>;
   showMainWindowFromDaemonTray(): Promise<void>;
   storeRemoteInstanceCredential(record: RemoteInstanceCredentialRecord, secret: RemoteInstanceCredentialSecret): Promise<RemoteInstanceCredentialRecord>;
-  resolveRemoteInstanceCredential(credentialRef: string): Promise<RemoteInstanceCredentialSecret>;
   deleteRemoteInstanceCredential(credentialRef: string): Promise<void>;
 };
 
@@ -226,13 +224,6 @@ export async function storeRemoteInstanceCredential(
   shell = getNativeDesktopShell()
 ): Promise<RemoteInstanceCredentialRecord> {
   return await storeCredentialThroughBridge(shell, record, secret);
-}
-
-export async function resolveRemoteInstanceCredential(
-  credentialRef: string,
-  shell = getNativeDesktopShell()
-): Promise<RemoteInstanceCredentialSecret> {
-  return await resolveCredentialThroughBridge(shell, credentialRef);
 }
 
 export async function deleteRemoteInstanceCredential(credentialRef: string, shell = getNativeDesktopShell()): Promise<void> {

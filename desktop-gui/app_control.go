@@ -311,6 +311,23 @@ func (rt *desktopNativeRuntime) resolveCredentialRef(ref string) (string, error)
 		}
 		return rt.resolveAPIKey(session)
 	}
+	if strings.HasPrefix(ref, "desktop-vault:remote:") {
+		if err := validateRemoteCredentialRef(ref); err != nil {
+			return "", err
+		}
+		get := rt.credentialVaultGet
+		if get == nil {
+			get = nativeCredentialVaultGet
+		}
+		secret, err := get(remoteCredentialVaultService, ref)
+		if err != nil {
+			return "", fmt.Errorf("resolve remote API credential from native vault: %w", err)
+		}
+		if secret == "" {
+			return "", errors.New("native vault returned an empty remote API credential")
+		}
+		return secret, nil
+	}
 	return "", errors.New("unsupported native credential reference")
 }
 
@@ -345,6 +362,9 @@ func (rt *desktopNativeRuntime) proxyClient(ref string) (*http.Client, error) {
 			return nil, err
 		}
 		certPath = filepath.Join(session.StatePath, "api.crt")
+	}
+	if strings.HasPrefix(ref, "desktop-vault:remote:") {
+		return &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}, nil
 	}
 	if certPath == "" {
 		return nil, errors.New("daemon API certificate path is unavailable")

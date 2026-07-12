@@ -71,19 +71,22 @@ type GUIOwnedNonServiceDaemonLaunchRequest struct {
 }
 
 type desktopNativeRuntime struct {
-	resourceRoot       string
-	stateRoot          string
-	platform           string
-	launcher           func(command string, args []string, env []string) (int, error)
-	commandRunner      func(name string, args ...string) ([]byte, error)
-	stopClient         *http.Client
-	apiClient          *http.Client
-	credentialResolver func(ref string) (string, error)
-	statusClient       *http.Client
-	probeSession       func(GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error)
-	probeCandidate     func(localDaemonCandidate) (DaemonRuntimeState, error)
-	serviceCandidates  []localDaemonCandidate
-	readinessAttempts  int
+	resourceRoot          string
+	stateRoot             string
+	platform              string
+	launcher              func(command string, args []string, env []string) (int, error)
+	commandRunner         func(name string, args ...string) ([]byte, error)
+	stopClient            *http.Client
+	apiClient             *http.Client
+	credentialResolver    func(ref string) (string, error)
+	credentialVaultSet    func(service, account, secret string) error
+	credentialVaultGet    func(service, account string) (string, error)
+	credentialVaultDelete func(service, account string) error
+	statusClient          *http.Client
+	probeSession          func(GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error)
+	probeCandidate        func(localDaemonCandidate) (DaemonRuntimeState, error)
+	serviceCandidates     []localDaemonCandidate
+	readinessAttempts     int
 }
 
 func NewApp() *App {

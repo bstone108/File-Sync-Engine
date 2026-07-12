@@ -12,6 +12,8 @@ type WailsAppBindings = {
   InspectBundledEngineResources(): Promise<unknown>;
   GetDesktopPreferences(): Promise<unknown>;
   SaveDesktopPreferences(preferences: unknown): Promise<unknown>;
+  StoreRemoteInstanceCredential(record: unknown, secret: unknown): Promise<unknown>;
+  DeleteRemoteInstanceCredential(credentialRef: string): Promise<void>;
 };
 
 declare global {
@@ -54,9 +56,8 @@ export function installWailsNativeShellBridge(): boolean {
     getDaemonStartupIntegrationStatus: async () => unavailable('Startup integration status'),
     openGuiFromDaemonTray: async () => unavailable('Daemon tray open'),
     showMainWindowFromDaemonTray: async () => unavailable('Daemon tray window focus'),
-    storeRemoteInstanceCredential: async () => unavailable('Native credential storage'),
-    resolveRemoteInstanceCredential: async () => unavailable('Native credential retrieval'),
-    deleteRemoteInstanceCredential: async () => unavailable('Native credential deletion')
+    storeRemoteInstanceCredential: (record, secret) => app.StoreRemoteInstanceCredential(record, secret) as ReturnType<NativeDesktopShell['storeRemoteInstanceCredential']>,
+    deleteRemoteInstanceCredential: (credentialRef) => app.DeleteRemoteInstanceCredential(credentialRef)
   };
   return true;
 }

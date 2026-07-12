@@ -88,7 +88,6 @@
   import {
     buildReadableHostStatusMetrics,
     buildPeerPairingStatusLine,
-    buildDiscoveredIdentityPeersFromLoadedSharedIdentity,
     buildOfflineRemoteSettingsEdit,
     buildRemoteInstanceOnboardingCandidate,
     buildRemoteMeshSettingsDocument,
@@ -99,9 +98,6 @@
     formatConnectionStateLabel,
     groupDaemonInstances,
     addRemoteDaemonInstance,
-    upsertDiscoveredIdentityPeerInstances,
-    type DiscoveredIdentityPeer,
-    type LoadedSharedIdentityDiscoverySnapshot,
     type ManagedDaemonInstance,
     type RemoteInstanceOnboardingSource
   } from './lib/instanceRegistry';
@@ -259,22 +255,6 @@
   let remoteMeshDocuments: MeshSettingsDocument[] = [];
   let remoteMeshPendingChanges: MeshSettingsCommandResponse[] = [];
   let remoteMeshStatusMessage = 'Remote mesh status has not been refreshed yet; online, relay-reachable, and offline instances will show cached document and pending-change state here.';
-  const loadedSharedIdentityDiscoverySnapshot: LoadedSharedIdentityDiscoverySnapshot = {
-    sharedIdentityID: 'family-sync-loaded-identity',
-    discoveredPeers: [
-      {
-        peerIDCode: 'peer-code-known-before-endpoint',
-        label: 'Discovered peer pending name',
-        connectionState: 'connecting',
-        pairingState: 'negotiating-identity',
-        pairingDetail: 'Negotiating identity before exchanging keys; status can also report Waiting on relay/mesh hop, Direct connection established, Paired, Failed, Revoked identity, or Offline as discovery continues.',
-        capabilities: ['capabilities pending'],
-        folders: ['folders pending'],
-        lastSeenAt: 'trustworthy identifier known'
-      }
-    ]
-  };
-  $: discoveredIdentityPeers = buildDiscoveredIdentityPeersFromLoadedSharedIdentity(loadedSharedIdentityDiscoverySnapshot);
   $: selectedManagedInstance = managedDaemonInstances.find((instance) => instance.id === selectedInstanceID) ?? managedDaemonInstances[0];
   $: selectedHostContext = {
     label: selectedManagedInstance.label,
@@ -356,7 +336,8 @@
     const selected = managedDaemonInstances.find((instance) => instance.id === instanceID);
     if (selected) {
       apiBaseURL = selected.apiBaseURL;
-      if (selected.kind === 'remote') localCredentialRef = '';
+      localCredentialRef = selected.credentialRef ?? '';
+      apiKey = '';
     }
   }
 
@@ -391,18 +372,6 @@
     remoteBrowseMessage = `Selected ${entry.path} for the folder form. Manual path entry remains available when the selected host is offline.`;
   }
 
-  function hydrateDiscoveredIdentityPeers(peers: DiscoveredIdentityPeer[] = discoveredIdentityPeers) {
-    managedDaemonInstances = upsertDiscoveredIdentityPeerInstances(managedDaemonInstances, peers);
-    expandedInstanceGroups = defaultExpandedInstanceGroups(managedDaemonInstances);
-    remoteOnboardingMessage = 'Added newly discovered same-identity peers from each trustworthy unique peer ID/code; the host list will progressively fill in name, status, capabilities, folders, rates, and other metadata as negotiation/discovery completes.';
-  }
-
-  function autoPopulateLoadedSharedIdentityInstances() {
-    const peers = buildDiscoveredIdentityPeersFromLoadedSharedIdentity(loadedSharedIdentityDiscoverySnapshot);
-    hydrateDiscoveredIdentityPeers(peers);
-    remoteOnboardingMessage = 'Automatically populate reachable same-identity instances from the loaded shared identity; each host starts from a trustworthy Peer ID/code and progressively fills in name, status, capabilities, folders, rates, and other metadata.';
-  }
-
   async function refreshRemoteMeshStatus() {
     remoteMeshStatusMessage = 'Refreshing remote mesh document and pending-change status for the selected host.';
     try {
@@ -434,10 +403,8 @@
   async function submitRemoteInstanceOnboarding() {
     remoteOnboardingMessage = '';
     try {
-      if (remoteOnboardingSource === 'loaded-shared-identity') {
-        remoteOnboardingSharedIdentityID = requireNonEmpty(remoteOnboardingSharedIdentityID || loadedSharedIdentityDiscoverySnapshot.sharedIdentityID, 'Loaded shared identity');
-        autoPopulateLoadedSharedIdentityInstances();
-        return;
+      if (remoteOnboardingSource !== 'api-endpoint-key') {
+        throw new Error('Remote host creation from pairing or shared-identity discovery is unavailable until the daemon publishes a live remote-instance read model. Use the daemon-owned pairing import controls without creating a pretend host entry.');
       }
       const credentialRefSeed = `${remoteOnboardingSource}:${remoteOnboardingEndpoint || remoteOnboardingSharedIdentityID || remoteOnboardingLabel}`;
       const credentialRef = `desktop-vault:remote:${credentialRefSeed.toLowerCase().replace(/[^a-z0-9_.:-]/g, '-').replace(/-+/g, '-').slice(0, 96)}`;
@@ -466,6 +433,8 @@
       expandedInstanceGroups = defaultExpandedInstanceGroups(managedDaemonInstances);
       selectedInstanceID = candidate.id;
       apiBaseURL = candidate.apiBaseURL;
+      localCredentialRef = candidate.credentialRef ?? '';
+      apiKey = '';
       remoteOnboardingAPIKey = '';
       remoteOnboardingMessage = 'Remote instance onboarding saved endpoint/source metadata; raw API keys stay in native credential storage and pairing/identity imports remain daemon-owned.';
     } catch (error) {
@@ -487,7 +456,17 @@
     status = null;
     try {
       await refreshOperationalState();
+      managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
+        ...instance,
+        connectionState: 'online',
+        statusSummary: `${status?.nodeName ?? instance.label} is live through the native authenticated API bridge; folders and peers were refreshed from the daemon.`
+      } : instance);
     } catch (error) {
+      managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
+        ...instance,
+        connectionState: 'failed',
+        statusSummary: error instanceof Error ? error.message : String(error)
+      } : instance);
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
       loading = false;
@@ -1696,27 +1675,16 @@
             {/each}
           </ul>
         {/if}
-        <p>Newly discovered same-identity peers appear in the host list as soon as any trustworthy identifier is known, even when the only initial data is a unique Peer ID/code.</p>
-        <button type="button" on:click={autoPopulateLoadedSharedIdentityInstances}>Automatically populate reachable same-identity instances</button>
-        <button type="button" on:click={() => hydrateDiscoveredIdentityPeers()}>Show newly discovered same-identity peers</button>
-        <ul>
-          {#each discoveredIdentityPeers as peer}
-            <li>Peer ID/code {peer.peerIDCode}: progressively fill in name, status, capabilities, folders, rates, and other metadata while negotiation/discovery completes.</li>
-          {/each}
-        </ul>
+        <p>Configured and discovered peers above are live daemon state. They are not promoted into remote API hosts because the daemon does not yet publish authenticated remote API endpoints or a progressive remote-instance pairing read model.</p>
       </section>
       <section class="connection-card">
         <h2>Remote instance onboarding form</h2>
-        <p>Add remote instances directly with an API endpoint/key, pasted pairing code, imported identity file, scanned animated code, or loaded shared identity. Raw API keys stay in native credential storage; the registry stores only endpoint/source metadata and credentialRef.</p>
+        <p>Add a remote instance only when you have its HTTPS API endpoint and key. On Linux, raw API keys are stored through Freedesktop Secret Service and resolved only inside the native API proxy. Pairing import remains daemon-owned and does not fabricate a remote host entry.</p>
         <form class="control-form" on:submit|preventDefault={submitRemoteInstanceOnboarding} aria-label="Remote instance onboarding form">
           <label>
             Onboarding source
             <select bind:value={remoteOnboardingSource} name="remoteOnboardingSource">
               <option value="api-endpoint-key">Direct API endpoint/key</option>
-              <option value="pasted-pairing-code">Pasted pairing code</option>
-              <option value="imported-identity-file">Imported identity file</option>
-              <option value="scanned-animated-code">Scanned animated code</option>
-              <option value="loaded-shared-identity">Loaded shared identity</option>
             </select>
           </label>
           <label>

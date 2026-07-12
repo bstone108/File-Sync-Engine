@@ -10,7 +10,84 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+const remoteCredentialVaultService = "File Synchronization Engine Desktop"
+
+var errCredentialNotFound = errors.New("credential not found")
+
+type RemoteInstanceCredentialRecord struct {
+	CredentialRef string `json:"credentialRef"`
+	Platform      string `json:"platform"`
+	InstanceID    string `json:"instanceID"`
+	Label         string `json:"label"`
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
+}
+
+type RemoteInstanceCredentialSecret struct {
+	CredentialRef string `json:"credentialRef"`
+	SecretValue   string `json:"secretValue"`
+}
+
+func (a *App) StoreRemoteInstanceCredential(record RemoteInstanceCredentialRecord, secret RemoteInstanceCredentialSecret) (RemoteInstanceCredentialRecord, error) {
+	if err := validateRemoteCredentialRef(record.CredentialRef); err != nil {
+		return RemoteInstanceCredentialRecord{}, err
+	}
+	if record.CredentialRef != secret.CredentialRef || strings.TrimSpace(secret.SecretValue) == "" {
+		return RemoteInstanceCredentialRecord{}, errors.New("matching credential reference and non-empty secret are required")
+	}
+	if strings.TrimSpace(record.InstanceID) == "" || strings.TrimSpace(record.Label) == "" {
+		return RemoteInstanceCredentialRecord{}, errors.New("remote instance ID and label are required")
+	}
+	rt := a.desktopRuntime()
+	set := rt.credentialVaultSet
+	if set == nil {
+		set = nativeCredentialVaultSet
+	}
+	if err := set(remoteCredentialVaultService, record.CredentialRef, secret.SecretValue); err != nil {
+		return RemoteInstanceCredentialRecord{}, fmt.Errorf("store remote API credential in native vault: %w", err)
+	}
+	record.Platform = rt.platform
+	if record.Platform == "" {
+		record.Platform = runtimeTargetOS()
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if record.CreatedAt == "" {
+		record.CreatedAt = now
+	}
+	record.UpdatedAt = now
+	return record, nil
+}
+
+func (a *App) DeleteRemoteInstanceCredential(credentialRef string) error {
+	if err := validateRemoteCredentialRef(credentialRef); err != nil {
+		return err
+	}
+	rt := a.desktopRuntime()
+	remove := rt.credentialVaultDelete
+	if remove == nil {
+		remove = nativeCredentialVaultDelete
+	}
+	if err := remove(remoteCredentialVaultService, credentialRef); err != nil && !errors.Is(err, errCredentialNotFound) {
+		return fmt.Errorf("delete remote API credential from native vault: %w", err)
+	}
+	return nil
+}
+
+func validateRemoteCredentialRef(ref string) error {
+	const prefix = "desktop-vault:remote:"
+	if !strings.HasPrefix(ref, prefix) || len(ref) <= len(prefix) || len(ref) > 160 {
+		return errors.New("remote credential reference must use desktop-vault:remote:<id>")
+	}
+	for _, r := range strings.TrimPrefix(ref, prefix) {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && !strings.ContainsRune("_.:-", r) {
+			return errors.New("remote credential reference contains unsupported characters")
+		}
+	}
+	return nil
+}
 
 type BundledEngineManifestEntry struct {
 	Target             string `json:"target"`
