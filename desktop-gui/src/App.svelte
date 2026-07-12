@@ -60,6 +60,7 @@
     showMainWindowFromDaemonTray,
     stopGUIOwnedNonServiceDaemonThroughAPI,
     storeRemoteInstanceCredential,
+    deleteRemoteInstanceCredential,
     type DaemonStartupIntegrationStatus,
     type DaemonTrayStatus,
     type BundledEngineInspection,
@@ -252,6 +253,8 @@
   let remoteOnboardingAnimatedCodeSummary = '';
   let remoteOnboardingSharedIdentityID = '';
   let remoteOnboardingMessage = '';
+  let remoteRegistryMessage = 'Loading saved remote hosts…';
+  let remoteRegistrySaveChain: Promise<void> = Promise.resolve();
   let remoteMeshDocuments: MeshSettingsDocument[] = [];
   let remoteMeshPendingChanges: MeshSettingsCommandResponse[] = [];
   let remoteMeshStatusMessage = 'Remote mesh status has not been refreshed yet; online, relay-reachable, and offline instances will show cached document and pending-change state here.';
@@ -331,13 +334,56 @@
     };
   }
 
-  function selectManagedInstance(instanceID: string) {
+  function remoteRegistryDocument(instances = managedDaemonInstances, selected = selectedInstanceID) {
+    const remotes = instances.filter((instance) => instance.kind === 'remote').map((instance) => ({
+      id: instance.id,
+      label: instance.label,
+      apiBaseURL: instance.apiBaseURL,
+      credentialRef: instance.credentialRef ?? '',
+      source: 'api-endpoint-key' as const,
+      connectionState: (instance.connectionState === 'online' || instance.connectionState === 'connecting' || instance.connectionState === 'failed') ? instance.connectionState : 'offline' as const
+    }));
+    return { selectedInstanceID: remotes.some((instance) => instance.id === selected) ? selected : undefined, instances: remotes };
+  }
+
+  async function persistRemoteRegistry(instances = managedDaemonInstances, selected = selectedInstanceID) {
+    const document = remoteRegistryDocument(instances, selected);
+    const save = remoteRegistrySaveChain.catch(() => undefined).then(async () => {
+      await getNativeDesktopShell().saveRemoteInstanceRegistry(document);
+    });
+    remoteRegistrySaveChain = save;
+    await save;
+  }
+
+  async function loadRemoteRegistry() {
+    try {
+      const saved = await getNativeDesktopShell().getRemoteInstanceRegistry();
+      const remotes: ManagedDaemonInstance[] = saved.instances.map((entry) => ({
+        ...entry,
+        kind: 'remote',
+        onboardingSource: entry.source,
+        group: 'Remote daemon instances',
+        connectionState: 'offline',
+        statusSummary: `Saved remote host; last connection state was ${entry.connectionState}. Connect to refresh live daemon state.`
+      }));
+      managedDaemonInstances = ensureLocalInstanceFirst([defaultLocalDaemonInstance(), ...remotes]);
+      expandedInstanceGroups = defaultExpandedInstanceGroups(managedDaemonInstances);
+      const selected = saved.selectedInstanceID && remotes.some((entry) => entry.id === saved.selectedInstanceID) ? saved.selectedInstanceID : managedDaemonInstances[0].id;
+      selectManagedInstance(selected, false);
+      remoteRegistryMessage = `Loaded ${remotes.length} saved remote host${remotes.length === 1 ? '' : 's'}; live status is refreshed only when connected.`;
+    } catch (error) {
+      remoteRegistryMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function selectManagedInstance(instanceID: string, persist = true) {
     selectedInstanceID = instanceID;
     const selected = managedDaemonInstances.find((instance) => instance.id === instanceID);
     if (selected) {
       apiBaseURL = selected.apiBaseURL;
       localCredentialRef = selected.credentialRef ?? '';
       apiKey = '';
+      if (persist) void persistRemoteRegistry().catch((error) => { remoteRegistryMessage = error instanceof Error ? error.message : String(error); });
     }
   }
 
@@ -418,25 +464,30 @@
         animatedCodeSummary: remoteOnboardingAnimatedCodeSummary,
         sharedIdentityID: remoteOnboardingSharedIdentityID
       });
-      if (remoteOnboardingSource === 'api-endpoint-key') {
-        const secret = requireNonEmpty(remoteOnboardingAPIKey, 'Remote API key');
-        await storeRemoteInstanceCredential({
-          credentialRef,
-          platform: 'linux',
-          instanceID: candidate.id,
-          label: candidate.label,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }, { credentialRef, secretValue: secret });
+      if (managedDaemonInstances.some((instance) => instance.id === candidate.id)) {
+        throw new Error('That remote host is already registered. Duplicate onboarding is blocked so a failed metadata update cannot delete its existing native credential.');
       }
-      managedDaemonInstances = addRemoteDaemonInstance(managedDaemonInstances, candidate);
+      const secret = requireNonEmpty(remoteOnboardingAPIKey, 'Remote API key');
+      await storeRemoteInstanceCredential({
+        credentialRef,
+        platform: 'linux',
+        instanceID: candidate.id,
+        label: candidate.label,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }, { credentialRef, secretValue: secret });
+      const nextInstances = addRemoteDaemonInstance(managedDaemonInstances, candidate);
+      try {
+        await persistRemoteRegistry(nextInstances, candidate.id);
+      } catch (error) {
+        await deleteRemoteInstanceCredential(credentialRef).catch(() => undefined);
+        throw error;
+      }
+      managedDaemonInstances = nextInstances;
       expandedInstanceGroups = defaultExpandedInstanceGroups(managedDaemonInstances);
-      selectedInstanceID = candidate.id;
-      apiBaseURL = candidate.apiBaseURL;
-      localCredentialRef = candidate.credentialRef ?? '';
-      apiKey = '';
+      selectManagedInstance(candidate.id, false);
       remoteOnboardingAPIKey = '';
-      remoteOnboardingMessage = 'Remote instance onboarding saved endpoint/source metadata; raw API keys stay in native credential storage and pairing/identity imports remain daemon-owned.';
+      remoteOnboardingMessage = 'Remote host metadata and selection were persisted; raw API keys stay in native credential storage. Connect to load live daemon state.';
     } catch (error) {
       remoteOnboardingMessage = error instanceof Error ? error.message : String(error);
     }
@@ -469,6 +520,7 @@
       } : instance);
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
+      await persistRemoteRegistry().catch((error) => { remoteRegistryMessage = error instanceof Error ? error.message : String(error); });
       loading = false;
     }
   }
@@ -979,20 +1031,24 @@
           preferExistingReachableDaemon: true
         });
       }
-      apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
       reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
       guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
-      await refreshOperationalState();
+      if (selectedManagedInstance.kind === 'local') {
+        apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
+        await refreshOperationalState();
+      }
     } catch (error) {
       try {
         guiOwnedNonServiceDaemonSession = await requestGUIOwnedNonServiceDaemonLaunch({
           sessionMode: 'persistent-user-daemon',
           preferExistingReachableDaemon: true
         });
-        apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
         reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
         guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
-        await refreshOperationalState();
+        if (selectedManagedInstance.kind === 'local') {
+          apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
+          await refreshOperationalState();
+        }
       } catch (launchError) {
         guiOwnedNonServiceDaemonMessage = launchError instanceof Error ? launchError.message : String(launchError);
       }
@@ -1031,8 +1087,11 @@
   }
 
   onMount(() => {
-    void ensureLocalDaemonConnection();
-    void loadDesktopPreferences();
+    void (async () => {
+      await loadRemoteRegistry();
+      await ensureLocalDaemonConnection();
+      await loadDesktopPreferences();
+    })();
   });
 
   async function adoptGUIOwnedNonServiceDaemonSession() {
@@ -1680,6 +1739,7 @@
       <section class="connection-card">
         <h2>Remote instance onboarding form</h2>
         <p>Add a remote instance only when you have its HTTPS API endpoint and key. On Linux, raw API keys are stored through Freedesktop Secret Service and resolved only inside the native API proxy. Pairing import remains daemon-owned and does not fabricate a remote host entry.</p>
+        <p>{remoteRegistryMessage}</p>
         <form class="control-form" on:submit|preventDefault={submitRemoteInstanceOnboarding} aria-label="Remote instance onboarding form">
           <label>
             Onboarding source

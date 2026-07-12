@@ -3729,6 +3729,66 @@ func TestDesktopGUIRemoteCredentialVaultUsesNativeSecretStores(t *testing.T) {
 	}
 }
 
+func TestDesktopGUIRemoteHostRegistryPersistsOnlyNonSecretMetadata(t *testing.T) {
+	root := filepath.Join("..", "..")
+	nativeFeatures := readRequiredFile(t, filepath.Join(root, "desktop-gui", "app_native_features.go"))
+	nativeShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "nativeShell.ts"))
+	wailsShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "wailsNativeShell.ts"))
+	appShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))
+	doc := readRequiredFile(t, filepath.Join(root, "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
+
+	for _, want := range []string{
+		"type RemoteInstanceRegistryEntry struct",
+		"CredentialRef   string `json:\"credentialRef\"`",
+		"GetRemoteInstanceRegistry",
+		"SaveRemoteInstanceRegistry",
+		"atomicWriteRemoteInstanceRegistry",
+		"decoder.DisallowUnknownFields()",
+		"endpoint.RawQuery != \"\"",
+	} {
+		if !strings.Contains(nativeFeatures, want) {
+			t.Fatalf("native remote-host registry missing %q:\n%s", want, nativeFeatures)
+		}
+	}
+	for _, want := range []string{"getRemoteInstanceRegistry", "saveRemoteInstanceRegistry"} {
+		if !strings.Contains(nativeShell, want) || !strings.Contains(wailsShell, want) {
+			t.Fatalf("remote-host registry native bridge missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"loadRemoteRegistry",
+		"persistRemoteRegistry",
+		"remoteRegistrySaveChain",
+		"await loadRemoteRegistry()",
+		"managedDaemonInstances.some((instance) => instance.id === candidate.id)",
+		"if (selectedManagedInstance.kind === 'local')",
+	} {
+		if !strings.Contains(appShell, want) {
+			t.Fatalf("desktop GUI remote-host persistence/selection flow missing %q:\n%s", want, appShell)
+		}
+	}
+	for _, want := range []string{
+		"transient status/error text is not persisted",
+		"Startup reloads saved hosts as offline",
+		"Frontend saves are serialized",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("desktop GUI architecture missing remote-host persistence boundary %q", want)
+		}
+	}
+	registryStart := strings.Index(nativeFeatures, "type RemoteInstanceRegistryEntry struct")
+	registryEnd := strings.Index(nativeFeatures, "func (a *App) GetRemoteInstanceRegistry")
+	if registryStart < 0 || registryEnd <= registryStart {
+		t.Fatal("could not isolate native remote-host registry schema")
+	}
+	registrySchema := nativeFeatures[registryStart:registryEnd]
+	for _, forbidden := range []string{"json:\"apiKey", "json:\"secret", "json:\"statusSummary"} {
+		if strings.Contains(registrySchema, forbidden) {
+			t.Fatalf("native remote-host registry must not persist secret-shaped or transient fields via %q", forbidden)
+		}
+	}
+}
+
 func TestDesktopGUIRemoteFolderBrowseUsesSelectedHostAPI(t *testing.T) {
 	root := filepath.Join("..", "..")
 	apiClient := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "daemonApi.ts"))

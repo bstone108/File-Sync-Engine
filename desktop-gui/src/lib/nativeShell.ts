@@ -80,10 +80,23 @@ export type DesktopPreferences = {
   notificationsEnabled: boolean;
 };
 
+export type RemoteInstanceRegistryEntry = {
+  id: string;
+  label: string;
+  apiBaseURL: string;
+  credentialRef: string;
+  source: 'api-endpoint-key';
+  connectionState: 'offline' | 'connecting' | 'online' | 'failed';
+};
+
+export type RemoteInstanceRegistry = { selectedInstanceID?: string; instances: RemoteInstanceRegistryEntry[] };
+
 export type NativeDesktopShell = {
   inspectBundledEngineResources(): Promise<BundledEngineInspection>;
   getDesktopPreferences(): Promise<DesktopPreferences>;
   saveDesktopPreferences(preferences: DesktopPreferences): Promise<DesktopPreferences>;
+  getRemoteInstanceRegistry(): Promise<RemoteInstanceRegistry>;
+  saveRemoteInstanceRegistry(registry: RemoteInstanceRegistry): Promise<RemoteInstanceRegistry>;
   readBundledEngineResourceManifest(): Promise<BundledEngineResourceManifest>;
   observeBundledEngineResources(): Promise<BundledEngineResourceObservation[]>;
   getLocalLifecycleSettings(): Promise<BundledDaemonLifecycleSettings>;

@@ -30,6 +30,7 @@ export type ManagedDaemonInstance = {
   label: string;
   apiBaseURL: string;
   credentialRef?: string;
+  onboardingSource?: RemoteInstanceOnboardingSource;
   group?: string;
   connectionState: ManagedDaemonConnectionState;
   statusSummary: string;
@@ -239,6 +240,7 @@ export function buildRemoteInstanceOnboardingCandidate(input: RemoteInstanceOnbo
     label,
     apiBaseURL: endpoint,
     credentialRef,
+    onboardingSource: input.source,
     group: 'Remote daemon instances',
     connectionState: input.source === 'api-endpoint-key' ? 'offline' : 'connecting',
     statusSummary: `${sourceNotes[input.source]} Remote onboarding stores raw API key material only in the native credential vault; the registry keeps endpoint, source, and credentialRef metadata.`

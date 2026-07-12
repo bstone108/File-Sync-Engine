@@ -99,6 +99,77 @@ func TestDeleteRemoteCredentialUsesVaultAndTreatsMissingAsSuccess(t *testing.T) 
 	}
 }
 
+func TestRemoteInstanceRegistryPersistsOnlyValidatedNonSecretMetadata(t *testing.T) {
+	tmp := t.TempDir()
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{stateRoot: tmp}
+	want := RemoteInstanceRegistry{
+		SelectedInstanceID: "remote-home-nas",
+		Instances: []RemoteInstanceRegistryEntry{{
+			ID: "remote-home-nas", Label: "Home NAS", APIBaseURL: "https://nas.example:22420",
+			CredentialRef: "desktop-vault:remote:home-nas", Source: "api-endpoint-key",
+			ConnectionState: "offline",
+		}},
+	}
+	if got, err := app.SaveRemoteInstanceRegistry(want); err != nil || len(got.Instances) != 1 {
+		t.Fatalf("save = %#v, %v", got, err)
+	}
+	reloaded := NewApp()
+	reloaded.desktop = &desktopNativeRuntime{stateRoot: tmp}
+	got, err := reloaded.GetRemoteInstanceRegistry()
+	if err != nil || got.SelectedInstanceID != want.SelectedInstanceID || len(got.Instances) != 1 || got.Instances[0] != want.Instances[0] {
+		t.Fatalf("reload = %#v, %v", got, err)
+	}
+	path := filepath.Join(tmp, "remote-instances.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "apiKey") || strings.Contains(string(data), "secret") {
+		t.Fatalf("registry contains secret-shaped data: %s", data)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("registry permissions = %v, %v", info, err)
+	}
+}
+
+func TestRemoteInstanceRegistryRejectsUnsafeMetadataWithoutReplacingSavedState(t *testing.T) {
+	tmp := t.TempDir()
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{stateRoot: tmp}
+	want := RemoteInstanceRegistry{Instances: []RemoteInstanceRegistryEntry{{ID: "remote-a", Label: "Remote A", APIBaseURL: "https://remote.example", CredentialRef: "desktop-vault:remote:a", Source: "api-endpoint-key", ConnectionState: "offline"}}}
+	if _, err := app.SaveRemoteInstanceRegistry(want); err != nil {
+		t.Fatal(err)
+	}
+	bad := []RemoteInstanceRegistry{
+		{Instances: []RemoteInstanceRegistryEntry{{ID: "remote-b", Label: "Remote B", APIBaseURL: "http://remote.example", CredentialRef: "desktop-vault:remote:b", Source: "api-endpoint-key", ConnectionState: "offline"}}},
+		{Instances: []RemoteInstanceRegistryEntry{{ID: "remote-b", Label: "Remote B", APIBaseURL: "https://user:pass@remote.example", CredentialRef: "desktop-vault:remote:b", Source: "api-endpoint-key", ConnectionState: "offline"}}},
+		{Instances: []RemoteInstanceRegistryEntry{{ID: "remote-b", Label: "Remote B", APIBaseURL: "https://remote.example?apiKey=must-not-persist", CredentialRef: "desktop-vault:remote:b", Source: "api-endpoint-key", ConnectionState: "offline"}}},
+		{Instances: []RemoteInstanceRegistryEntry{{ID: "remote-b", Label: "Remote B", APIBaseURL: "https://remote.example", CredentialRef: "desktop-vault:remote:b", Source: "pasted-pairing-code", ConnectionState: "offline"}}},
+	}
+	for _, registry := range bad {
+		if _, err := app.SaveRemoteInstanceRegistry(registry); err == nil {
+			t.Fatalf("expected rejection for %#v", registry)
+		}
+	}
+	if got, err := app.GetRemoteInstanceRegistry(); err != nil || len(got.Instances) != 1 || got.Instances[0] != want.Instances[0] {
+		t.Fatalf("saved state changed: %#v, %v", got, err)
+	}
+}
+
+func TestRemoteInstanceRegistryRejectsStoredUnknownSecretFields(t *testing.T) {
+	tmp := t.TempDir()
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{stateRoot: tmp}
+	data := `{"instances":[{"id":"remote-a","label":"Remote A","apiBaseURL":"https://remote.example","credentialRef":"desktop-vault:remote:a","source":"api-endpoint-key","connectionState":"offline","apiKey":"must-not-survive"}]}`
+	if err := os.WriteFile(filepath.Join(tmp, "remote-instances.json"), []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.GetRemoteInstanceRegistry(); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("expected unknown secret-shaped field rejection, got %v", err)
+	}
+}
+
 func TestBundledManifestInspectionReadsAndHashesPackagedResources(t *testing.T) {
 	tmp := t.TempDir()
 	enginePath := filepath.Join(tmp, "linux", "amd64", "fse")

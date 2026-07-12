@@ -12,6 +12,8 @@ type WailsAppBindings = {
   InspectBundledEngineResources(): Promise<unknown>;
   GetDesktopPreferences(): Promise<unknown>;
   SaveDesktopPreferences(preferences: unknown): Promise<unknown>;
+  GetRemoteInstanceRegistry(): Promise<unknown>;
+  SaveRemoteInstanceRegistry(registry: unknown): Promise<unknown>;
   StoreRemoteInstanceCredential(record: unknown, secret: unknown): Promise<unknown>;
   DeleteRemoteInstanceCredential(credentialRef: string): Promise<void>;
 };
@@ -35,6 +37,8 @@ export function installWailsNativeShellBridge(): boolean {
     inspectBundledEngineResources: () => app.InspectBundledEngineResources() as ReturnType<NativeDesktopShell['inspectBundledEngineResources']>,
     getDesktopPreferences: () => app.GetDesktopPreferences() as ReturnType<NativeDesktopShell['getDesktopPreferences']>,
     saveDesktopPreferences: (preferences) => app.SaveDesktopPreferences(preferences) as ReturnType<NativeDesktopShell['saveDesktopPreferences']>,
+    getRemoteInstanceRegistry: () => app.GetRemoteInstanceRegistry() as ReturnType<NativeDesktopShell['getRemoteInstanceRegistry']>,
+    saveRemoteInstanceRegistry: (registry) => app.SaveRemoteInstanceRegistry(registry) as ReturnType<NativeDesktopShell['saveRemoteInstanceRegistry']>,
     discoverLocalDaemon: () => app.DiscoverLocalDaemon() as ReturnType<NativeDesktopShell['discoverLocalDaemon']>,
     controlLocalDaemon: (request) => app.ControlLocalDaemon(request) as ReturnType<NativeDesktopShell['controlLocalDaemon']>,
     daemonAPIRequest: (request) => app.DaemonAPIRequest(request) as ReturnType<NativeDesktopShell['daemonAPIRequest']>,

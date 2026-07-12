@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +31,131 @@ type RemoteInstanceCredentialRecord struct {
 type RemoteInstanceCredentialSecret struct {
 	CredentialRef string `json:"credentialRef"`
 	SecretValue   string `json:"secretValue"`
+}
+
+type RemoteInstanceRegistryEntry struct {
+	ID              string `json:"id"`
+	Label           string `json:"label"`
+	APIBaseURL      string `json:"apiBaseURL"`
+	CredentialRef   string `json:"credentialRef"`
+	Source          string `json:"source"`
+	ConnectionState string `json:"connectionState"`
+}
+
+type RemoteInstanceRegistry struct {
+	SelectedInstanceID string                        `json:"selectedInstanceID,omitempty"`
+	Instances          []RemoteInstanceRegistryEntry `json:"instances"`
+}
+
+func (a *App) GetRemoteInstanceRegistry() (RemoteInstanceRegistry, error) {
+	path, err := a.remoteInstanceRegistryPath()
+	if err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return RemoteInstanceRegistry{Instances: []RemoteInstanceRegistryEntry{}}, nil
+	}
+	if err != nil {
+		return RemoteInstanceRegistry{}, fmt.Errorf("read remote instance registry: %w", err)
+	}
+	var registry RemoteInstanceRegistry
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&registry); err != nil {
+		return RemoteInstanceRegistry{}, fmt.Errorf("parse remote instance registry: %w", err)
+	}
+	if err := validateRemoteInstanceRegistry(registry); err != nil {
+		return RemoteInstanceRegistry{}, fmt.Errorf("stored remote instance registry is invalid: %w", err)
+	}
+	return registry, nil
+}
+
+func (a *App) SaveRemoteInstanceRegistry(registry RemoteInstanceRegistry) (RemoteInstanceRegistry, error) {
+	if err := validateRemoteInstanceRegistry(registry); err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	path, err := a.remoteInstanceRegistryPath()
+	if err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	data, err := json.MarshalIndent(registry, "", "  ")
+	if err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	if err := atomicWriteRemoteInstanceRegistry(path, data); err != nil {
+		return RemoteInstanceRegistry{}, fmt.Errorf("save remote instance registry: %w", err)
+	}
+	return registry, nil
+}
+
+func atomicWriteRemoteInstanceRegistry(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".remote-instances-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func (a *App) remoteInstanceRegistryPath() (string, error) {
+	root, err := a.desktopRuntime().ensureStateRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "remote-instances.json"), nil
+}
+
+func validateRemoteInstanceRegistry(registry RemoteInstanceRegistry) error {
+	if len(registry.Instances) > 128 {
+		return errors.New("remote instance registry exceeds 128 entries")
+	}
+	seen := make(map[string]bool, len(registry.Instances))
+	for _, entry := range registry.Instances {
+		if entry.Source != "api-endpoint-key" {
+			return fmt.Errorf("remote instance %q has unsupported onboarding source", entry.ID)
+		}
+		if entry.ConnectionState != "offline" && entry.ConnectionState != "connecting" && entry.ConnectionState != "online" && entry.ConnectionState != "failed" {
+			return fmt.Errorf("remote instance %q has unsupported connection state", entry.ID)
+		}
+		if strings.TrimSpace(entry.ID) == "" || len(entry.ID) > 128 || strings.TrimSpace(entry.Label) == "" || len(entry.Label) > 96 {
+			return errors.New("remote instance ID and label are required and must fit registry limits")
+		}
+		if seen[entry.ID] {
+			return fmt.Errorf("duplicate remote instance ID %q", entry.ID)
+		}
+		seen[entry.ID] = true
+		if err := validateRemoteCredentialRef(entry.CredentialRef); err != nil {
+			return err
+		}
+		endpoint, err := url.Parse(entry.APIBaseURL)
+		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return fmt.Errorf("remote instance %q requires an HTTPS API endpoint without embedded credentials, query parameters, or fragments", entry.ID)
+		}
+	}
+	if registry.SelectedInstanceID != "" && !seen[registry.SelectedInstanceID] {
+		return errors.New("selected remote instance does not exist in registry")
+	}
+	return nil
 }
 
 func (a *App) StoreRemoteInstanceCredential(record RemoteInstanceCredentialRecord, secret RemoteInstanceCredentialSecret) (RemoteInstanceCredentialRecord, error) {
