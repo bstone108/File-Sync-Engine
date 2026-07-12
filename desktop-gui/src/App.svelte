@@ -59,8 +59,6 @@
     runBundledDaemonLifecycle,
     showMainWindowFromDaemonTray,
     stopGUIOwnedNonServiceDaemonThroughAPI,
-    storeRemoteInstanceCredential,
-    deleteRemoteInstanceCredential,
     type DaemonStartupIntegrationStatus,
     type DaemonTrayStatus,
     type BundledEngineInspection,
@@ -255,6 +253,16 @@
   let remoteOnboardingMessage = '';
   let remoteRegistryMessage = 'Loading saved remote hosts…';
   let remoteRegistrySaveChain: Promise<void> = Promise.resolve();
+  let remoteEditOpen = false;
+  let remoteEditLabel = '';
+  let remoteEditEndpoint = '';
+  let remoteEditTargetID = '';
+  let remoteEditTargetCredentialRef = '';
+  let remoteEditTargetRevision = 0;
+  let remoteCredentialCleanupPending: string[] = [];
+  let persistedRemoteSelectionID = '';
+  let remoteRemovalConfirmation = '';
+  let remoteLifecycleLoading = false;
   let remoteMeshDocuments: MeshSettingsDocument[] = [];
   let remoteMeshPendingChanges: MeshSettingsCommandResponse[] = [];
   let remoteMeshStatusMessage = 'Remote mesh status has not been refreshed yet; online, relay-reachable, and offline instances will show cached document and pending-change state here.';
@@ -334,25 +342,16 @@
     };
   }
 
-  function remoteRegistryDocument(instances = managedDaemonInstances, selected = selectedInstanceID) {
-    const remotes = instances.filter((instance) => instance.kind === 'remote').map((instance) => ({
-      id: instance.id,
-      label: instance.label,
-      apiBaseURL: instance.apiBaseURL,
-      credentialRef: instance.credentialRef ?? '',
-      source: 'api-endpoint-key' as const,
-      connectionState: (instance.connectionState === 'online' || instance.connectionState === 'connecting' || instance.connectionState === 'failed') ? instance.connectionState : 'offline' as const
-    }));
-    return { selectedInstanceID: remotes.some((instance) => instance.id === selected) ? selected : undefined, instances: remotes };
+  async function persistRemoteSelection(selected = selectedInstanceID) {
+    const target = managedDaemonInstances.some((instance) => instance.kind === 'remote' && instance.id === selected) ? selected : '';
+    const saved = await queueRemoteRegistryOperation(() => getNativeDesktopShell().selectRemoteInstance({ instanceID: target, expectedSelectedInstanceID: persistedRemoteSelectionID }));
+    persistedRemoteSelectionID = saved.selectedInstanceID ?? '';
   }
 
-  async function persistRemoteRegistry(instances = managedDaemonInstances, selected = selectedInstanceID) {
-    const document = remoteRegistryDocument(instances, selected);
-    const save = remoteRegistrySaveChain.catch(() => undefined).then(async () => {
-      await getNativeDesktopShell().saveRemoteInstanceRegistry(document);
-    });
-    remoteRegistrySaveChain = save;
-    await save;
+  function queueRemoteRegistryOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = remoteRegistrySaveChain.catch(() => undefined).then(operation);
+    remoteRegistrySaveChain = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   async function loadRemoteRegistry() {
@@ -367,6 +366,8 @@
         statusSummary: `Saved remote host; last connection state was ${entry.connectionState}. Connect to refresh live daemon state.`
       }));
       managedDaemonInstances = ensureLocalInstanceFirst([defaultLocalDaemonInstance(), ...remotes]);
+      remoteCredentialCleanupPending = saved.credentialCleanupPending ?? [];
+      persistedRemoteSelectionID = saved.selectedInstanceID ?? '';
       expandedInstanceGroups = defaultExpandedInstanceGroups(managedDaemonInstances);
       const selected = saved.selectedInstanceID && remotes.some((entry) => entry.id === saved.selectedInstanceID) ? saved.selectedInstanceID : managedDaemonInstances[0].id;
       selectManagedInstance(selected, false);
@@ -377,13 +378,20 @@
   }
 
   function selectManagedInstance(instanceID: string, persist = true) {
+    if (remoteEditOpen && instanceID !== remoteEditTargetID) {
+      remoteEditOpen = false;
+      remoteRemovalConfirmation = '';
+    }
     selectedInstanceID = instanceID;
     const selected = managedDaemonInstances.find((instance) => instance.id === instanceID);
     if (selected) {
       apiBaseURL = selected.apiBaseURL;
       localCredentialRef = selected.credentialRef ?? '';
       apiKey = '';
-      if (persist) void persistRemoteRegistry().catch((error) => { remoteRegistryMessage = error instanceof Error ? error.message : String(error); });
+      if (persist && !remoteLifecycleLoading) void persistRemoteSelection().catch(async (error) => {
+        remoteRegistryMessage = error instanceof Error ? error.message : String(error);
+        await loadRemoteRegistry();
+      });
     }
   }
 
@@ -447,13 +455,14 @@
   }
 
   async function submitRemoteInstanceOnboarding() {
+    if (remoteLifecycleLoading) return;
+    remoteLifecycleLoading = true;
     remoteOnboardingMessage = '';
     try {
       if (remoteOnboardingSource !== 'api-endpoint-key') {
         throw new Error('Remote host creation from pairing or shared-identity discovery is unavailable until the daemon publishes a live remote-instance read model. Use the daemon-owned pairing import controls without creating a pretend host entry.');
       }
-      const credentialRefSeed = `${remoteOnboardingSource}:${remoteOnboardingEndpoint || remoteOnboardingSharedIdentityID || remoteOnboardingLabel}`;
-      const credentialRef = `desktop-vault:remote:${credentialRefSeed.toLowerCase().replace(/[^a-z0-9_.:-]/g, '-').replace(/-+/g, '-').slice(0, 96)}`;
+      const credentialRef = `desktop-vault:remote:${crypto.randomUUID()}`;
       const candidate = buildRemoteInstanceOnboardingCandidate({
         source: remoteOnboardingSource,
         label: remoteOnboardingLabel,
@@ -468,28 +477,107 @@
         throw new Error('That remote host is already registered. Duplicate onboarding is blocked so a failed metadata update cannot delete its existing native credential.');
       }
       const secret = requireNonEmpty(remoteOnboardingAPIKey, 'Remote API key');
-      await storeRemoteInstanceCredential({
-        credentialRef,
-        platform: 'linux',
-        instanceID: candidate.id,
-        label: candidate.label,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }, { credentialRef, secretValue: secret });
-      const nextInstances = addRemoteDaemonInstance(managedDaemonInstances, candidate);
-      try {
-        await persistRemoteRegistry(nextInstances, candidate.id);
-      } catch (error) {
-        await deleteRemoteInstanceCredential(credentialRef).catch(() => undefined);
-        throw error;
-      }
+      const saved = await queueRemoteRegistryOperation(() => getNativeDesktopShell().onboardRemoteInstance({
+        entry: {
+          id: candidate.id,
+          label: candidate.label,
+          apiBaseURL: candidate.apiBaseURL,
+          credentialRef,
+          source: 'api-endpoint-key',
+          connectionState: 'offline',
+          revision: 1
+        },
+        secretValue: secret
+      }));
+      const nextInstances = addRemoteDaemonInstance(managedDaemonInstances, { ...candidate, revision: saved.instances.find((entry) => entry.id === candidate.id)?.revision ?? 1 });
+      remoteCredentialCleanupPending = saved.credentialCleanupPending ?? [];
+      persistedRemoteSelectionID = saved.selectedInstanceID ?? '';
       managedDaemonInstances = nextInstances;
       expandedInstanceGroups = defaultExpandedInstanceGroups(managedDaemonInstances);
       selectManagedInstance(candidate.id, false);
-      remoteOnboardingAPIKey = '';
       remoteOnboardingMessage = 'Remote host metadata and selection were persisted; raw API keys stay in native credential storage. Connect to load live daemon state.';
     } catch (error) {
       remoteOnboardingMessage = error instanceof Error ? error.message : String(error);
+      await loadRemoteRegistry();
+    } finally {
+      remoteOnboardingAPIKey = '';
+      remoteLifecycleLoading = false;
+    }
+  }
+
+  function beginRemoteHostEdit() {
+    if (selectedManagedInstance.kind !== 'remote' || !selectedManagedInstance.credentialRef || !selectedManagedInstance.revision) return;
+    remoteEditTargetID = selectedManagedInstance.id;
+    remoteEditTargetCredentialRef = selectedManagedInstance.credentialRef;
+    remoteEditTargetRevision = selectedManagedInstance.revision;
+    remoteEditLabel = selectedManagedInstance.label;
+    remoteEditEndpoint = selectedManagedInstance.apiBaseURL;
+    remoteRemovalConfirmation = '';
+    remoteEditOpen = true;
+    remoteOnboardingMessage = 'Credential reference is preserved during metadata edits; changing an API key requires a separate credential-rotation flow.';
+  }
+
+  async function saveRemoteHostEdit() {
+    if (!remoteEditOpen || !remoteEditTargetID || !remoteEditTargetCredentialRef || !remoteEditTargetRevision) return;
+    const targetID = remoteEditTargetID;
+    const targetCredentialRef = remoteEditTargetCredentialRef;
+    const targetRevision = remoteEditTargetRevision;
+    remoteLifecycleLoading = true;
+    try {
+      const saved = await queueRemoteRegistryOperation(() => getNativeDesktopShell().updateRemoteInstance({
+        id: targetID,
+        expectedCredentialRef: targetCredentialRef,
+        expectedRevision: targetRevision,
+        label: requireNonEmpty(remoteEditLabel, 'Remote label'),
+        apiBaseURL: requireNonEmpty(remoteEditEndpoint, 'Remote API endpoint')
+      }));
+      const edited = saved.instances.find((entry) => entry.id === targetID);
+      if (!edited) throw new Error('Native edit completed without the edited remote host.');
+      remoteCredentialCleanupPending = saved.credentialCleanupPending ?? [];
+      persistedRemoteSelectionID = saved.selectedInstanceID ?? '';
+      managedDaemonInstances = ensureLocalInstanceFirst(managedDaemonInstances.map((instance) => instance.id === edited.id ? {
+        ...instance,
+        label: edited.label,
+        apiBaseURL: edited.apiBaseURL,
+        credentialRef: edited.credentialRef,
+        revision: edited.revision,
+        connectionState: 'offline',
+        statusSummary: 'Remote host metadata updated. Credential reference is preserved; reconnect to refresh live state.'
+      } : instance));
+      selectManagedInstance(edited.id, false);
+      remoteEditOpen = false;
+      remoteOnboardingMessage = 'Remote host metadata updated safely. Credential reference is preserved and the host was set offline until reconnect.';
+    } catch (error) {
+      remoteOnboardingMessage = error instanceof Error ? error.message : String(error);
+      await loadRemoteRegistry();
+    } finally {
+      remoteLifecycleLoading = false;
+    }
+  }
+
+  async function removeSelectedRemoteHost() {
+    if (!remoteEditOpen || !remoteEditTargetID || !remoteEditTargetCredentialRef || !remoteEditTargetRevision) return;
+    const removedID = remoteEditTargetID;
+    const credentialRef = remoteEditTargetCredentialRef;
+    const targetRevision = remoteEditTargetRevision;
+    remoteLifecycleLoading = true;
+    try {
+      const saved = await queueRemoteRegistryOperation(() => getNativeDesktopShell().removeRemoteInstance({ id: removedID, expectedCredentialRef: credentialRef, expectedRevision: targetRevision, confirmLabel: remoteRemovalConfirmation }));
+      remoteCredentialCleanupPending = saved.credentialCleanupPending ?? [];
+      persistedRemoteSelectionID = saved.selectedInstanceID ?? '';
+      managedDaemonInstances = ensureLocalInstanceFirst(managedDaemonInstances.filter((instance) => instance.kind === 'local' || instance.id !== removedID));
+      expandedInstanceGroups = defaultExpandedInstanceGroups(managedDaemonInstances);
+      selectManagedInstance(managedDaemonInstances[0].id, false);
+      remoteEditOpen = false;
+      remoteRemovalConfirmation = '';
+      remoteOnboardingMessage = remoteCredentialCleanupPending.includes(credentialRef)
+        ? 'Remote host removed. Native credential cleanup could not be verified, so an uncertain-cleanup tombstone was saved and the host was not restored.'
+        : `Remote host removed and its native credential deleted. ${saved.instances.length} remote host${saved.instances.length === 1 ? '' : 's'} remain.`;
+    } catch (error) {
+      remoteOnboardingMessage = error instanceof Error ? error.message : String(error);
+      await loadRemoteRegistry();
+    } finally {
+      remoteLifecycleLoading = false;
     }
   }
 
@@ -520,7 +608,6 @@
       } : instance);
       errorMessage = error instanceof Error ? error.message : String(error);
     } finally {
-      await persistRemoteRegistry().catch((error) => { remoteRegistryMessage = error instanceof Error ? error.message : String(error); });
       loading = false;
     }
   }
@@ -1325,6 +1412,25 @@
     <button type="button" on:click={connectToDaemon} disabled={loading || !hasDaemonCredential}>{loading ? 'Connecting…' : 'Connect'}</button>
     {#if errorMessage}<p class="error">{errorMessage}</p>{/if}
     {#if status}<pre>{JSON.stringify(status, null, 2)}</pre>{/if}
+    <div class="lifecycle-actions">
+      <button type="button" on:click={beginRemoteHostEdit} disabled={remoteLifecycleLoading}>Edit saved host</button>
+    </div>
+    {#if remoteEditOpen}
+      <form class="control-form" on:submit|preventDefault={saveRemoteHostEdit} aria-label="Edit saved remote host">
+        <h3>Edit saved remote host</h3>
+        <p>Credential reference is preserved during metadata edits. API-key rotation is intentionally separate so a failed metadata save cannot destroy the working credential.</p>
+        <label>Remote label<input bind:value={remoteEditLabel} autocomplete="off" /></label>
+        <label>Remote HTTPS API endpoint<input bind:value={remoteEditEndpoint} autocomplete="off" /></label>
+        <button type="submit" disabled={remoteLifecycleLoading}>Save host metadata</button>
+        <button type="button" on:click={() => remoteEditOpen = false} disabled={remoteLifecycleLoading}>Cancel edit</button>
+        <fieldset>
+          <legend>Remove saved remote host and native credential</legend>
+          <p>This removes the registry entry and its OS-native credential. Type the host label exactly to confirm: <strong>{selectedManagedInstance.label}</strong></p>
+          <label>Type the host label exactly<input bind:value={remoteRemovalConfirmation} autocomplete="off" /></label>
+          <button type="button" class="danger" on:click={removeSelectedRemoteHost} disabled={remoteLifecycleLoading || remoteRemovalConfirmation !== selectedManagedInstance.label}>Remove host and credential</button>
+        </fieldset>
+      </form>
+    {/if}
   </section>
   {/if}
     {/if}
@@ -1759,23 +1865,8 @@
             Remote API key
             <input bind:value={remoteOnboardingAPIKey} name="remoteOnboardingAPIKey" type="password" autocomplete="off" />
           </label>
-          <label>
-            Pasted pairing code
-            <textarea bind:value={remoteOnboardingPairingCode} name="remoteOnboardingPairingCode" rows="3"></textarea>
-          </label>
-          <label>
-            Imported identity file
-            <textarea bind:value={remoteOnboardingIdentityFileText} name="remoteOnboardingIdentityFileText" rows="3"></textarea>
-          </label>
-          <label>
-            Scanned animated code summary
-            <input bind:value={remoteOnboardingAnimatedCodeSummary} name="remoteOnboardingAnimatedCodeSummary" autocomplete="off" />
-          </label>
-          <label>
-            Loaded shared identity
-            <input bind:value={remoteOnboardingSharedIdentityID} name="remoteOnboardingSharedIdentityID" autocomplete="off" />
-          </label>
-          <button type="submit">Add remote instance</button>
+          <p>Pairing-code, identity-file, animated-code, and shared-identity inputs are not accepted here because the daemon does not yet publish the authenticated endpoint needed to create a manageable remote host.</p>
+          <button type="submit" disabled={remoteLifecycleLoading}>{remoteLifecycleLoading ? 'Adding remote instance…' : 'Add remote instance'}</button>
         </form>
         {#if remoteOnboardingMessage}
           <p>{remoteOnboardingMessage}</p>

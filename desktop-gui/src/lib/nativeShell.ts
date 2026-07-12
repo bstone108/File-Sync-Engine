@@ -87,16 +87,24 @@ export type RemoteInstanceRegistryEntry = {
   credentialRef: string;
   source: 'api-endpoint-key';
   connectionState: 'offline' | 'connecting' | 'online' | 'failed';
+  revision: number;
 };
 
-export type RemoteInstanceRegistry = { selectedInstanceID?: string; instances: RemoteInstanceRegistryEntry[] };
+export type RemoteInstanceRegistry = { selectedInstanceID?: string; instances: RemoteInstanceRegistryEntry[]; credentialCleanupPending?: string[] };
+export type RemoteInstanceUpdateRequest = { id: string; expectedCredentialRef: string; expectedRevision: number; label: string; apiBaseURL: string };
+export type RemoteInstanceRemovalRequest = { id: string; expectedCredentialRef: string; expectedRevision: number; confirmLabel: string };
+export type RemoteInstanceSelectionRequest = { instanceID: string; expectedSelectedInstanceID: string };
+export type RemoteInstanceOnboardingRequest = { entry: RemoteInstanceRegistryEntry; secretValue: string };
 
 export type NativeDesktopShell = {
   inspectBundledEngineResources(): Promise<BundledEngineInspection>;
   getDesktopPreferences(): Promise<DesktopPreferences>;
   saveDesktopPreferences(preferences: DesktopPreferences): Promise<DesktopPreferences>;
   getRemoteInstanceRegistry(): Promise<RemoteInstanceRegistry>;
-  saveRemoteInstanceRegistry(registry: RemoteInstanceRegistry): Promise<RemoteInstanceRegistry>;
+  selectRemoteInstance(request: RemoteInstanceSelectionRequest): Promise<RemoteInstanceRegistry>;
+  onboardRemoteInstance(request: RemoteInstanceOnboardingRequest): Promise<RemoteInstanceRegistry>;
+  updateRemoteInstance(request: RemoteInstanceUpdateRequest): Promise<RemoteInstanceRegistry>;
+  removeRemoteInstance(request: RemoteInstanceRemovalRequest): Promise<RemoteInstanceRegistry>;
   readBundledEngineResourceManifest(): Promise<BundledEngineResourceManifest>;
   observeBundledEngineResources(): Promise<BundledEngineResourceObservation[]>;
   getLocalLifecycleSettings(): Promise<BundledDaemonLifecycleSettings>;

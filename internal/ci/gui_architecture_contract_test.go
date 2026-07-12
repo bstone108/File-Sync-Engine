@@ -3441,11 +3441,10 @@ func TestDesktopGUIHostListShowsReadableTransferStatusLayout(t *testing.T) {
 	}
 }
 
-func TestDesktopGUIRemoteInstanceOnboardingSupportsDirectPairingAndIdentitySources(t *testing.T) {
+func TestDesktopGUIRemoteInstanceOnboardingSupportsDirectEndpointAndRejectsPretendPairingHosts(t *testing.T) {
 	root := filepath.Join("..", "..")
 	registry := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "instanceRegistry.ts"))
 	appShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))
-	readme := readRequiredFile(t, filepath.Join(root, "desktop-gui", "README.md"))
 	doc := readRequiredFile(t, filepath.Join(root, "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
 
 	for _, want := range []string{
@@ -3467,29 +3466,19 @@ func TestDesktopGUIRemoteInstanceOnboardingSupportsDirectPairingAndIdentitySourc
 		"remoteOnboardingSource",
 		"remoteOnboardingEndpoint",
 		"remoteOnboardingAPIKey",
-		"remoteOnboardingPairingCode",
-		"remoteOnboardingIdentityFileText",
-		"remoteOnboardingAnimatedCodeSummary",
-		"remoteOnboardingSharedIdentityID",
 		"submitRemoteInstanceOnboarding",
 		"Remote instance onboarding form",
 		"Direct API endpoint/key",
-		"Pasted pairing code",
-		"Imported identity file",
-		"Scanned animated code",
-		"Loaded shared identity",
+		"Pairing-code, identity-file, animated-code, and shared-identity inputs are not accepted here",
+		"Remote host creation from pairing or shared-identity discovery is unavailable",
 	} {
 		if !strings.Contains(appShell, want) {
 			t.Fatalf("desktop GUI remote onboarding shell missing %q:\n%s", want, appShell)
 		}
 	}
-	for _, want := range []string{
-		"remote instance onboarding",
-		"API endpoint/key, pasted pairing code, imported identity file, scanned animated code, or loaded shared identity",
-		"raw API keys stay in native credential storage",
-	} {
-		if !strings.Contains(readme, want) || !strings.Contains(doc, want) {
-			t.Fatalf("desktop GUI docs missing remote onboarding note %q", want)
+	for _, want := range []string{"executable remote-host onboarding only for a known HTTPS API endpoint/key", "do not create manageable remote API hosts", "raw API keys stay in native credential storage"} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("desktop GUI architecture missing honest remote onboarding note %q", want)
 		}
 	}
 	for _, content := range []string{registry, appShell} {
@@ -3741,7 +3730,8 @@ func TestDesktopGUIRemoteHostRegistryPersistsOnlyNonSecretMetadata(t *testing.T)
 		"type RemoteInstanceRegistryEntry struct",
 		"CredentialRef   string `json:\"credentialRef\"`",
 		"GetRemoteInstanceRegistry",
-		"SaveRemoteInstanceRegistry",
+		"SelectRemoteInstance",
+		"OnboardRemoteInstance",
 		"atomicWriteRemoteInstanceRegistry",
 		"decoder.DisallowUnknownFields()",
 		"endpoint.RawQuery != \"\"",
@@ -3750,14 +3740,14 @@ func TestDesktopGUIRemoteHostRegistryPersistsOnlyNonSecretMetadata(t *testing.T)
 			t.Fatalf("native remote-host registry missing %q:\n%s", want, nativeFeatures)
 		}
 	}
-	for _, want := range []string{"getRemoteInstanceRegistry", "saveRemoteInstanceRegistry"} {
+	for _, want := range []string{"getRemoteInstanceRegistry", "selectRemoteInstance", "onboardRemoteInstance"} {
 		if !strings.Contains(nativeShell, want) || !strings.Contains(wailsShell, want) {
 			t.Fatalf("remote-host registry native bridge missing %q", want)
 		}
 	}
 	for _, want := range []string{
 		"loadRemoteRegistry",
-		"persistRemoteRegistry",
+		"persistRemoteSelection",
 		"remoteRegistrySaveChain",
 		"await loadRemoteRegistry()",
 		"managedDaemonInstances.some((instance) => instance.id === candidate.id)",
@@ -3767,17 +3757,23 @@ func TestDesktopGUIRemoteHostRegistryPersistsOnlyNonSecretMetadata(t *testing.T)
 			t.Fatalf("desktop GUI remote-host persistence/selection flow missing %q:\n%s", want, appShell)
 		}
 	}
+	for _, forbidden := range []string{"SaveRemoteInstanceRegistry", "saveRemoteInstanceRegistry"} {
+		if strings.Contains(nativeShell, forbidden) || strings.Contains(wailsShell, forbidden) || strings.Contains(appShell, forbidden) {
+			t.Fatalf("blind whole-registry lifecycle save remains exposed via %q", forbidden)
+		}
+	}
 	for _, want := range []string{
 		"transient status/error text is not persisted",
 		"Startup reloads saved hosts as offline",
-		"Frontend saves are serialized",
+		"Selection uses a narrow native compare-and-swap operation",
+		"no routine frontend API can replace the whole registry from stale state",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Fatalf("desktop GUI architecture missing remote-host persistence boundary %q", want)
 		}
 	}
 	registryStart := strings.Index(nativeFeatures, "type RemoteInstanceRegistryEntry struct")
-	registryEnd := strings.Index(nativeFeatures, "func (a *App) GetRemoteInstanceRegistry")
+	registryEnd := strings.Index(nativeFeatures, "type RemoteInstanceUpdateRequest struct")
 	if registryStart < 0 || registryEnd <= registryStart {
 		t.Fatal("could not isolate native remote-host registry schema")
 	}
@@ -3785,6 +3781,55 @@ func TestDesktopGUIRemoteHostRegistryPersistsOnlyNonSecretMetadata(t *testing.T)
 	for _, forbidden := range []string{"json:\"apiKey", "json:\"secret", "json:\"statusSummary"} {
 		if strings.Contains(registrySchema, forbidden) {
 			t.Fatalf("native remote-host registry must not persist secret-shaped or transient fields via %q", forbidden)
+		}
+	}
+}
+
+func TestDesktopGUIRemoteHostEditRemovalUsesNativeSafeLifecycle(t *testing.T) {
+	root := filepath.Join("..", "..")
+	nativeFeatures := readRequiredFile(t, filepath.Join(root, "desktop-gui", "app_native_features.go"))
+	nativeShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "nativeShell.ts"))
+	wailsShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "wailsNativeShell.ts"))
+	appShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))
+	doc := readRequiredFile(t, filepath.Join(root, "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
+	seriousHarness := readRequiredFile(t, filepath.Join(root, "scripts", "run-serious-harness.sh"))
+
+	if !strings.Contains(seriousHarness, "credential_vault_linux_test.go") {
+		t.Fatal("serious harness must execute the Linux credential-vault deletion aggregation regression")
+	}
+
+	for _, want := range []string{"UpdateRemoteInstance", "ExpectedCredentialRef", "ExpectedRevision", "RemoveRemoteInstance", "ConfirmLabel", "CredentialCleanupPending"} {
+		if !strings.Contains(nativeFeatures, want) {
+			t.Fatalf("native remote-host lifecycle missing %q", want)
+		}
+	}
+	for _, want := range []string{"updateRemoteInstance", "removeRemoteInstance"} {
+		if !strings.Contains(nativeShell, want) || !strings.Contains(wailsShell, want) {
+			t.Fatalf("native remote-host lifecycle bridge missing %q", want)
+		}
+	}
+	for _, want := range []string{"beginRemoteHostEdit", "saveRemoteHostEdit", "removeSelectedRemoteHost", "remoteEditTargetID", "remoteEditTargetCredentialRef", "remoteEditTargetRevision", "remoteRemovalConfirmation", "Type the host label exactly", "Credential reference is preserved"} {
+		if !strings.Contains(appShell, want) {
+			t.Fatalf("remote-host edit/removal UI missing %q", want)
+		}
+	}
+	onboardingStart := strings.Index(appShell, "async function submitRemoteInstanceOnboarding()")
+	if onboardingStart < 0 {
+		t.Fatal("could not find remote onboarding submit lifecycle")
+	}
+	onboardingTail := appShell[onboardingStart:]
+	onboardingEnd := strings.Index(onboardingTail, "function beginRemoteHostEdit()")
+	if onboardingEnd < 0 {
+		t.Fatal("could not isolate remote onboarding submit lifecycle")
+	}
+	onboarding := onboardingTail[:onboardingEnd]
+	finallyStart := strings.Index(onboarding, "finally {")
+	if finallyStart < 0 || !strings.Contains(onboarding[finallyStart:], "remoteOnboardingAPIKey = ''") {
+		t.Fatal("remote onboarding must clear the API key in finally after success or failure")
+	}
+	for _, want := range []string{"persisted together before native credential deletion", "tombstone clears only after that verification finds no matching item", "Startup reconciliation retries all pending references", "monotonically increasing revision under the registry mutex", "credential reference is preserved during metadata edits", "Linux Freedesktop Secret Service is the only implemented", "peers do not become actionable remote API hosts"} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("desktop architecture missing safe remote-host lifecycle note %q", want)
 		}
 	}
 }

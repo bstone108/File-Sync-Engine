@@ -30,6 +30,7 @@ export type ManagedDaemonInstance = {
   label: string;
   apiBaseURL: string;
   credentialRef?: string;
+  revision?: number;
   onboardingSource?: RemoteInstanceOnboardingSource;
   group?: string;
   connectionState: ManagedDaemonConnectionState;

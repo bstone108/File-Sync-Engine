@@ -40,14 +40,47 @@ type RemoteInstanceRegistryEntry struct {
 	CredentialRef   string `json:"credentialRef"`
 	Source          string `json:"source"`
 	ConnectionState string `json:"connectionState"`
+	Revision        uint64 `json:"revision"`
 }
 
 type RemoteInstanceRegistry struct {
-	SelectedInstanceID string                        `json:"selectedInstanceID,omitempty"`
-	Instances          []RemoteInstanceRegistryEntry `json:"instances"`
+	SelectedInstanceID       string                        `json:"selectedInstanceID,omitempty"`
+	Instances                []RemoteInstanceRegistryEntry `json:"instances"`
+	CredentialCleanupPending []string                      `json:"credentialCleanupPending,omitempty"`
+}
+
+type RemoteInstanceUpdateRequest struct {
+	ID                    string `json:"id"`
+	ExpectedCredentialRef string `json:"expectedCredentialRef"`
+	ExpectedRevision      uint64 `json:"expectedRevision"`
+	Label                 string `json:"label"`
+	APIBaseURL            string `json:"apiBaseURL"`
+}
+
+type RemoteInstanceRemovalRequest struct {
+	ID                    string `json:"id"`
+	ExpectedCredentialRef string `json:"expectedCredentialRef"`
+	ExpectedRevision      uint64 `json:"expectedRevision"`
+	ConfirmLabel          string `json:"confirmLabel"`
+}
+
+type RemoteInstanceSelectionRequest struct {
+	InstanceID                 string `json:"instanceID"`
+	ExpectedSelectedInstanceID string `json:"expectedSelectedInstanceID"`
+}
+
+type RemoteInstanceOnboardingRequest struct {
+	Entry       RemoteInstanceRegistryEntry `json:"entry"`
+	SecretValue string                      `json:"secretValue"`
 }
 
 func (a *App) GetRemoteInstanceRegistry() (RemoteInstanceRegistry, error) {
+	a.remoteInstanceRegistry.Lock()
+	defer a.remoteInstanceRegistry.Unlock()
+	return a.getRemoteInstanceRegistry()
+}
+
+func (a *App) getRemoteInstanceRegistry() (RemoteInstanceRegistry, error) {
 	path, err := a.remoteInstanceRegistryPath()
 	if err != nil {
 		return RemoteInstanceRegistry{}, err
@@ -65,13 +98,29 @@ func (a *App) GetRemoteInstanceRegistry() (RemoteInstanceRegistry, error) {
 	if err := decoder.Decode(&registry); err != nil {
 		return RemoteInstanceRegistry{}, fmt.Errorf("parse remote instance registry: %w", err)
 	}
+	for index := range registry.Instances {
+		if registry.Instances[index].Revision == 0 {
+			registry.Instances[index].Revision = 1
+		}
+	}
 	if err := validateRemoteInstanceRegistry(registry); err != nil {
 		return RemoteInstanceRegistry{}, fmt.Errorf("stored remote instance registry is invalid: %w", err)
 	}
 	return registry, nil
 }
 
-func (a *App) SaveRemoteInstanceRegistry(registry RemoteInstanceRegistry) (RemoteInstanceRegistry, error) {
+func (a *App) saveRemoteInstanceRegistryForTest(registry RemoteInstanceRegistry) (RemoteInstanceRegistry, error) {
+	a.remoteInstanceRegistry.Lock()
+	defer a.remoteInstanceRegistry.Unlock()
+	return a.saveRemoteInstanceRegistry(registry)
+}
+
+func (a *App) saveRemoteInstanceRegistry(registry RemoteInstanceRegistry) (RemoteInstanceRegistry, error) {
+	for index := range registry.Instances {
+		if registry.Instances[index].Revision == 0 {
+			registry.Instances[index].Revision = 1
+		}
+	}
 	if err := validateRemoteInstanceRegistry(registry); err != nil {
 		return RemoteInstanceRegistry{}, err
 	}
@@ -83,10 +132,212 @@ func (a *App) SaveRemoteInstanceRegistry(registry RemoteInstanceRegistry) (Remot
 	if err != nil {
 		return RemoteInstanceRegistry{}, err
 	}
-	if err := atomicWriteRemoteInstanceRegistry(path, data); err != nil {
+	write := a.desktopRuntime().remoteRegistryWrite
+	if write == nil {
+		write = atomicWriteRemoteInstanceRegistry
+	}
+	if err := write(path, data); err != nil {
 		return RemoteInstanceRegistry{}, fmt.Errorf("save remote instance registry: %w", err)
 	}
 	return registry, nil
+}
+
+func (a *App) SelectRemoteInstance(request RemoteInstanceSelectionRequest) (RemoteInstanceRegistry, error) {
+	a.remoteInstanceRegistry.Lock()
+	defer a.remoteInstanceRegistry.Unlock()
+	registry, err := a.getRemoteInstanceRegistry()
+	if err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	if registry.SelectedInstanceID != request.ExpectedSelectedInstanceID {
+		return RemoteInstanceRegistry{}, errors.New("remote host selection changed; reload before selecting")
+	}
+	if request.InstanceID != "" {
+		found := false
+		for _, entry := range registry.Instances {
+			if entry.ID == request.InstanceID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return RemoteInstanceRegistry{}, fmt.Errorf("remote instance %q does not exist", request.InstanceID)
+		}
+	}
+	registry.SelectedInstanceID = request.InstanceID
+	return a.saveRemoteInstanceRegistry(registry)
+}
+
+func (a *App) OnboardRemoteInstance(request RemoteInstanceOnboardingRequest) (RemoteInstanceRegistry, error) {
+	a.remoteInstanceRegistry.Lock()
+	defer a.remoteInstanceRegistry.Unlock()
+	registry, err := a.getRemoteInstanceRegistry()
+	if err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	entry := request.Entry
+	if entry.Revision == 0 {
+		entry.Revision = 1
+	}
+	if err := validateRemoteInstanceRegistry(RemoteInstanceRegistry{Instances: []RemoteInstanceRegistryEntry{entry}}); err != nil {
+		return registry, err
+	}
+	for _, existing := range registry.Instances {
+		if existing.ID == entry.ID {
+			return registry, fmt.Errorf("remote instance %q already exists", entry.ID)
+		}
+	}
+	candidateRegistry := registry
+	candidateRegistry.Instances = append(append([]RemoteInstanceRegistryEntry{}, registry.Instances...), entry)
+	if err := validateRemoteInstanceRegistry(candidateRegistry); err != nil {
+		return registry, err
+	}
+	if strings.TrimSpace(request.SecretValue) == "" {
+		return registry, errors.New("remote API credential is required")
+	}
+	pending := registry
+	pending.CredentialCleanupPending = appendUniqueCredentialRef(pending.CredentialCleanupPending, entry.CredentialRef)
+	if _, err := a.saveRemoteInstanceRegistry(pending); err != nil {
+		return registry, err
+	}
+	record := RemoteInstanceCredentialRecord{CredentialRef: entry.CredentialRef, InstanceID: entry.ID, Label: entry.Label}
+	if _, err := a.StoreRemoteInstanceCredential(record, RemoteInstanceCredentialSecret{CredentialRef: entry.CredentialRef, SecretValue: request.SecretValue}); err != nil {
+		return pending, err
+	}
+	next := pending
+	next.CredentialCleanupPending = removeCredentialRef(next.CredentialCleanupPending, entry.CredentialRef)
+	next.Instances = append(next.Instances, entry)
+	next.SelectedInstanceID = entry.ID
+	saved, commitErr := a.saveRemoteInstanceRegistry(next)
+	if commitErr == nil {
+		return saved, nil
+	}
+	if cleanupErr := a.DeleteRemoteInstanceCredential(entry.CredentialRef); cleanupErr == nil {
+		clean := pending
+		clean.CredentialCleanupPending = removeCredentialRef(clean.CredentialCleanupPending, entry.CredentialRef)
+		if cleaned, cleanErr := a.saveRemoteInstanceRegistry(clean); cleanErr == nil {
+			return cleaned, commitErr
+		}
+	}
+	return pending, commitErr
+}
+
+func appendUniqueCredentialRef(refs []string, ref string) []string {
+	for _, existing := range refs {
+		if existing == ref {
+			return refs
+		}
+	}
+	return append(refs, ref)
+}
+
+func removeCredentialRef(refs []string, ref string) []string {
+	result := make([]string, 0, len(refs))
+	for _, existing := range refs {
+		if existing != ref {
+			result = append(result, existing)
+		}
+	}
+	return result
+}
+
+func (a *App) UpdateRemoteInstance(request RemoteInstanceUpdateRequest) (RemoteInstanceRegistry, error) {
+	a.remoteInstanceRegistry.Lock()
+	defer a.remoteInstanceRegistry.Unlock()
+	registry, err := a.getRemoteInstanceRegistry()
+	if err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	for index, entry := range registry.Instances {
+		if entry.ID != request.ID {
+			continue
+		}
+		if request.ExpectedCredentialRef == "" || request.ExpectedCredentialRef != entry.CredentialRef || request.ExpectedRevision == 0 || request.ExpectedRevision != entry.Revision {
+			return RemoteInstanceRegistry{}, errors.New("remote host changed since this edit was opened; reload before editing")
+		}
+		entry.Label = strings.TrimSpace(request.Label)
+		entry.APIBaseURL = strings.TrimSpace(request.APIBaseURL)
+		entry.ConnectionState = "offline"
+		entry.Revision++
+		registry.Instances[index] = entry
+		return a.saveRemoteInstanceRegistry(registry)
+	}
+	return RemoteInstanceRegistry{}, fmt.Errorf("remote instance %q does not exist", request.ID)
+}
+
+func (a *App) RemoveRemoteInstance(request RemoteInstanceRemovalRequest) (RemoteInstanceRegistry, error) {
+	a.remoteInstanceRegistry.Lock()
+	defer a.remoteInstanceRegistry.Unlock()
+	registry, err := a.getRemoteInstanceRegistry()
+	if err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	index := -1
+	var removed RemoteInstanceRegistryEntry
+	for candidateIndex, entry := range registry.Instances {
+		if entry.ID == request.ID {
+			index, removed = candidateIndex, entry
+			break
+		}
+	}
+	if index < 0 {
+		return RemoteInstanceRegistry{}, fmt.Errorf("remote instance %q does not exist", request.ID)
+	}
+	if request.ConfirmLabel != removed.Label {
+		return RemoteInstanceRegistry{}, errors.New("type the remote host label exactly to confirm removal")
+	}
+	if request.ExpectedCredentialRef == "" || request.ExpectedCredentialRef != removed.CredentialRef || request.ExpectedRevision == 0 || request.ExpectedRevision != removed.Revision {
+		return RemoteInstanceRegistry{}, errors.New("remote host changed since removal was opened; reload before removing")
+	}
+	next := RemoteInstanceRegistry{SelectedInstanceID: registry.SelectedInstanceID, Instances: append([]RemoteInstanceRegistryEntry{}, registry.Instances[:index]...), CredentialCleanupPending: append([]string{}, registry.CredentialCleanupPending...)}
+	next.Instances = append(next.Instances, registry.Instances[index+1:]...)
+	if next.SelectedInstanceID == removed.ID {
+		next.SelectedInstanceID = ""
+	}
+	next.CredentialCleanupPending = appendUniqueCredentialRef(next.CredentialCleanupPending, removed.CredentialRef)
+	if _, err := a.saveRemoteInstanceRegistry(next); err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	if err := a.DeleteRemoteInstanceCredential(removed.CredentialRef); err != nil {
+		return next, nil
+	}
+	clean := next
+	clean.CredentialCleanupPending = removeCredentialRef(clean.CredentialCleanupPending, removed.CredentialRef)
+	saved, err := a.saveRemoteInstanceRegistry(clean)
+	if err != nil {
+		return next, fmt.Errorf("credential was deleted but cleanup tombstone could not be cleared; retry reconciliation: %w", err)
+	}
+	return saved, nil
+}
+
+// ReconcileRemoteInstanceCredentialCleanup retries durable native-vault cleanup.
+// A tombstone is removed only when the vault backend confirms no matching item remains.
+func (a *App) ReconcileRemoteInstanceCredentialCleanup() (RemoteInstanceRegistry, error) {
+	a.remoteInstanceRegistry.Lock()
+	defer a.remoteInstanceRegistry.Unlock()
+	registry, err := a.getRemoteInstanceRegistry()
+	if err != nil {
+		return RemoteInstanceRegistry{}, err
+	}
+	remaining := append([]string{}, registry.CredentialCleanupPending...)
+	var failures []error
+	for _, ref := range registry.CredentialCleanupPending {
+		if err := a.DeleteRemoteInstanceCredential(ref); err != nil {
+			failures = append(failures, fmt.Errorf("credential cleanup %s: %w", ref, err))
+			continue
+		}
+		remaining = removeCredentialRef(remaining, ref)
+	}
+	if len(remaining) != len(registry.CredentialCleanupPending) {
+		clean := registry
+		clean.CredentialCleanupPending = remaining
+		saved, saveErr := a.saveRemoteInstanceRegistry(clean)
+		if saveErr != nil {
+			return registry, errors.Join(errors.Join(failures...), fmt.Errorf("persist credential cleanup reconciliation: %w", saveErr))
+		}
+		registry = saved
+	}
+	return registry, errors.Join(failures...)
 }
 
 func atomicWriteRemoteInstanceRegistry(path string, data []byte) error {
@@ -130,6 +381,16 @@ func validateRemoteInstanceRegistry(registry RemoteInstanceRegistry) error {
 		return errors.New("remote instance registry exceeds 128 entries")
 	}
 	seen := make(map[string]bool, len(registry.Instances))
+	credentialOwners := make(map[string]string, len(registry.Instances)+len(registry.CredentialCleanupPending))
+	for _, ref := range registry.CredentialCleanupPending {
+		if err := validateRemoteCredentialRef(ref); err != nil {
+			return fmt.Errorf("invalid credential cleanup tombstone: %w", err)
+		}
+		if owner, exists := credentialOwners[ref]; exists {
+			return fmt.Errorf("credential reference %q is not globally unique; already used by %s", ref, owner)
+		}
+		credentialOwners[ref] = "credential cleanup tombstone"
+	}
 	for _, entry := range registry.Instances {
 		if entry.Source != "api-endpoint-key" {
 			return fmt.Errorf("remote instance %q has unsupported onboarding source", entry.ID)
@@ -147,6 +408,10 @@ func validateRemoteInstanceRegistry(registry RemoteInstanceRegistry) error {
 		if err := validateRemoteCredentialRef(entry.CredentialRef); err != nil {
 			return err
 		}
+		if owner, exists := credentialOwners[entry.CredentialRef]; exists {
+			return fmt.Errorf("credential reference %q is not globally unique; remote instance %q overlaps %s", entry.CredentialRef, entry.ID, owner)
+		}
+		credentialOwners[entry.CredentialRef] = fmt.Sprintf("remote instance %q", entry.ID)
 		endpoint, err := url.Parse(entry.APIBaseURL)
 		if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 			return fmt.Errorf("remote instance %q requires an HTTPS API endpoint without embedded credentials, query parameters, or fragments", entry.ID)

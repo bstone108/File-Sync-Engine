@@ -19,12 +19,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
 type App struct {
-	ctx     context.Context
-	desktop *desktopNativeRuntime
+	ctx                    context.Context
+	desktop                *desktopNativeRuntime
+	remoteInstanceRegistry sync.Mutex
 }
 
 type DesktopRuntimeInfo struct {
@@ -82,6 +84,7 @@ type desktopNativeRuntime struct {
 	credentialVaultSet    func(service, account, secret string) error
 	credentialVaultGet    func(service, account string) (string, error)
 	credentialVaultDelete func(service, account string) error
+	remoteRegistryWrite   func(path string, data []byte) error
 	statusClient          *http.Client
 	probeSession          func(GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error)
 	probeCandidate        func(localDaemonCandidate) (DaemonRuntimeState, error)
@@ -95,6 +98,9 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// Best-effort startup reconciliation. Failures remain durable and can be
+	// retried through ReconcileRemoteInstanceCredentialCleanup.
+	_, _ = a.ReconcileRemoteInstanceCredentialCleanup()
 }
 
 func (a *App) RuntimeInfo() DesktopRuntimeInfo {

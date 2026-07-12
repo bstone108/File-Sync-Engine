@@ -81,16 +81,36 @@ func nativeCredentialVaultDelete(service, account string) error {
 	if len(items) == 0 {
 		return errCredentialNotFound
 	}
-	for _, item := range items {
+	deleteErr := deleteSecretServiceItems(items, func(item dbus.ObjectPath) (dbus.ObjectPath, error) {
 		var prompt dbus.ObjectPath
 		if err := conn.Object(secretServiceName, item).Call("org.freedesktop.Secret.Item.Delete", 0).Store(&prompt); err != nil {
-			return fmt.Errorf("Secret Service Delete: %w", err)
+			return noPromptPath, err
 		}
-		if prompt != noPromptPath {
-			return errors.New("Secret Service requires an interactive prompt; unlock the login keyring and retry")
-		}
+		return prompt, nil
+	})
+	remainingUnlocked, remainingLocked, searchErr := searchSecretItems(conn, service, account)
+	if searchErr != nil {
+		return errors.Join(deleteErr, fmt.Errorf("verify Secret Service deletion: %w", searchErr))
+	}
+	if remaining := len(remainingUnlocked) + len(remainingLocked); remaining > 0 {
+		return errors.Join(deleteErr, fmt.Errorf("Secret Service deletion incomplete: %d matching item(s) remain", remaining))
 	}
 	return nil
+}
+
+func deleteSecretServiceItems(items []dbus.ObjectPath, deleteItem func(dbus.ObjectPath) (dbus.ObjectPath, error)) error {
+	var failures []error
+	for _, item := range items {
+		prompt, err := deleteItem(item)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("Secret Service Delete %s: %w", item, err))
+			continue
+		}
+		if prompt != noPromptPath {
+			failures = append(failures, fmt.Errorf("Secret Service Delete %s requires an interactive prompt; unlock the login keyring and retry", item))
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func openSecretServiceSession() (*dbus.Conn, dbus.ObjectPath, error) {

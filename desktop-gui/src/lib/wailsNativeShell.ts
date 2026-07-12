@@ -13,7 +13,10 @@ type WailsAppBindings = {
   GetDesktopPreferences(): Promise<unknown>;
   SaveDesktopPreferences(preferences: unknown): Promise<unknown>;
   GetRemoteInstanceRegistry(): Promise<unknown>;
-  SaveRemoteInstanceRegistry(registry: unknown): Promise<unknown>;
+  SelectRemoteInstance(request: unknown): Promise<unknown>;
+  OnboardRemoteInstance(request: unknown): Promise<unknown>;
+  UpdateRemoteInstance(request: unknown): Promise<unknown>;
+  RemoveRemoteInstance(request: unknown): Promise<unknown>;
   StoreRemoteInstanceCredential(record: unknown, secret: unknown): Promise<unknown>;
   DeleteRemoteInstanceCredential(credentialRef: string): Promise<void>;
 };
@@ -38,7 +41,10 @@ export function installWailsNativeShellBridge(): boolean {
     getDesktopPreferences: () => app.GetDesktopPreferences() as ReturnType<NativeDesktopShell['getDesktopPreferences']>,
     saveDesktopPreferences: (preferences) => app.SaveDesktopPreferences(preferences) as ReturnType<NativeDesktopShell['saveDesktopPreferences']>,
     getRemoteInstanceRegistry: () => app.GetRemoteInstanceRegistry() as ReturnType<NativeDesktopShell['getRemoteInstanceRegistry']>,
-    saveRemoteInstanceRegistry: (registry) => app.SaveRemoteInstanceRegistry(registry) as ReturnType<NativeDesktopShell['saveRemoteInstanceRegistry']>,
+    selectRemoteInstance: (request) => app.SelectRemoteInstance(request) as ReturnType<NativeDesktopShell['selectRemoteInstance']>,
+    onboardRemoteInstance: (request) => app.OnboardRemoteInstance(request) as ReturnType<NativeDesktopShell['onboardRemoteInstance']>,
+    updateRemoteInstance: (request) => app.UpdateRemoteInstance(request) as ReturnType<NativeDesktopShell['updateRemoteInstance']>,
+    removeRemoteInstance: (request) => app.RemoveRemoteInstance(request) as ReturnType<NativeDesktopShell['removeRemoteInstance']>,
     discoverLocalDaemon: () => app.DiscoverLocalDaemon() as ReturnType<NativeDesktopShell['discoverLocalDaemon']>,
     controlLocalDaemon: (request) => app.ControlLocalDaemon(request) as ReturnType<NativeDesktopShell['controlLocalDaemon']>,
     daemonAPIRequest: (request) => app.DaemonAPIRequest(request) as ReturnType<NativeDesktopShell['daemonAPIRequest']>,
