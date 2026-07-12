@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,87 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestBundledManifestInspectionReadsAndHashesPackagedResources(t *testing.T) {
+	tmp := t.TempDir()
+	enginePath := filepath.Join(tmp, "linux", "amd64", "fse")
+	if err := os.MkdirAll(filepath.Dir(enginePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("engine-binary")
+	if err := os.WriteFile(enginePath, payload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	manifest := map[string]any{"version": "1.2.3", "entries": []map[string]any{
+		{"target": "linux-amd64", "relativePath": "linux/amd64/fse", "expectedExecutable": "fse", "expectedVersion": "1.2.3", "expectedSHA256": fmt.Sprintf("%x", sum)},
+		{"target": "windows-amd64", "relativePath": "windows/amd64/fse.exe", "expectedExecutable": "fse.exe", "expectedVersion": "1.2.3", "expectedSHA256": strings.Repeat("0", 64)},
+	}}
+	manifestBytes, _ := json.Marshal(manifest)
+	if err := os.WriteFile(filepath.Join(tmp, "manifest.json"), manifestBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{resourceRoot: tmp}
+	got, err := app.InspectBundledEngineResources()
+	if err != nil {
+		t.Fatalf("inspect: %v", err)
+	}
+	if !got.Verified || got.Version != "1.2.3" || len(got.Entries) != 2 || !got.Entries[0].Exists || !got.Entries[0].Verified || got.Entries[1].Exists {
+		t.Fatalf("inspection = %#v", got)
+	}
+}
+
+func TestBundledManifestInspectionRejectsEscapingResourcePath(t *testing.T) {
+	tmp := t.TempDir()
+	manifest := `{"version":"1","entries":[{"target":"linux-amd64","relativePath":"../outside","expectedExecutable":"fse","expectedVersion":"1","expectedSHA256":"00"}]}`
+	if err := os.WriteFile(filepath.Join(tmp, "manifest.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{resourceRoot: tmp}
+	if _, err := app.InspectBundledEngineResources(); err == nil || !strings.Contains(err.Error(), "unsafe") {
+		t.Fatalf("expected unsafe path rejection, got %v", err)
+	}
+}
+
+func TestDesktopPreferencesPersistThroughNativeBoundary(t *testing.T) {
+	tmp := t.TempDir()
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{stateRoot: tmp}
+	want := DesktopPreferences{Theme: "dark", Density: "compact", MinimizeToTray: true, NotificationsEnabled: false}
+	if got, err := app.SaveDesktopPreferences(want); err != nil || got != want {
+		t.Fatalf("save = %#v, %v", got, err)
+	}
+	reloaded := NewApp()
+	reloaded.desktop = &desktopNativeRuntime{stateRoot: tmp}
+	if got, err := reloaded.GetDesktopPreferences(); err != nil || got != want {
+		t.Fatalf("reload = %#v, %v", got, err)
+	}
+	info, err := os.Stat(filepath.Join(tmp, "desktop-preferences.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestDesktopPreferencesRejectUnsupportedValuesWithoutReplacingSavedState(t *testing.T) {
+	tmp := t.TempDir()
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{stateRoot: tmp}
+	want := DesktopPreferences{Theme: "system", Density: "comfortable", NotificationsEnabled: true}
+	if _, err := app.SaveDesktopPreferences(want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.SaveDesktopPreferences(DesktopPreferences{Theme: "script:bad", Density: "compact"}); err == nil {
+		t.Fatal("expected validation error")
+	}
+	if got, err := app.GetDesktopPreferences(); err != nil || got != want {
+		t.Fatalf("saved state changed: %#v, %v", got, err)
+	}
+}
 
 func TestRequestGUIOwnedNonServiceDaemonLaunchPrefersReachableInstalledService(t *testing.T) {
 	launches := 0

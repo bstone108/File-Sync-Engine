@@ -48,6 +48,7 @@
     getDaemonStartupIntegrationStatus,
     getDaemonTrayStatus,
     getFirstLaunchDaemonRegistrationStatus,
+    getNativeDesktopShell,
     getGUIOwnedNonServiceDaemonSession,
     getGUIOwnedNonServiceDaemonState,
     installBundledDaemonForCurrentOS,
@@ -60,7 +61,9 @@
     stopGUIOwnedNonServiceDaemonThroughAPI,
     storeRemoteInstanceCredential,
     type DaemonStartupIntegrationStatus,
-    type DaemonTrayStatus
+    type DaemonTrayStatus,
+    type BundledEngineInspection,
+    type DesktopPreferences
   } from './lib/nativeShell';
   import { type BundledDaemonLifecycleAction, type BundledEngineRuntimeGate } from './lib/bundledEngine';
   import { type FirstLaunchDaemonRegistrationStatus, type GUIManagedNonServiceDaemonSession } from './lib/firstLaunch';
@@ -118,6 +121,10 @@
   $: daemonConnectionSettings = { apiBaseURL, apiKey: apiKey || undefined, credentialRef: localCredentialRef || undefined };
   $: hasDaemonCredential = Boolean(localCredentialRef || apiKey);
   let status: DaemonStatus | null = null;
+  let bundledEngineInspection: BundledEngineInspection | null = null;
+  let bundledEngineInspectionMessage = 'Bundled engine manifest has not been inspected.';
+  let desktopPreferences: DesktopPreferences = { theme: 'system', density: 'comfortable', minimizeToTray: false, notificationsEnabled: true };
+  let desktopPreferencesMessage = 'Loading persisted desktop preferences…';
   let daemonFolders: DaemonFolder[] = [];
   let daemonPeers: DaemonPeer[] = [];
   let daemonEvents: DaemonEvent[] = [];
@@ -222,11 +229,6 @@
     summary: string;
   };
 
-  type DesktopSettingsSection = {
-    title: string;
-    summary: string;
-  };
-
   type HelpDetailsSection = {
     title: string;
     summary: string;
@@ -314,10 +316,6 @@
     { title: 'Daemon identity & API', summary: 'Selected-host API URL, redacted API key usage, TLS/encryption policy, node identity, and pairing-sensitive controls belong to the daemon host.' },
     { title: 'Folders, peers, discovery, and transfers', summary: 'Share roots, peer endpoints, discovery mode, and transfer caps are selected-host daemon settings, not desktop app preferences.' },
     { title: 'Metadata, logging, and backup policy', summary: 'Metadata backend, maintenance budgets, structured logging, web GUI package state, backup destinations, snapshots, restore, and repair policy stay scoped to the selected engine.' }
-  ];
-  const desktopSettingsSections: DesktopSettingsSection[] = [
-    { title: 'Theme and window behavior', summary: 'Desktop GUI settings menu options such as theme, density, remembered window placement, and tray-open behavior affect only this GUI app.' },
-    { title: 'Credential storage and notifications', summary: 'Credential vault preferences, notification style, update prompts, and local UI privacy controls stay separate from selected-host daemon settings.' }
   ];
   const helpDetailsSections: HelpDetailsSection[] = [
     { title: 'Encryption, pairing, and identity details', summary: 'Dedicated help/details pages explain API encryption, identity pairing, key rotation, and revocation without crowding daily peer controls.' },
@@ -1024,8 +1022,38 @@
     }
   }
 
+  async function inspectBundledEngineResources() {
+    bundledEngineInspectionMessage = 'Inspecting packaged engine manifest and hashing present resources…';
+    try {
+      bundledEngineInspection = await getNativeDesktopShell().inspectBundledEngineResources();
+      bundledEngineInspectionMessage = bundledEngineInspection.message;
+    } catch (error) {
+      bundledEngineInspection = null;
+      bundledEngineInspectionMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function loadDesktopPreferences() {
+    try {
+      desktopPreferences = await getNativeDesktopShell().getDesktopPreferences();
+      desktopPreferencesMessage = 'Desktop preferences loaded from native per-user storage.';
+    } catch (error) {
+      desktopPreferencesMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function saveDesktopPreferences() {
+    try {
+      desktopPreferences = await getNativeDesktopShell().saveDesktopPreferences(desktopPreferences);
+      desktopPreferencesMessage = 'Desktop preferences saved to native per-user storage.';
+    } catch (error) {
+      desktopPreferencesMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   onMount(() => {
     void ensureLocalDaemonConnection();
+    void loadDesktopPreferences();
   });
 
   async function adoptGUIOwnedNonServiceDaemonSession() {
@@ -1923,15 +1951,27 @@
     {#if activeView === 'desktop-settings'}
       <section class="connection-card">
         <h2>Desktop GUI settings menu</h2>
-        <p>These preferences belong to the desktop application itself and must not be written into the selected host's daemon config.</p>
-        <div class="settings-grid" aria-label="Desktop GUI settings sections">
-          {#each desktopSettingsSections as section}
-            <article class="settings-card">
-              <h3>{section.title}</h3>
-              <p>{section.summary}</p>
-            </article>
-          {/each}
-        </div>
+        <p>These preferences are persisted in native per-user storage and are never written into the selected host's daemon config.</p>
+        <form class="control-form" on:submit|preventDefault={saveDesktopPreferences} aria-label="Desktop preferences">
+          <label>Theme<select bind:value={desktopPreferences.theme}><option value="system">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+          <label>Density<select bind:value={desktopPreferences.density}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
+          <label class="inline-choice"><input type="checkbox" bind:checked={desktopPreferences.minimizeToTray} /> Minimize to tray when native tray support is available</label>
+          <label class="inline-choice"><input type="checkbox" bind:checked={desktopPreferences.notificationsEnabled} /> Enable desktop notifications when native notification support is available</label>
+          <button type="submit">Save desktop preferences</button>
+          <p>{desktopPreferencesMessage}</p>
+        </form>
+        <h3>Bundled engine integrity</h3>
+        <button type="button" on:click={inspectBundledEngineResources}>Inspect and verify packaged engine files</button>
+        <p>{bundledEngineInspectionMessage}</p>
+        {#if bundledEngineInspection}
+          <p>Manifest version: {bundledEngineInspection.version} · overall {bundledEngineInspection.verified ? 'verified' : 'not verified'}</p>
+          <ul class="event-list" aria-label="Bundled engine manifest inspection">
+            {#each bundledEngineInspection.entries as entry}
+              <li><strong>{entry.target}</strong> · {entry.exists ? entry.verified ? 'verified' : 'mismatch' : 'not included in this target-specific bundle'}<br />{entry.relativePath} · {entry.message}</li>
+            {/each}
+          </ul>
+        {/if}
+        <p>Tray minimization and desktop notifications remain explicitly conditional: saving these preferences does not claim that a platform tray or notification backend exists.</p>
       </section>
     {/if}
 

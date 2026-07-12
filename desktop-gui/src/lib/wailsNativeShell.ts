@@ -9,6 +9,9 @@ type WailsAppBindings = {
   DiscoverLocalDaemon(): Promise<unknown>;
   ControlLocalDaemon(request: unknown): Promise<unknown>;
   DaemonAPIRequest(request: unknown): Promise<unknown>;
+  InspectBundledEngineResources(): Promise<unknown>;
+  GetDesktopPreferences(): Promise<unknown>;
+  SaveDesktopPreferences(preferences: unknown): Promise<unknown>;
 };
 
 declare global {
@@ -27,6 +30,9 @@ export function installWailsNativeShellBridge(): boolean {
   if (!app) return false;
 
   window.fseDesktopShell = {
+    inspectBundledEngineResources: () => app.InspectBundledEngineResources() as ReturnType<NativeDesktopShell['inspectBundledEngineResources']>,
+    getDesktopPreferences: () => app.GetDesktopPreferences() as ReturnType<NativeDesktopShell['getDesktopPreferences']>,
+    saveDesktopPreferences: (preferences) => app.SaveDesktopPreferences(preferences) as ReturnType<NativeDesktopShell['saveDesktopPreferences']>,
     discoverLocalDaemon: () => app.DiscoverLocalDaemon() as ReturnType<NativeDesktopShell['discoverLocalDaemon']>,
     controlLocalDaemon: (request) => app.ControlLocalDaemon(request) as ReturnType<NativeDesktopShell['controlLocalDaemon']>,
     daemonAPIRequest: (request) => app.DaemonAPIRequest(request) as ReturnType<NativeDesktopShell['daemonAPIRequest']>,

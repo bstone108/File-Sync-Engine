@@ -67,7 +67,24 @@ export type NativeDaemonAPIRequest = {
 
 export type NativeDaemonAPIResponse = { status: number; body: unknown };
 
+export type BundledEngineInspection = {
+  version: string;
+  verified: boolean;
+  message: string;
+  entries: Array<{ target: string; relativePath: string; expectedExecutable: string; expectedVersion: string; expectedSHA256: string; exists: boolean; sha256?: string; verified: boolean; message: string }>;
+};
+
+export type DesktopPreferences = {
+  theme: 'system' | 'light' | 'dark';
+  density: 'comfortable' | 'compact';
+  minimizeToTray: boolean;
+  notificationsEnabled: boolean;
+};
+
 export type NativeDesktopShell = {
+  inspectBundledEngineResources(): Promise<BundledEngineInspection>;
+  getDesktopPreferences(): Promise<DesktopPreferences>;
+  saveDesktopPreferences(preferences: DesktopPreferences): Promise<DesktopPreferences>;
   readBundledEngineResourceManifest(): Promise<BundledEngineResourceManifest>;
   observeBundledEngineResources(): Promise<BundledEngineResourceObservation[]>;
   getLocalLifecycleSettings(): Promise<BundledDaemonLifecycleSettings>;
