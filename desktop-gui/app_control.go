@@ -52,7 +52,7 @@ type NativeDaemonAPIResponse struct {
 
 var nativeProxyPaths = map[string]map[string]bool{
 	"/v1/status": {http.MethodGet: true}, "/v1/folders": {http.MethodGet: true}, "/v1/peers": {http.MethodGet: true},
-	"/v1/logs": {http.MethodGet: true}, "/v1/events": {http.MethodGet: true}, "/v1/config": {http.MethodGet: true, http.MethodPatch: true},
+	"/v1/logs": {http.MethodGet: true}, "/v1/events": {http.MethodGet: true}, "/v1/transfers": {http.MethodGet: true}, "/v1/config": {http.MethodGet: true, http.MethodPatch: true},
 	"/v1/folder-command": {http.MethodPost: true}, "/v1/peer-command": {http.MethodPost: true},
 	"/v1/discovery-command": {http.MethodPost: true}, "/v1/transfer-command": {http.MethodPost: true},
 	"/v1/maintenance/scrub": {http.MethodPost: true}, "/v1/web-gui-command": {http.MethodPost: true},

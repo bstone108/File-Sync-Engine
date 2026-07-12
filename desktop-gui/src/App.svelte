@@ -5,6 +5,7 @@
     fetchDaemonFolders,
     fetchDaemonPeers,
     fetchDaemonLogs,
+    fetchDaemonTransfers,
     fetchBackupJobs,
     fetchAPITrustStatus,
     browseFilesystemDirectories,
@@ -33,6 +34,7 @@
     type DaemonFolder,
     type DaemonPeer,
     type DaemonEvent,
+    type DaemonTransferReadModel,
     type SnapshotMarker,
     type RestorePlanResponse,
     type IdentityPairingPackage,
@@ -119,6 +121,8 @@
   let daemonFolders: DaemonFolder[] = [];
   let daemonPeers: DaemonPeer[] = [];
   let daemonEvents: DaemonEvent[] = [];
+  let daemonTransfers: DaemonTransferReadModel = { active: [], history: [], liveRatesAvailable: false, byteProgressAvailable: false };
+  let transfersMessage = 'Transfer activity has not been loaded.';
   let warningsMessage = 'Recent daemon events have not been loaded.';
   let snapshotMarkers: SnapshotMarker[] = [];
   let snapshotFolderID = '';
@@ -773,6 +777,18 @@
       warningsMessage = `Loaded ${daemonEvents.length} recent daemon event${daemonEvents.length === 1 ? '' : 's'}.`;
     } catch (error) {
       warningsMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function refreshTransfers() {
+    loading = true;
+    try {
+      daemonTransfers = await fetchDaemonTransfers(daemonConnectionSettings);
+      transfersMessage = `Loaded ${daemonTransfers.active.length} active transfer pass${daemonTransfers.active.length === 1 ? '' : 'es'} and ${daemonTransfers.history.length} recent outcome${daemonTransfers.history.length === 1 ? '' : 's'}.`;
+    } catch (error) {
+      transfersMessage = error instanceof Error ? error.message : String(error);
     } finally {
       loading = false;
     }
@@ -1818,7 +1834,30 @@
     {#if activeView === 'transfers'}
       <section class="connection-card">
         <h2>Selected-host transfers</h2>
-        <p>Transfer queue listing and live rate history are not exposed by the current daemon API. Pause, resume, and cancel controls are real and available under Daemon settings; their operation status reports accepted, completed, or actionable failure states.</p>
+        <p>The daemon exposes active transfer-pass lifecycle state and bounded recent outcomes. Pause, resume, and cancel controls remain available under Daemon settings.</p>
+        <button type="button" on:click={refreshTransfers} disabled={loading || !hasDaemonCredential}>Refresh transfer activity</button>
+        <p>{transfersMessage}</p>
+        <h3>Active transfer passes</h3>
+        {#if daemonTransfers.active.length === 0}
+          <p>No transfer pass is currently active.</p>
+        {:else}
+          <ul class="event-list" aria-label="Active transfer passes">
+            {#each daemonTransfers.active as transfer}
+              <li><strong>{transfer.folderId}</strong>{transfer.peerId ? ` · peer ${transfer.peerId}` : ' · local folder pass'} · {transfer.status}<br />{transfer.message ?? transfer.eventType}</li>
+            {/each}
+          </ul>
+        {/if}
+        <h3>Recent transfer history</h3>
+        {#if daemonTransfers.history.length === 0}
+          <p>No transfer outcomes are available since this daemon started.</p>
+        {:else}
+          <ul class="event-list" aria-label="Recent transfer history">
+            {#each daemonTransfers.history as transfer}
+              <li><strong>{transfer.folderId}</strong>{transfer.peerId ? ` · peer ${transfer.peerId}` : ' · local folder pass'} · {transfer.status} · {transfer.finishedAt ?? 'time unavailable'}<br />{transfer.message ?? transfer.eventType}</li>
+            {/each}
+          </ul>
+        {/if}
+        <p>Live byte progress and rate telemetry are not available from the daemon runtime, so this view does not invent percentages, bytes remaining, or throughput charts.</p>
       </section>
     {/if}
 

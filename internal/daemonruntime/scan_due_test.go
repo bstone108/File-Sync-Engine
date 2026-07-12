@@ -134,6 +134,8 @@ func TestProcessScanDueRunsLocalSyncAndPeerPullsWithTransferGates(t *testing.T) 
 		t.Fatalf("expected cancelled peer marker cleared, got %#v", gate.cleared)
 	}
 	assertEvent(t, publisher.events, "sync.finished", "docs", "", "targets=2 writes=3 deletes=1 moves=1 reusedBlocks=4")
+	assertEvent(t, publisher.events, "sync.started", "docs", "", "folder sync pass started")
+	assertEvent(t, publisher.events, "peer.sync.started", "docs", "peer-ok", "peer transfer pass started")
 	assertEvent(t, publisher.events, "peer.sync.finished", "docs", "peer-ok", "writes=1 deletes=1 moves=0 blocksFetched=2 blocksReused=0 routePath=direct routeNetwork=local routeReason=direct_preferred")
 	assertEvent(t, publisher.events, "peer.sync.error", "docs", "peer-error", "remote unavailable")
 	assertEvent(t, publisher.events, "transfer.cancelled", "docs", "peer-cancelled", "peer transfer pass cancelled")

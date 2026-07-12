@@ -160,6 +160,21 @@ export type DaemonEvent = {
 };
 
 export type DaemonLogsResponse = { entries: DaemonEvent[] };
+export type DaemonTransferItem = {
+  folderId: string;
+  peerId?: string;
+  status: 'active' | 'completed' | 'failed' | 'paused' | 'cancelled' | string;
+  startedAt?: string;
+  finishedAt?: string;
+  eventType: string;
+  message?: string;
+};
+export type DaemonTransferReadModel = {
+  active: DaemonTransferItem[];
+  history: DaemonTransferItem[];
+  liveRatesAvailable: boolean;
+  byteProgressAvailable: boolean;
+};
 export type SnapshotMarker = {
   id: string;
   folderId: string;
@@ -368,6 +383,10 @@ export async function queueRemoteMeshSettingsCommand(
 
 export async function fetchDaemonLogs(settings: DaemonConnectionSettings): Promise<DaemonLogsResponse> {
   return await daemonAPIRequest<DaemonLogsResponse>(settings, '/v1/logs');
+}
+
+export async function fetchDaemonTransfers(settings: DaemonConnectionSettings, limit = 50): Promise<DaemonTransferReadModel> {
+  return await daemonAPIRequest<DaemonTransferReadModel>(settings, `/v1/transfers?limit=${encodeURIComponent(String(limit))}`);
 }
 
 export async function sendSnapshotCommand(

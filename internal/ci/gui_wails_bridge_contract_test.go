@@ -46,6 +46,22 @@ func TestDesktopGUIExposesWarningsAndBackupWorkflowsThroughNativeAPI(t *testing.
 	}
 }
 
+func TestDesktopGUIExposesDaemonTransferReadModel(t *testing.T) {
+	root := filepath.Join("..", "..")
+	appSvelte := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))
+	daemonAPI := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "daemonApi.ts"))
+	nativeProxy := readRequiredFile(t, filepath.Join(root, "desktop-gui", "app_control.go"))
+	sources := appSvelte + daemonAPI + nativeProxy
+	for _, want := range []string{"fetchDaemonTransfers", `"/v1/transfers"`, "Active transfer passes", "Recent transfer history", "Live byte progress and rate telemetry are not available"} {
+		if !strings.Contains(sources, want) {
+			t.Fatalf("desktop GUI transfer read-model vertical slice missing %q", want)
+		}
+	}
+	if strings.Contains(appSvelte, "Transfer queue listing and live rate history are not exposed by the current daemon API") {
+		t.Fatal("desktop GUI still presents the transfer read model as wholly unavailable")
+	}
+}
+
 func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T) {
 	root := filepath.Join("..", "..")
 	mainTS := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "main.ts"))

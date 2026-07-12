@@ -682,6 +682,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/events", s.requireKey(s.handleEvents))
 	mux.HandleFunc("/v1/folders", s.requireKey(s.handleFolders))
 	mux.HandleFunc("/v1/peers", s.requireKey(s.handlePeers))
+	mux.HandleFunc("/v1/transfers", s.requireKey(s.handleTransfers))
 	mux.HandleFunc("/v1/maintenance/scrub", s.requireKey(s.handleMaintenanceScrub))
 	mux.HandleFunc("/v1/snapshots", s.requireKey(s.handleSnapshots))
 	mux.HandleFunc("/v1/restore-plans", s.requireKey(s.handleRestorePlans))

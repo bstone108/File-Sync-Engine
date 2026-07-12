@@ -146,6 +146,27 @@ Returns a bounded JSON snapshot of recent daemon events for GUI/log views that n
 }
 ```
 
+## Transfer activity read model
+
+```http
+GET /v1/transfers?limit=50
+```
+
+Returns the daemon's in-memory active transfer-pass lifecycle state and newest-first completed, failed, paused, or cancelled outcomes. The model is derived from real `sync.*`, `peer.sync.*`, and `transfer.*` runtime events retained since daemon startup. `limit` applies to history, defaults to 50, and must be between 1 and 100. This endpoint does not claim durable cross-restart history. `liveRatesAvailable` and `byteProgressAvailable` remain `false` until the runtime publishes measured byte progress and throughput; clients must not synthesize those values.
+
+```json
+{
+  "active": [
+    {"folderId": "docs", "peerId": "peer-b", "status": "active", "startedAt": "2026-07-12T12:00:00Z", "eventType": "peer.sync.started", "message": "peer transfer pass started"}
+  ],
+  "history": [
+    {"folderId": "photos", "status": "completed", "finishedAt": "2026-07-12T11:59:00Z", "eventType": "sync.finished", "message": "targets=1 writes=2 deletes=0 moves=0 reusedBlocks=3"}
+  ],
+  "liveRatesAvailable": false,
+  "byteProgressAvailable": false
+}
+```
+
 ## Folder state
 
 ```http

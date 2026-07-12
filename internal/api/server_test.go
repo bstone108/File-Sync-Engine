@@ -481,6 +481,52 @@ func TestEventsStreamsSnapshotJSONEventsWithAPIKey(t *testing.T) {
 	}
 }
 
+func TestTransfersReturnsCurrentScopesAndBoundedHistory(t *testing.T) {
+	server := NewServer(State{NodeName: "node-a"}, "secret")
+	server.Publish(Event{Type: "peer.sync.started", FolderID: "docs", PeerID: "peer-a", Message: "peer transfer pass started"})
+	server.Publish(Event{Type: "sync.finished", FolderID: "photos", Message: "targets=1 writes=2 deletes=0 moves=0 reusedBlocks=3"})
+	server.Publish(Event{Type: "peer.sync.finished", FolderID: "docs", PeerID: "peer-a", Message: "writes=1 deletes=0 blocksFetched=2"})
+	server.Publish(Event{Type: "peer.sync.started", FolderID: "media", PeerID: "peer-b", Message: "peer transfer pass started"})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/transfers?limit=2", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	w := httptest.NewRecorder()
+	server.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var response TransferReadModel
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode transfer read model: %v", err)
+	}
+	if response.LiveRatesAvailable || response.ByteProgressAvailable {
+		t.Fatalf("unsupported rate/byte metrics advertised: %+v", response)
+	}
+	if len(response.Active) != 1 || response.Active[0].FolderID != "media" || response.Active[0].PeerID != "peer-b" || response.Active[0].Status != "active" {
+		t.Fatalf("active transfers = %+v", response.Active)
+	}
+	if len(response.History) != 2 || response.History[0].FolderID != "docs" || response.History[0].Status != "completed" || response.History[1].FolderID != "photos" {
+		t.Fatalf("bounded newest-first history = %+v", response.History)
+	}
+}
+
+func TestTransfersRejectsInvalidLimitAndMethod(t *testing.T) {
+	server := NewServer(State{}, "secret")
+	for _, tc := range []struct {
+		method string
+		path   string
+		want   int
+	}{{http.MethodGet, "/v1/transfers?limit=0", http.StatusBadRequest}, {http.MethodPost, "/v1/transfers", http.StatusMethodNotAllowed}} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req.Header.Set("X-FSE-API-Key", "secret")
+		w := httptest.NewRecorder()
+		server.Router().ServeHTTP(w, req)
+		if w.Code != tc.want {
+			t.Fatalf("%s %s status=%d want=%d body=%s", tc.method, tc.path, w.Code, tc.want, w.Body.String())
+		}
+	}
+}
+
 func TestEventsEndpointStaysOpenForRealtimePublishes(t *testing.T) {
 	server := NewServer(State{NodeName: "node-a"}, "secret")
 	httpServer := httptest.NewServer(server.Router())

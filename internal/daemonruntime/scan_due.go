@@ -107,6 +107,7 @@ func ProcessScanDue(opts ScanDueOptions) {
 		publish(opts.Publisher, api.Event{Type: "sync.error", FolderID: opts.FolderID, Message: "sync runner is not configured"})
 		return
 	}
+	publish(opts.Publisher, api.Event{Type: "sync.started", FolderID: opts.FolderID, Message: "folder sync pass started"})
 	result, err := opts.SyncRunner.ScanDue(opts.FolderID)
 	if err != nil {
 		publish(opts.Publisher, api.Event{Type: "sync.error", FolderID: opts.FolderID, Message: err.Error()})
@@ -138,6 +139,7 @@ func processPeerPull(opts ScanDueOptions, pull peerpullplan.Pull) {
 		publish(opts.Publisher, api.Event{Type: "peer.sync.error", FolderID: opts.FolderID, PeerID: pull.PeerID, Message: "peer puller is not configured"})
 		return
 	}
+	publish(opts.Publisher, api.Event{Type: "peer.sync.started", FolderID: opts.FolderID, PeerID: pull.PeerID, Message: "peer transfer pass started"})
 	result, err := opts.PeerPuller.Pull(pull)
 	if err != nil {
 		publish(opts.Publisher, api.Event{Type: "peer.sync.error", FolderID: opts.FolderID, PeerID: pull.PeerID, Message: err.Error()})
