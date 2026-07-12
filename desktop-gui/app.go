@@ -5,10 +5,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -41,6 +44,16 @@ type GUIManagedNonServiceDaemonSession struct {
 	LaunchedAt            string `json:"launchedAt"`
 	ReconnectOnNextLaunch bool   `json:"reconnectOnNextLaunch"`
 	Message               string `json:"message"`
+	ConnectionState       string `json:"connectionState"`
+	NodeName              string `json:"nodeName,omitempty"`
+}
+
+type DaemonRuntimeState struct {
+	ConnectionState string `json:"connectionState"`
+	NodeName        string `json:"nodeName,omitempty"`
+	PID             int    `json:"pid"`
+	SessionID       string `json:"sessionID"`
+	Message         string `json:"message"`
 }
 
 type GUIOwnedNonServiceDaemonLaunchRequest struct {
@@ -54,6 +67,9 @@ type desktopNativeRuntime struct {
 	launcher           func(command string, args []string, env []string) (int, error)
 	stopClient         *http.Client
 	credentialResolver func(ref string) (string, error)
+	statusClient       *http.Client
+	probeSession       func(GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error)
+	readinessAttempts  int
 }
 
 func NewApp() *App {
@@ -83,8 +99,12 @@ func (a *App) RequestGUIOwnedNonServiceDaemonLaunch(request GUIOwnedNonServiceDa
 	}
 	if request.PreferExistingReachableDaemon {
 		if existing, err := rt.loadSession(); err == nil && existing.SessionID != "" && existing.PID > 0 {
-			existing.Message = "reconnected to existing GUI-owned non-service daemon session"
-			return existing, nil
+			if state, probeErr := rt.probe(existing); probeErr == nil {
+				existing.ConnectionState = state.ConnectionState
+				existing.NodeName = state.NodeName
+				existing.Message = "reconnected to reachable GUI-owned non-service daemon session"
+				return existing, nil
+			}
 		}
 	}
 	enginePath, err := rt.engineExecutablePath()
@@ -110,6 +130,9 @@ func (a *App) RequestGUIOwnedNonServiceDaemonLaunch(request GUIOwnedNonServiceDa
 		return GUIManagedNonServiceDaemonSession{}, err
 	}
 	args := []string{"start", configPath}
+	if err := os.WriteFile(filepath.Join(sessionDir, "api-key"), []byte(apiKey), 0o600); err != nil {
+		return GUIManagedNonServiceDaemonSession{}, err
+	}
 	pid, err := rt.launch(enginePath, args, []string{"FSE_DESKTOP_GUI_OWNED_DAEMON=1", "FSE_DESKTOP_SESSION_ID=" + sessionID})
 	if err != nil {
 		return GUIManagedNonServiceDaemonSession{}, err
@@ -129,7 +152,14 @@ func (a *App) RequestGUIOwnedNonServiceDaemonLaunch(request GUIOwnedNonServiceDa
 	if err := rt.saveSession(session); err != nil {
 		return GUIManagedNonServiceDaemonSession{}, err
 	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "api-key"), []byte(apiKey), 0o600); err != nil {
+	state, err := rt.waitUntilReachable(session)
+	if err != nil {
+		return GUIManagedNonServiceDaemonSession{}, fmt.Errorf("bundled daemon process started (PID %d) but its API did not become reachable: %w; see %s", pid, err, filepath.Join(sessionDir, "logs", "daemon.jsonl"))
+	}
+	session.ConnectionState = state.ConnectionState
+	session.NodeName = state.NodeName
+	session.Message = "Bundled daemon is running as a separate process and its encrypted API is reachable."
+	if err := rt.saveSession(session); err != nil {
 		return GUIManagedNonServiceDaemonSession{}, err
 	}
 	return session, nil
@@ -161,6 +191,17 @@ func (a *App) GetGUIOwnedNonServiceDaemonSession() (*GUIManagedNonServiceDaemonS
 	return &session, nil
 }
 
+func (a *App) GetGUIOwnedNonServiceDaemonState() (DaemonRuntimeState, error) {
+	session, err := a.desktopRuntime().loadSession()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return DaemonRuntimeState{ConnectionState: "stopped", Message: "No local daemon session is recorded."}, nil
+		}
+		return DaemonRuntimeState{}, err
+	}
+	return a.desktopRuntime().probe(session)
+}
+
 func (a *App) StopGUIOwnedNonServiceDaemonThroughAPI(sessionID string) (GUIManagedNonServiceDaemonSession, error) {
 	rt := a.desktopRuntime()
 	session, err := rt.loadSession()
@@ -182,7 +223,10 @@ func (a *App) StopGUIOwnedNonServiceDaemonThroughAPI(sessionID string) (GUIManag
 	req.Header.Set("Content-Type", "application/json")
 	client := rt.stopClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client, err = rt.clientForSession(session, 10*time.Second)
+		if err != nil {
+			return GUIManagedNonServiceDaemonSession{}, err
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -315,6 +359,75 @@ func (rt *desktopNativeRuntime) resolveAPIKey(session GUIManagedNonServiceDaemon
 	return key, nil
 }
 
+func (rt *desktopNativeRuntime) clientForSession(session GUIManagedNonServiceDaemonSession, timeout time.Duration) (*http.Client, error) {
+	pool := x509.NewCertPool()
+	cert, err := os.ReadFile(filepath.Join(session.StatePath, "api.crt"))
+	if err != nil {
+		return nil, fmt.Errorf("read daemon API certificate: %w", err)
+	}
+	if !pool.AppendCertsFromPEM(cert) {
+		return nil, errors.New("daemon API certificate is invalid")
+	}
+	return &http.Client{Timeout: timeout, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}, nil
+}
+
+func (rt *desktopNativeRuntime) waitUntilReachable(session GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error) {
+	attempts := rt.readinessAttempts
+	if attempts == 0 {
+		attempts = 40
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		state, err := rt.probe(session)
+		if err == nil {
+			return state, nil
+		}
+		lastErr = err
+		if rt.readinessAttempts == 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return DaemonRuntimeState{}, lastErr
+}
+
+func (rt *desktopNativeRuntime) probe(session GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error) {
+	if rt.probeSession != nil {
+		return rt.probeSession(session)
+	}
+	apiKey, err := rt.resolveAPIKey(session)
+	if err != nil {
+		return DaemonRuntimeState{}, err
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(session.EncryptedAPIBaseURL, "/")+"/v1/status", nil)
+	if err != nil {
+		return DaemonRuntimeState{}, err
+	}
+	req.Header.Set("X-API-Key", apiKey)
+	client := rt.statusClient
+	if client == nil {
+		client, err = rt.clientForSession(session, 2*time.Second)
+		if err != nil {
+			return DaemonRuntimeState{}, err
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return DaemonRuntimeState{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return DaemonRuntimeState{}, fmt.Errorf("daemon status request failed: HTTP %d", resp.StatusCode)
+	}
+	var body struct {
+		NodeName string `json:"nodeName"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return DaemonRuntimeState{}, fmt.Errorf("decode daemon status: %w", err)
+	}
+	return DaemonRuntimeState{ConnectionState: "running", NodeName: body.NodeName, PID: session.PID, SessionID: session.SessionID, Message: "Daemon API is reachable."}, nil
+}
+
 func runtimeTargetOS() string {
 	if runtime.GOOS == "darwin" {
 		return "darwin"
@@ -363,8 +476,8 @@ func writeGUIOwnedDaemonConfig(path, listen, apiKey, stateDir string) error {
     "apiKey": "%s",
     "encryption": {
       "mode": "manual-tls",
-      "certificatePath": "%s",
-      "privateKeyPath": "%s"
+      "certFile": "%s",
+      "keyFile": "%s"
     }
   },
   "metadata": {

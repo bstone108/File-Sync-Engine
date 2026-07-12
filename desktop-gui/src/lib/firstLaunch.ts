@@ -34,6 +34,16 @@ export type GUIManagedNonServiceDaemonSession = {
   launchedAt: string;
   reconnectOnNextLaunch: boolean;
   message: string;
+  connectionState: 'starting' | 'running' | 'stopped' | 'unreachable' | string;
+  nodeName?: string;
+};
+
+export type DaemonRuntimeState = {
+  connectionState: 'running' | 'stopped' | 'unreachable' | string;
+  nodeName?: string;
+  pid: number;
+  sessionID: string;
+  message: string;
 };
 
 export type GUIOwnedNonServiceDaemonLaunchRequest = {

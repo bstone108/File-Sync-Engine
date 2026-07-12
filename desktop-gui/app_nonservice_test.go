@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +30,9 @@ func TestRequestGUIOwnedNonServiceDaemonLaunchStartsSeparateVerifiedDaemonAndPer
 		launcher: func(command string, args []string, env []string) (int, error) {
 			started = launchRecord{command: command, args: args, env: env}
 			return 4242, nil
+		},
+		probeSession: func(GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error) {
+			return DaemonRuntimeState{ConnectionState: "running", NodeName: "desktop"}, nil
 		},
 	}
 
@@ -62,6 +68,9 @@ func TestRequestGUIOwnedNonServiceDaemonLaunchStartsSeparateVerifiedDaemonAndPer
 	configText := string(configBytes)
 	if !strings.Contains(configText, "127.0.0.1") || !strings.Contains(configText, "manual-tls") {
 		t.Fatalf("generated config does not describe local encrypted API: %s", configText)
+	}
+	if !strings.Contains(configText, `"certFile"`) || !strings.Contains(configText, `"keyFile"`) || strings.Contains(configText, `"certificatePath"`) || strings.Contains(configText, `"privateKeyPath"`) {
+		t.Fatalf("generated config does not use the daemon's real TLS config keys: %s", configText)
 	}
 	persisted, err := app.GetGUIOwnedNonServiceDaemonSession()
 	if err != nil {
@@ -128,6 +137,123 @@ func TestStopGUIOwnedNonServiceDaemonThroughAPIPostsStopAndMarksTemporarySession
 	}
 	if persisted != nil {
 		t.Fatalf("temporary session should be cleared after stop, got %#v", persisted)
+	}
+}
+
+func TestStopGUIOwnedNonServiceDaemonThroughAPITrustsPersistedSessionCertificate(t *testing.T) {
+	tmp := t.TempDir()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer server.Close()
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(filepath.Join(tmp, "api.crt"), certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "api-key"), []byte("test-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{stateRoot: filepath.Join(tmp, "state")}
+	session := GUIManagedNonServiceDaemonSession{SessionID: "tls", PID: 55, EncryptedAPIBaseURL: server.URL, StatePath: tmp, SessionMode: "temporary-session-only"}
+	if err := app.desktop.saveSession(session); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.StopGUIOwnedNonServiceDaemonThroughAPI(session.SessionID); err != nil {
+		t.Fatalf("stop with persisted certificate: %v", err)
+	}
+}
+
+func TestRequestGUIOwnedNonServiceDaemonLaunchDoesNotAdoptUnreachablePersistedSession(t *testing.T) {
+	tmp := t.TempDir()
+	engine := filepath.Join(tmp, "resources", "engine", runtimeTargetOS(), runtimeTargetArch(), runtimeExecutableName())
+	if err := os.MkdirAll(filepath.Dir(engine), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engine, []byte("engine"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launches := 0
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{
+		resourceRoot: filepath.Join(tmp, "resources", "engine"), stateRoot: filepath.Join(tmp, "state"),
+		launcher: func(string, []string, []string) (int, error) { launches++; return 5252, nil },
+		probeSession: func(session GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error) {
+			if session.PID == 99 {
+				return DaemonRuntimeState{}, errors.New("connection refused")
+			}
+			return DaemonRuntimeState{ConnectionState: "running", NodeName: "replacement"}, nil
+		},
+	}
+	stale := GUIManagedNonServiceDaemonSession{SessionID: "stale", PID: 99, EncryptedAPIBaseURL: "https://127.0.0.1:1", StatePath: tmp, SessionMode: "persistent-user-daemon", ReconnectOnNextLaunch: true}
+	if err := app.desktop.saveSession(stale); err != nil {
+		t.Fatal(err)
+	}
+	got, err := app.RequestGUIOwnedNonServiceDaemonLaunch(GUIOwnedNonServiceDaemonLaunchRequest{PreferExistingReachableDaemon: true})
+	if err != nil {
+		t.Fatalf("launch replacement: %v", err)
+	}
+	if launches != 1 || got.SessionID == stale.SessionID || got.PID != 5252 {
+		t.Fatalf("got session %#v with %d launches; stale session was incorrectly adopted", got, launches)
+	}
+}
+
+func TestRequestGUIOwnedNonServiceDaemonLaunchWaitsForReachableAPI(t *testing.T) {
+	tmp := t.TempDir()
+	engine := filepath.Join(tmp, "resources", "engine", runtimeTargetOS(), runtimeTargetArch(), runtimeExecutableName())
+	if err := os.MkdirAll(filepath.Dir(engine), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engine, []byte("engine"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probes := 0
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{
+		resourceRoot: filepath.Join(tmp, "resources", "engine"), stateRoot: filepath.Join(tmp, "state"),
+		launcher: func(string, []string, []string) (int, error) { return 6262, nil },
+		probeSession: func(GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error) {
+			probes++
+			if probes < 3 {
+				return DaemonRuntimeState{}, errors.New("starting")
+			}
+			return DaemonRuntimeState{ConnectionState: "running", NodeName: "desktop"}, nil
+		}, readinessAttempts: 3,
+	}
+	got, err := app.RequestGUIOwnedNonServiceDaemonLaunch(GUIOwnedNonServiceDaemonLaunchRequest{})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if probes != 3 || got.ConnectionState != "running" || got.NodeName != "desktop" {
+		t.Fatalf("session returned before real API readiness: probes=%d session=%#v", probes, got)
+	}
+}
+
+func TestGetGUIOwnedNonServiceDaemonStateReportsRealAPIStatus(t *testing.T) {
+	tmp := t.TempDir()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/status" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("X-API-Key") != "test-key" {
+			t.Fatalf("missing API auth")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"nodeName": "live-node", "status": "running", "folders": []any{}})
+	}))
+	defer server.Close()
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{stateRoot: tmp, statusClient: server.Client()}
+	session := GUIManagedNonServiceDaemonSession{SessionID: "live", PID: 44, EncryptedAPIBaseURL: server.URL, CredentialRef: "native://live", StatePath: tmp, SessionMode: "persistent-user-daemon"}
+	if err := os.WriteFile(filepath.Join(tmp, "api-key"), []byte("test-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.desktop.saveSession(session); err != nil {
+		t.Fatal(err)
+	}
+	state, err := app.GetGUIOwnedNonServiceDaemonState()
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if state.ConnectionState != "running" || state.NodeName != "live-node" || state.PID != 44 {
+		t.Fatalf("state = %#v", state)
 	}
 }
 

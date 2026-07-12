@@ -848,6 +848,7 @@
         });
       }
       apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
+      reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
       guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
     } catch (error) {
       try {
@@ -856,6 +857,7 @@
           preferExistingReachableDaemon: true
         });
         apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
+        reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
         guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
       } catch (launchError) {
         guiOwnedNonServiceDaemonMessage = launchError instanceof Error ? launchError.message : String(launchError);
@@ -897,6 +899,28 @@
       });
       guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
       apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
+      reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
+    } catch (error) {
+      guiOwnedNonServiceDaemonMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      lifecycleLoading = false;
+    }
+  }
+
+  async function restartLocalDaemon() {
+    lifecycleLoading = true;
+    guiOwnedNonServiceDaemonMessage = 'Restarting local engine through its API…';
+    try {
+      if (guiOwnedNonServiceDaemonSession?.pid) {
+        await stopGUIOwnedNonServiceDaemonThroughAPI(guiOwnedNonServiceDaemonSession.sessionID);
+      }
+      guiOwnedNonServiceDaemonSession = await requestGUIOwnedNonServiceDaemonLaunch({
+        sessionMode: 'persistent-user-daemon',
+        preferExistingReachableDaemon: false
+      });
+      apiBaseURL = guiOwnedNonServiceDaemonSession.encryptedApiBaseURL;
+      reflectLocalDaemonSession(guiOwnedNonServiceDaemonSession);
+      guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
     } catch (error) {
       guiOwnedNonServiceDaemonMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -914,6 +938,9 @@
     try {
       guiOwnedNonServiceDaemonSession = await stopGUIOwnedNonServiceDaemonThroughAPI(guiOwnedNonServiceDaemonSession.sessionID);
       guiOwnedNonServiceDaemonMessage = guiOwnedNonServiceDaemonSession.message;
+      managedDaemonInstances = managedDaemonInstances.map((instance) => instance.kind === 'local'
+        ? { ...instance, connectionState: 'offline', statusSummary: guiOwnedNonServiceDaemonMessage }
+        : instance);
     } catch (error) {
       guiOwnedNonServiceDaemonMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -1016,33 +1043,38 @@
 
     {#if activeView === 'overview'}
   <section class="connection-card">
-    <h1>Selected host overview</h1>
-    <p>Overview cards summarize connection, daemon health, startup/tray, and bundled lifecycle state for {selectedManagedInstance.label}.</p>
+    <span class="eyebrow">Engine status</span>
+    <h2>Local engine</h2>
+    <p class:success={guiOwnedNonServiceDaemonSession?.connectionState === 'running'}>
+      {guiOwnedNonServiceDaemonSession?.connectionState === 'running' ? 'Running and reachable' : lifecycleLoading ? 'Connecting…' : 'Stopped or unreachable'}
+    </p>
+    <p>{guiOwnedNonServiceDaemonMessage}</p>
+    {#if guiOwnedNonServiceDaemonSession}
+      <dl class="host-status-grid" aria-label="Local engine state">
+        <dt>Node</dt><dd>{guiOwnedNonServiceDaemonSession.nodeName ?? 'Starting'}</dd>
+        <dt>Process</dt><dd>{guiOwnedNonServiceDaemonSession.pid > 0 ? `PID ${guiOwnedNonServiceDaemonSession.pid}` : 'Stopped'}</dd>
+        <dt>API</dt><dd>{guiOwnedNonServiceDaemonSession.encryptedApiBaseURL}</dd>
+      </dl>
+    {/if}
+    <div class="lifecycle-actions">
+      <button type="button" on:click={ensureLocalDaemonConnection} disabled={lifecycleLoading || guiOwnedNonServiceDaemonSession?.connectionState === 'running'}>Start local engine</button>
+      <button type="button" on:click={stopGUIOwnedNonServiceDaemon} disabled={lifecycleLoading || !guiOwnedNonServiceDaemonSession?.pid}>Stop</button>
+      <button type="button" on:click={restartLocalDaemon} disabled={lifecycleLoading}>Restart connection</button>
+    </div>
+    <small>The engine runs separately and continues syncing when this window closes.</small>
   </section>
 
+  {#if selectedManagedInstance.kind === 'remote'}
   <section class="connection-card">
-    <h1>Selected host connection</h1>
-    <p>
-      This GUI talks to {selectedManagedInstance.label} through the daemon API at {selectedManagedInstance.apiBaseURL}. The selected host daemon stays independent when this window closes.
-    </p>
-    <label>
-      API URL
-      <input bind:value={apiBaseURL} name="apiBaseURL" autocomplete="off" />
-    </label>
-    <label>
-      API key
-      <input bind:value={apiKey} name="apiKey" type="password" autocomplete="off" />
-    </label>
-    <button type="button" on:click={connectToDaemon} disabled={loading || apiKey.length === 0}>
-      {loading ? 'Connecting…' : 'Connect'}
-    </button>
-    {#if errorMessage}
-      <p class="error">{errorMessage}</p>
-    {/if}
-    {#if status}
-      <pre>{JSON.stringify(status, null, 2)}</pre>
-    {/if}
+    <h2>Remote engine connection</h2>
+    <p>Connect to {selectedManagedInstance.label} through its authenticated API.</p>
+    <label>API URL<input bind:value={apiBaseURL} name="apiBaseURL" autocomplete="off" /></label>
+    <label>API key<input bind:value={apiKey} name="apiKey" type="password" autocomplete="off" /></label>
+    <button type="button" on:click={connectToDaemon} disabled={loading || apiKey.length === 0}>{loading ? 'Connecting…' : 'Connect'}</button>
+    {#if errorMessage}<p class="error">{errorMessage}</p>{/if}
+    {#if status}<pre>{JSON.stringify(status, null, 2)}</pre>{/if}
   </section>
+  {/if}
     {/if}
 
     {#if activeView === 'daemon-settings'}
@@ -1277,7 +1309,7 @@
   </section>
     {/if}
 
-    {#if activeView === 'overview'}
+    {#if activeView === 'desktop-settings'}
 
   <section class="connection-card">
     <h2>First launch daemon setup</h2>

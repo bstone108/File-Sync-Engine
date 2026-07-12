@@ -25,6 +25,9 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 		"onMount(() =>",
 		"ensureLocalDaemonConnection",
 		"preferExistingReachableDaemon: true",
+		"<h2>Local engine</h2>",
+		"Start local engine",
+		"Restart connection",
 	} {
 		if !strings.Contains(sources, want) {
 			t.Fatalf("desktop GUI Wails native-shell bridge missing %q", want)
