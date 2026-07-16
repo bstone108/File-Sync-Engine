@@ -105,7 +105,7 @@ func TestStopGUIOwnedNonServiceDaemonThroughAPIPostsStopAndMarksTemporarySession
 		if r.URL.Path != "/v1/stop" || r.Method != http.MethodPost {
 			t.Fatalf("request = %s %s, want POST /v1/stop", r.Method, r.URL.Path)
 		}
-		authHeader = r.Header.Get("X-API-Key")
+		authHeader = r.Header.Get("X-FSE-API-Key")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -126,7 +126,7 @@ func TestStopGUIOwnedNonServiceDaemonThroughAPIPostsStopAndMarksTemporarySession
 		t.Fatalf("stop returned error: %v", err)
 	}
 	if authHeader != "test-api-key" {
-		t.Fatalf("X-API-Key = %q", authHeader)
+		t.Fatalf("X-FSE-API-Key = %q", authHeader)
 	}
 	if stopped.PID != 0 || !strings.Contains(stopped.Message, "stop requested") {
 		t.Fatalf("stopped session = %#v", stopped)
@@ -233,8 +233,8 @@ func TestGetGUIOwnedNonServiceDaemonStateReportsRealAPIStatus(t *testing.T) {
 		if r.URL.Path != "/v1/status" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		if r.Header.Get("X-API-Key") != "test-key" {
-			t.Fatalf("missing API auth")
+		if r.Header.Get("X-FSE-API-Key") != "test-key" {
+			t.Fatalf("missing native daemon API auth")
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"nodeName": "live-node", "status": "running", "folders": []any{}})
 	}))

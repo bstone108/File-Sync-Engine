@@ -250,7 +250,7 @@ func (a *App) StopGUIOwnedNonServiceDaemonThroughAPI(sessionID string) (GUIManag
 	if err != nil {
 		return GUIManagedNonServiceDaemonSession{}, err
 	}
-	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("X-FSE-API-Key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	client := rt.stopClient
 	if client == nil {
@@ -433,7 +433,7 @@ func (rt *desktopNativeRuntime) probe(session GUIManagedNonServiceDaemonSession)
 	if err != nil {
 		return DaemonRuntimeState{}, err
 	}
-	req.Header.Set("X-API-Key", apiKey)
+	req.Header.Set("X-FSE-API-Key", apiKey)
 	client := rt.statusClient
 	if client == nil {
 		client, err = rt.clientForSession(session, 2*time.Second)
