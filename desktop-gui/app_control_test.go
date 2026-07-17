@@ -671,6 +671,47 @@ func TestRequestGUIOwnedNonServiceDaemonLaunchPrefersReachableInstalledService(t
 	}
 }
 
+func TestRequestGUIOwnedNonServiceDaemonLaunchStartsConfiguredServiceBeforePortableFallback(t *testing.T) {
+	startedService := false
+	portableLaunches := 0
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{
+		platform: "linux",
+		serviceCandidates: []localDaemonCandidate{{
+			ID: "systemd-user:fse", Kind: "service", Manager: "systemd-user", ServiceName: "fse",
+			APIBaseURL: "https://127.0.0.1:22420", CredentialRef: "config://key",
+		}},
+		commandRunner: func(name string, args ...string) ([]byte, error) {
+			if name != "systemctl" || strings.Join(args, " ") != "--user start fse" {
+				t.Fatalf("manager command = %s %s", name, strings.Join(args, " "))
+			}
+			startedService = true
+			return []byte("started"), nil
+		},
+		probeCandidate: func(localDaemonCandidate) (DaemonRuntimeState, error) {
+			if !startedService {
+				return DaemonRuntimeState{}, errors.New("connection refused")
+			}
+			return DaemonRuntimeState{ConnectionState: "running", NodeName: "installed-service"}, nil
+		},
+		launcher: func(string, []string, []string) (int, error) {
+			portableLaunches++
+			return 99, nil
+		},
+	}
+
+	got, err := app.RequestGUIOwnedNonServiceDaemonLaunch(GUIOwnedNonServiceDaemonLaunchRequest{PreferExistingReachableDaemon: true})
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if !startedService || portableLaunches != 0 {
+		t.Fatalf("startedService=%v portableLaunches=%d", startedService, portableLaunches)
+	}
+	if got.Kind != "service" || got.Manager != "systemd-user" || got.SessionID != "systemd-user:fse" || got.ConnectionState != "running" || got.NodeName != "installed-service" {
+		t.Fatalf("service session = %#v", got)
+	}
+}
+
 func TestDiscoverLocalDaemonPrefersReachableServiceOverPortableSession(t *testing.T) {
 	tmp := t.TempDir()
 	app := NewApp()

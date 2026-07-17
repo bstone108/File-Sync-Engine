@@ -129,6 +129,23 @@ func (a *App) RequestGUIOwnedNonServiceDaemonLaunch(request GUIOwnedNonServiceDa
 				Message: "Connected to reachable installed service daemon; no second portable daemon was started.",
 			}, nil
 		}
+		candidates := rt.serviceCandidates
+		if candidates == nil {
+			candidates = rt.defaultServiceCandidates()
+		}
+		if len(candidates) > 0 {
+			candidate := candidates[0]
+			started, err := a.ControlLocalDaemon(LocalDaemonControlRequest{Action: "start", Source: candidate.ID})
+			if err != nil {
+				return GUIManagedNonServiceDaemonSession{}, fmt.Errorf("configured local daemon service %s could not be started; portable fallback was not launched to avoid a second engine: %w", candidate.ID, err)
+			}
+			return GUIManagedNonServiceDaemonSession{
+				SessionID: started.Source, Kind: "service", Manager: started.Manager, ServiceName: started.ServiceName,
+				EncryptedAPIBaseURL: started.APIBaseURL, CredentialRef: started.CredentialRef,
+				SessionMode: "installed-service", ConnectionState: started.ConnectionState, NodeName: started.NodeName,
+				Message: "Configured installed service daemon was started and its encrypted API is reachable; no portable daemon was launched.",
+			}, nil
+		}
 		if existing, err := rt.loadSession(); err == nil && existing.SessionID != "" && existing.PID > 0 {
 			if state, probeErr := rt.probe(existing); probeErr == nil {
 				existing.ConnectionState = state.ConnectionState
