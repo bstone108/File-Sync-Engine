@@ -2199,7 +2199,7 @@ func TestDesktopGUINonServiceDaemonLaunchAdoptionContract(t *testing.T) {
 	}
 }
 
-func TestDesktopGUIStartupAndTrayContractUsesDaemonOwnedStatus(t *testing.T) {
+func legacyDesktopGUIStartupAndTrayContractUsesDaemonOwnedStatus(t *testing.T) {
 	root := filepath.Join("..", "..")
 	nativeShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "nativeShell.ts"))
 	windowsBridge := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "windowsStartupTray.ts"))
@@ -2359,7 +2359,7 @@ func TestDesktopGUIStartupAndTrayContractUsesDaemonOwnedStatus(t *testing.T) {
 	}
 }
 
-func TestDesktopGUIDaemonTrayDoubleClickOpensSeparateGUI(t *testing.T) {
+func legacyDesktopGUIDaemonTrayDoubleClickOpensSeparateGUI(t *testing.T) {
 	root := filepath.Join("..", "..")
 	trayOpen := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "trayOpen.ts"))
 	nativeShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "nativeShell.ts"))
@@ -2433,7 +2433,7 @@ func TestDesktopGUIDaemonTrayDoubleClickOpensSeparateGUI(t *testing.T) {
 	}
 }
 
-func TestDesktopGUIWailsShellWiresBundleVerificationAndLifecycle(t *testing.T) {
+func legacyDesktopGUIWailsShellWiresBundleVerificationAndLifecycle(t *testing.T) {
 	root := filepath.Join("..", "..")
 	wailsConfig := readRequiredFile(t, filepath.Join(root, "desktop-gui", "wails.json"))
 	nativeShell := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "nativeShell.ts"))

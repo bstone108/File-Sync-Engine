@@ -1,21 +1,7 @@
 import {
-  controlVerifiedBundledDaemonLifecycle,
-  verifyBundledEngineResourceManifest,
-  type BundledDaemonLifecycleAction,
-  type BundledDaemonLifecycleSettings,
-  type BundledEngineResourceManifest,
-  type BundledEngineResourceObservation,
-  type BundledEngineRuntimeGate
-} from './bundledEngine';
-import {
-  installBundledDaemonForCurrentOS as requestBundledDaemonInstall,
   adoptGUIOwnedNonServiceDaemon as adoptGUIOwnedNonServiceDaemonThroughBridge,
   requestGUIOwnedNonServiceDaemonLaunch as requestGUIOwnedNonServiceDaemonLaunchThroughBridge,
   stopGUIOwnedNonServiceDaemonThroughAPI as stopGUIOwnedNonServiceDaemonThroughAPIBridge,
-  promptForStartupAtLogin,
-  type FirstLaunchDaemonRegistrationChoice,
-  type FirstLaunchDaemonRegistrationResult,
-  type FirstLaunchDaemonRegistrationStatus,
   type GUIManagedNonServiceDaemonSession,
   type DaemonRuntimeState,
   type GUIOwnedNonServiceDaemonBridge,
@@ -28,19 +14,8 @@ import {
   type RemoteInstanceCredentialSecret
 } from './credentialVault';
 
-export type DaemonTrayStatus = {
-  daemonOwnedTray: boolean;
-  visible: boolean;
-  state: 'unknown' | 'running' | 'stopped' | 'degraded';
-  message: string;
-};
-
-export type DaemonStartupIntegrationStatus = {
-  startupEnabled: boolean;
-  platform: BundledDaemonLifecycleSettings['platform'];
-  serviceName: string;
-  message: string;
-};
+export type DaemonTrayStatus = { daemonOwnedTray: boolean; visible: boolean; state: 'unknown' | 'running' | 'stopped' | 'degraded'; message: string };
+export type DaemonStartupIntegrationStatus = { startupEnabled: boolean; platform: 'systemd' | 'launchd' | 'windows'; serviceName: string; message: string };
 
 export type LocalDaemonRuntimeState = {
   connectionState: string;
@@ -105,12 +80,13 @@ export type NativeDesktopShell = {
   onboardRemoteInstance(request: RemoteInstanceOnboardingRequest): Promise<RemoteInstanceRegistry>;
   updateRemoteInstance(request: RemoteInstanceUpdateRequest): Promise<RemoteInstanceRegistry>;
   removeRemoteInstance(request: RemoteInstanceRemovalRequest): Promise<RemoteInstanceRegistry>;
-  readBundledEngineResourceManifest(): Promise<BundledEngineResourceManifest>;
-  observeBundledEngineResources(): Promise<BundledEngineResourceObservation[]>;
-  getLocalLifecycleSettings(): Promise<BundledDaemonLifecycleSettings>;
-  getFirstLaunchDaemonRegistrationStatus(): Promise<FirstLaunchDaemonRegistrationStatus>;
+  readBundledEngineResourceManifest(): Promise<unknown>;
+  observeBundledEngineResources(): Promise<unknown[]>;
+  getLocalLifecycleSettings(): Promise<unknown>;
+  getFirstLaunchDaemonRegistrationStatus(): Promise<unknown>;
   getDaemonTrayStatus(): Promise<DaemonTrayStatus>;
   getDaemonStartupIntegrationStatus(): Promise<DaemonStartupIntegrationStatus>;
+
   discoverLocalDaemon(): Promise<LocalDaemonRuntimeState>;
   controlLocalDaemon(request: { action: 'status' | 'start' | 'stop' | 'restart'; source?: string }): Promise<LocalDaemonRuntimeState>;
   daemonAPIRequest(request: NativeDaemonAPIRequest): Promise<NativeDaemonAPIResponse>;
@@ -123,6 +99,7 @@ export type NativeDesktopShell = {
   stopGUIOwnedNonServiceDaemonThroughAPI(sessionID: string): Promise<GUIManagedNonServiceDaemonSession>;
   openGuiFromDaemonTray(): Promise<void>;
   showMainWindowFromDaemonTray(): Promise<void>;
+
   storeRemoteInstanceCredential(record: RemoteInstanceCredentialRecord, secret: RemoteInstanceCredentialSecret): Promise<RemoteInstanceCredentialRecord>;
   deleteRemoteInstanceCredential(credentialRef: string): Promise<void>;
 };
@@ -140,41 +117,6 @@ export function getNativeDesktopShell(): NativeDesktopShell {
   return window.fseDesktopShell;
 }
 
-export async function loadBundledDaemonGate(shell = getNativeDesktopShell()): Promise<BundledEngineRuntimeGate> {
-  const [manifest, observations] = await Promise.all([
-    shell.readBundledEngineResourceManifest(),
-    shell.observeBundledEngineResources()
-  ]);
-  return verifyBundledEngineResourceManifest(manifest, observations);
-}
-
-export async function runBundledDaemonLifecycle(
-  action: BundledDaemonLifecycleAction,
-  shell = getNativeDesktopShell()
-): Promise<Response> {
-  const [gate, settings] = await Promise.all([
-    loadBundledDaemonGate(shell),
-    shell.getLocalLifecycleSettings()
-  ]);
-  return await controlVerifiedBundledDaemonLifecycle(gate, settings, action);
-}
-
-export async function getFirstLaunchDaemonRegistrationStatus(
-  shell = getNativeDesktopShell()
-): Promise<FirstLaunchDaemonRegistrationStatus> {
-  return await shell.getFirstLaunchDaemonRegistrationStatus();
-}
-
-export async function installBundledDaemonForCurrentOS(
-  choice: FirstLaunchDaemonRegistrationChoice,
-  shell = getNativeDesktopShell()
-): Promise<FirstLaunchDaemonRegistrationResult> {
-  const [gate, settings] = await Promise.all([
-    loadBundledDaemonGate(shell),
-    shell.getLocalLifecycleSettings()
-  ]);
-  return await requestBundledDaemonInstall(gate, settings, choice);
-}
 
 export async function requestGUIOwnedNonServiceDaemonLaunch(
   request: GUIOwnedNonServiceDaemonLaunchRequest,
@@ -209,15 +151,7 @@ export async function stopGUIOwnedNonServiceDaemonThroughAPI(
   return await stopGUIOwnedNonServiceDaemonThroughAPIBridge(shell as GUIOwnedNonServiceDaemonBridge, sessionID);
 }
 
-export async function getDaemonTrayStatus(shell = getNativeDesktopShell()): Promise<DaemonTrayStatus> {
-  return await shell.getDaemonTrayStatus();
-}
 
-export async function getDaemonStartupIntegrationStatus(
-  shell = getNativeDesktopShell()
-): Promise<DaemonStartupIntegrationStatus> {
-  return await shell.getDaemonStartupIntegrationStatus();
-}
 
 export async function discoverLocalDaemon(shell = getNativeDesktopShell()): Promise<LocalDaemonRuntimeState> {
   return await shell.discoverLocalDaemon();
@@ -231,13 +165,6 @@ export async function controlLocalDaemon(
   return await shell.controlLocalDaemon({ action, source });
 }
 
-export async function openGuiFromDaemonTray(shell = getNativeDesktopShell()): Promise<void> {
-  await shell.openGuiFromDaemonTray();
-}
-
-export async function showMainWindowFromDaemonTray(shell = getNativeDesktopShell()): Promise<void> {
-  await shell.showMainWindowFromDaemonTray();
-}
 
 export async function storeRemoteInstanceCredential(
   record: RemoteInstanceCredentialRecord,
@@ -250,5 +177,3 @@ export async function storeRemoteInstanceCredential(
 export async function deleteRemoteInstanceCredential(credentialRef: string, shell = getNativeDesktopShell()): Promise<void> {
   await deleteCredentialThroughBridge(shell, credentialRef);
 }
-
-export { promptForStartupAtLogin };

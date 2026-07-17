@@ -45,28 +45,15 @@
   import {
     adoptGUIOwnedNonServiceDaemon,
     controlLocalDaemon,
-    getDaemonStartupIntegrationStatus,
-    getDaemonTrayStatus,
-    getFirstLaunchDaemonRegistrationStatus,
     getNativeDesktopShell,
     getGUIOwnedNonServiceDaemonSession,
     getGUIOwnedNonServiceDaemonState,
-    installBundledDaemonForCurrentOS,
-    loadBundledDaemonGate,
-    openGuiFromDaemonTray,
-    promptForStartupAtLogin,
     requestGUIOwnedNonServiceDaemonLaunch,
-    runBundledDaemonLifecycle,
-    showMainWindowFromDaemonTray,
     stopGUIOwnedNonServiceDaemonThroughAPI,
-    type DaemonStartupIntegrationStatus,
-    type DaemonTrayStatus,
     type BundledEngineInspection,
     type DesktopPreferences
   } from './lib/nativeShell';
-  import { type BundledDaemonLifecycleAction, type BundledEngineRuntimeGate } from './lib/bundledEngine';
-  import { type FirstLaunchDaemonRegistrationStatus, type GUIManagedNonServiceDaemonSession } from './lib/firstLaunch';
-  import { handleDaemonTrayOpenRequest, isDaemonTrayOpenRequest } from './lib/trayOpen';
+  import { type GUIManagedNonServiceDaemonSession } from './lib/firstLaunch';
   import {
     animatedPairingCodeDescriptor,
     animatedPairingConservativeDensityProfile,
@@ -180,18 +167,10 @@
   let pairingLoading = false;
   let errorMessage = '';
   let loading = false;
-  let bundleGate: BundledEngineRuntimeGate | null = null;
-  let bundleMessage = '';
   let lifecycleLoading = false;
-  let firstLaunchStatus: FirstLaunchDaemonRegistrationStatus | null = null;
-  let firstLaunchMessage = '';
-  let configureStartup = true;
   let guiOwnedNonServiceDaemonSession: GUIManagedNonServiceDaemonSession | null = null;
   let guiOwnedNonServiceDaemonMessage = 'No GUI-owned non-service daemon session has been launched or adopted yet.';
   let guiOwnedNonServiceDaemonMode: GUIManagedNonServiceDaemonSession['sessionMode'] = 'persistent-user-daemon';
-  let trayStatus: DaemonTrayStatus | null = null;
-  let startupIntegrationStatus: DaemonStartupIntegrationStatus | null = null;
-  let trayMessage = '';
   let localControlOperationStates: Record<LocalControlArea, LocalControlOperationState> = {
     peer: { phase: 'idle', command: 'peer', summary: 'No peer command has run yet.' },
     folder: { phase: 'idle', command: 'folder', summary: 'No folder command has run yet.' },
@@ -237,7 +216,6 @@
     scopeNote: string;
   };
 
-  const lifecycleActions: BundledDaemonLifecycleAction[] = ['status', 'start', 'stop', 'restart'];
   let activeView: DesktopUIView = 'overview';
   let managedDaemonInstances: ManagedDaemonInstance[] = ensureLocalInstanceFirst([defaultLocalDaemonInstance()]);
   let selectedInstanceID = managedDaemonInstances[0].id;
@@ -313,27 +291,6 @@
     { title: 'Maintenance, repair, and backup details', summary: 'Dedicated help/details pages explain scrub classifications, quarantine, restore, retention, and backup protection states before users run high-impact actions.' }
   ];
 
-  async function handleTrayLaunchIfRequested() {
-    const trayOpenLaunchArgument = '--open-from-tray';
-    const argv = typeof window === 'undefined'
-      ? []
-      : [window.location.href, ...(window.location.search.includes(trayOpenLaunchArgument) ? [trayOpenLaunchArgument] : [])];
-    const request = {
-      source: 'launch-argument' as const,
-      uri: typeof window !== 'undefined' && window.location.href.startsWith('fse-desktop://open')
-        ? 'fse-desktop://open' as const
-        : undefined,
-      argv,
-      boundary: 'separate GUI process' as const,
-      daemonBoundary: 'no direct daemon process launch' as const
-    };
-    if (!isDaemonTrayOpenRequest(request)) {
-      return;
-    }
-    await handleDaemonTrayOpenRequest(request, { showMainWindowFromDaemonTray });
-  }
-
-  void handleTrayLaunchIfRequested();
 
   function toggleInstanceGroup(groupName: string) {
     expandedInstanceGroups = {
@@ -991,100 +948,6 @@
     } finally { loading = false; }
   }
 
-  async function refreshBundledDaemonGate() {
-    // loadBundledDaemonGate calls verifyBundledEngineResourceManifest with native observations.
-    lifecycleLoading = true;
-    bundleMessage = '';
-    try {
-      bundleGate = await loadBundledDaemonGate();
-      bundleMessage = bundleGate.bundleVerified
-        ? `Bundled daemon verified for ${bundleGate.verified.length} targets.`
-        : bundleGate.reason;
-    } catch (error) {
-      bundleGate = null;
-      bundleMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      lifecycleLoading = false;
-    }
-  }
-
-  async function runLifecycleAction(action: BundledDaemonLifecycleAction) {
-    // runBundledDaemonLifecycle calls controlVerifiedBundledDaemonLifecycle after verification.
-    lifecycleLoading = true;
-    bundleMessage = '';
-    try {
-      const response = await runBundledDaemonLifecycle(action);
-      if (!response.ok) {
-        throw new Error(`daemon lifecycle ${action} request failed: ${response.status}`);
-      }
-      bundleMessage = `Daemon lifecycle ${action} request accepted.`;
-      bundleGate = await loadBundledDaemonGate();
-    } catch (error) {
-      bundleMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      lifecycleLoading = false;
-    }
-  }
-
-  async function checkFirstLaunchRegistration() {
-    lifecycleLoading = true;
-    firstLaunchMessage = '';
-    try {
-      firstLaunchStatus = await getFirstLaunchDaemonRegistrationStatus();
-      configureStartup = promptForStartupAtLogin(firstLaunchStatus);
-      firstLaunchMessage = firstLaunchStatus.message;
-    } catch (error) {
-      firstLaunchMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      lifecycleLoading = false;
-    }
-  }
-
-  async function registerBundledDaemon() {
-    lifecycleLoading = true;
-    firstLaunchMessage = '';
-    try {
-      const result = await installBundledDaemonForCurrentOS({ configureStartup });
-      firstLaunchMessage = result.message;
-      firstLaunchStatus = await getFirstLaunchDaemonRegistrationStatus();
-    } catch (error) {
-      firstLaunchMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      lifecycleLoading = false;
-    }
-  }
-
-  async function refreshTrayAndStartupStatus() {
-    lifecycleLoading = true;
-    trayMessage = '';
-    try {
-      [trayStatus, startupIntegrationStatus] = await Promise.all([
-        getDaemonTrayStatus(),
-        getDaemonStartupIntegrationStatus()
-      ]);
-      trayMessage = `${trayStatus.message} ${startupIntegrationStatus.message}`.trim();
-    } catch (error) {
-      trayStatus = null;
-      startupIntegrationStatus = null;
-      trayMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      lifecycleLoading = false;
-    }
-  }
-
-  async function openGuiFromTrayBridge() {
-    lifecycleLoading = true;
-    trayMessage = '';
-    try {
-      await openGuiFromDaemonTray();
-      trayMessage = 'Requested the daemon-owned tray integration to open or focus the separate GUI app.';
-    } catch (error) {
-      trayMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      lifecycleLoading = false;
-    }
-  }
-
   function reflectLocalDaemonSession(session: GUIManagedNonServiceDaemonSession) {
     localCredentialRef = session.credentialRef;
     apiKey = '';
@@ -1670,29 +1533,7 @@
     {#if activeView === 'desktop-settings'}
 
   <section class="connection-card">
-    <h2>First launch daemon setup</h2>
-    <p>
-      First launch checks whether the bundled daemon is registered for this OS, verifies the bundle, and asks whether startup/login/start-at-boot should be configured.
-    </p>
-    <button type="button" on:click={checkFirstLaunchRegistration} disabled={lifecycleLoading}>
-      Check first-launch setup
-    </button>
-    {#if firstLaunchStatus?.registrationRequired}
-      <label class="inline-choice">
-        <input type="checkbox" bind:checked={configureStartup} name="configureStartup" />
-        Configure automatic startup/login/start-at-boot
-      </label>
-      <button type="button" on:click={registerBundledDaemon} disabled={lifecycleLoading || !bundleGate?.bundleVerified}>
-        Install/register bundled daemon
-      </button>
-    {/if}
-    {#if firstLaunchMessage}
-      <p>{firstLaunchMessage}</p>
-    {/if}
-  </section>
-
-  <section class="connection-card">
-    <h2>GUI-owned non-service daemon</h2>
+    <h2>Local engine lifecycle</h2>
     <p>
       If no system/user service is installed or reachable, the GUI can ask the native shell to launch the bundled daemon as a separate non-service process, then adopt it through the same authenticated encrypted API. persistent-user-daemon mode keeps sync independent after the GUI closes; temporary-session-only mode is explicit and user-selected.
     </p>
@@ -1726,50 +1567,6 @@
         <dt>mode</dt>
         <dd>{guiOwnedNonServiceDaemonSession.sessionMode}</dd>
       </dl>
-    {/if}
-  </section>
-
-  <section class="connection-card">
-    <h2>Daemon tray and startup</h2>
-    <p>
-      The daemon/service owns the tray icon/status. This GUI only asks the native shell for daemonOwnedTray and startupEnabled status, and the daemon tray can open/focus the separate GUI without keeping the GUI resident.
-    </p>
-    <button type="button" on:click={refreshTrayAndStartupStatus} disabled={lifecycleLoading}>
-      Refresh tray/startup status
-    </button>
-    <button type="button" on:click={openGuiFromTrayBridge} disabled={lifecycleLoading || !trayStatus?.daemonOwnedTray}>
-      Simulate tray open/focus GUI
-    </button>
-    {#if trayStatus || startupIntegrationStatus}
-      <pre>{JSON.stringify({ trayStatus, startupIntegrationStatus }, null, 2)}</pre>
-    {/if}
-    {#if trayMessage}
-      <p>{trayMessage}</p>
-    {/if}
-  </section>
-
-  <section class="connection-card">
-    <h2>Bundled daemon lifecycle</h2>
-    <p>
-      Native desktop builds must verify packaged daemon resources before service lifecycle controls are enabled.
-      Commands still go through the encrypted daemon API rather than direct process control.
-    </p>
-    <button type="button" on:click={refreshBundledDaemonGate} disabled={lifecycleLoading}>
-      {lifecycleLoading ? 'Checking…' : 'Verify bundled daemon'}
-    </button>
-    <div class="lifecycle-actions">
-      {#each lifecycleActions as action}
-        <button
-          type="button"
-          on:click={() => runLifecycleAction(action)}
-          disabled={lifecycleLoading || !bundleGate?.bundleVerified}
-        >
-          {action}
-        </button>
-      {/each}
-    </div>
-    {#if bundleMessage}
-      <p class:success={bundleGate?.bundleVerified} class:error={!bundleGate?.bundleVerified}>{bundleMessage}</p>
     {/if}
   </section>
     {/if}

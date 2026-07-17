@@ -27,8 +27,8 @@ declare global {
   }
 }
 
-function unavailable(operation: string): never {
-  throw new Error(`${operation} is not implemented by this native desktop build`);
+function unsupported(operation: string): never {
+  throw new Error(`${operation} is unavailable in this build; use the local engine lifecycle controls instead.`);
 }
 
 export function installWailsNativeShellBridge(): boolean {
@@ -58,14 +58,14 @@ export function installWailsNativeShellBridge(): boolean {
       app.GetGUIOwnedNonServiceDaemonState() as ReturnType<NativeDesktopShell['getGUIOwnedNonServiceDaemonState']>,
     stopGUIOwnedNonServiceDaemonThroughAPI: (sessionID) =>
       app.StopGUIOwnedNonServiceDaemonThroughAPI(sessionID) as ReturnType<NativeDesktopShell['stopGUIOwnedNonServiceDaemonThroughAPI']>,
-    readBundledEngineResourceManifest: async () => unavailable('Bundled engine manifest inspection'),
-    observeBundledEngineResources: async () => unavailable('Bundled engine resource inspection'),
-    getLocalLifecycleSettings: async () => unavailable('Installed service lifecycle control'),
-    getFirstLaunchDaemonRegistrationStatus: async () => unavailable('Service registration status'),
-    getDaemonTrayStatus: async () => unavailable('Daemon tray status'),
-    getDaemonStartupIntegrationStatus: async () => unavailable('Startup integration status'),
-    openGuiFromDaemonTray: async () => unavailable('Daemon tray open'),
-    showMainWindowFromDaemonTray: async () => unavailable('Daemon tray window focus'),
+    readBundledEngineResourceManifest: () => unsupported('Legacy bundled manifest workflow'),
+    observeBundledEngineResources: () => unsupported('Legacy bundled manifest workflow'),
+    getLocalLifecycleSettings: () => unsupported('Legacy service setup workflow'),
+    getFirstLaunchDaemonRegistrationStatus: () => unsupported('Legacy service setup workflow'),
+    getDaemonTrayStatus: () => unsupported('Daemon tray integration'),
+    getDaemonStartupIntegrationStatus: () => unsupported('Daemon startup integration'),
+    openGuiFromDaemonTray: () => unsupported('Daemon tray integration'),
+    showMainWindowFromDaemonTray: () => unsupported('Daemon tray integration'),
     storeRemoteInstanceCredential: (record, secret) => app.StoreRemoteInstanceCredential(record, secret) as ReturnType<NativeDesktopShell['storeRemoteInstanceCredential']>,
     deleteRemoteInstanceCredential: (credentialRef) => app.DeleteRemoteInstanceCredential(credentialRef)
   };

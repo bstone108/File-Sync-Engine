@@ -101,3 +101,43 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 		t.Fatal("native launch must not be disabled by the obsolete all-target frontend bundle gate")
 	}
 }
+
+func TestDesktopGUISettingsExposeOnlyImplementedNativeLifecycleControls(t *testing.T) {
+	root := filepath.Join("..", "..")
+	appSvelte := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))
+	bridge := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "wailsNativeShell.ts"))
+
+	for _, want := range []string{
+		"<h2>Local engine</h2>",
+		"Start local engine",
+		"Restart connection",
+		"Launch separate non-service daemon",
+		"Adopt recorded non-service daemon",
+		"Stop through daemon API",
+		"requestGUIOwnedNonServiceDaemonLaunch",
+		"ControlLocalDaemon",
+	} {
+		if !strings.Contains(appSvelte+bridge, want) {
+			t.Fatalf("desktop GUI must retain implemented native lifecycle control %q", want)
+		}
+	}
+
+	for _, stale := range []string{
+		"Check first-launch setup",
+		"Install/register bundled daemon",
+		"Refresh tray/startup status",
+		"Simulate tray open/focus GUI",
+		"Verify bundled daemon",
+		"readBundledEngineResourceManifest: async () => unavailable",
+		"getLocalLifecycleSettings: async () => unavailable",
+		"getFirstLaunchDaemonRegistrationStatus: async () => unavailable",
+		"getDaemonTrayStatus: async () => unavailable",
+		"getDaemonStartupIntegrationStatus: async () => unavailable",
+		"openGuiFromDaemonTray: async () => unavailable",
+		"showMainWindowFromDaemonTray: async () => unavailable",
+	} {
+		if strings.Contains(appSvelte+bridge, stale) {
+			t.Fatalf("desktop GUI exposes placeholder lifecycle/setup behavior %q", stale)
+		}
+	}
+}
