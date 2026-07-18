@@ -113,6 +113,7 @@ stage_target_engine_resource_subset "darwin/$ARCH" "$WORK_DIR/resources/engine"
   else
     npm install
   fi
+  wails generate module
   npm run build
   FSE_DESKTOP_VERSION="$VERSION" GOOS=darwin GOARCH="$ARCH" wails build -platform darwin/$ARCH -clean
   APP_BUNDLE="$(find build/bin -maxdepth 1 -type d -name '*.app' -print -quit)"

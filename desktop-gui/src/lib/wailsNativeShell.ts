@@ -1,31 +1,24 @@
+import {
+  AdoptGUIOwnedNonServiceDaemon,
+  ControlLocalDaemon,
+  DaemonAPIRequest,
+  DeleteRemoteInstanceCredential,
+  DiscoverLocalDaemon,
+  GetDesktopPreferences,
+  GetGUIOwnedNonServiceDaemonSession,
+  GetGUIOwnedNonServiceDaemonState,
+  GetRemoteInstanceRegistry,
+  InspectBundledEngineResources,
+  OnboardRemoteInstance,
+  RemoveRemoteInstance,
+  RequestGUIOwnedNonServiceDaemonLaunch,
+  SaveDesktopPreferences,
+  SelectRemoteInstance,
+  StopGUIOwnedNonServiceDaemonThroughAPI,
+  StoreRemoteInstanceCredential,
+  UpdateRemoteInstance
+} from "../../wailsjs/go/main/App";
 import type { NativeDesktopShell } from './nativeShell';
-
-type WailsAppBindings = {
-  RequestGUIOwnedNonServiceDaemonLaunch(request: unknown): Promise<unknown>;
-  AdoptGUIOwnedNonServiceDaemon(sessionID: string): Promise<unknown>;
-  GetGUIOwnedNonServiceDaemonSession(): Promise<unknown>;
-  GetGUIOwnedNonServiceDaemonState(): Promise<unknown>;
-  StopGUIOwnedNonServiceDaemonThroughAPI(sessionID: string): Promise<unknown>;
-  DiscoverLocalDaemon(): Promise<unknown>;
-  ControlLocalDaemon(request: unknown): Promise<unknown>;
-  DaemonAPIRequest(request: unknown): Promise<unknown>;
-  InspectBundledEngineResources(): Promise<unknown>;
-  GetDesktopPreferences(): Promise<unknown>;
-  SaveDesktopPreferences(preferences: unknown): Promise<unknown>;
-  GetRemoteInstanceRegistry(): Promise<unknown>;
-  SelectRemoteInstance(request: unknown): Promise<unknown>;
-  OnboardRemoteInstance(request: unknown): Promise<unknown>;
-  UpdateRemoteInstance(request: unknown): Promise<unknown>;
-  RemoveRemoteInstance(request: unknown): Promise<unknown>;
-  StoreRemoteInstanceCredential(record: unknown, secret: unknown): Promise<unknown>;
-  DeleteRemoteInstanceCredential(credentialRef: string): Promise<void>;
-};
-
-declare global {
-  interface Window {
-    go?: { main?: { App?: WailsAppBindings } };
-  }
-}
 
 function unsupported(operation: string): never {
   throw new Error(`${operation} is unavailable in this build; use the local engine lifecycle controls instead.`);
@@ -33,31 +26,29 @@ function unsupported(operation: string): never {
 
 export function installWailsNativeShellBridge(): boolean {
   if (window.fseDesktopShell) return true;
-  const app = window.go?.main?.App;
-  if (!app) return false;
 
   window.fseDesktopShell = {
-    inspectBundledEngineResources: () => app.InspectBundledEngineResources() as ReturnType<NativeDesktopShell['inspectBundledEngineResources']>,
-    getDesktopPreferences: () => app.GetDesktopPreferences() as ReturnType<NativeDesktopShell['getDesktopPreferences']>,
-    saveDesktopPreferences: (preferences) => app.SaveDesktopPreferences(preferences) as ReturnType<NativeDesktopShell['saveDesktopPreferences']>,
-    getRemoteInstanceRegistry: () => app.GetRemoteInstanceRegistry() as ReturnType<NativeDesktopShell['getRemoteInstanceRegistry']>,
-    selectRemoteInstance: (request) => app.SelectRemoteInstance(request) as ReturnType<NativeDesktopShell['selectRemoteInstance']>,
-    onboardRemoteInstance: (request) => app.OnboardRemoteInstance(request) as ReturnType<NativeDesktopShell['onboardRemoteInstance']>,
-    updateRemoteInstance: (request) => app.UpdateRemoteInstance(request) as ReturnType<NativeDesktopShell['updateRemoteInstance']>,
-    removeRemoteInstance: (request) => app.RemoveRemoteInstance(request) as ReturnType<NativeDesktopShell['removeRemoteInstance']>,
-    discoverLocalDaemon: () => app.DiscoverLocalDaemon() as ReturnType<NativeDesktopShell['discoverLocalDaemon']>,
-    controlLocalDaemon: (request) => app.ControlLocalDaemon(request) as ReturnType<NativeDesktopShell['controlLocalDaemon']>,
-    daemonAPIRequest: (request) => app.DaemonAPIRequest(request) as ReturnType<NativeDesktopShell['daemonAPIRequest']>,
+    inspectBundledEngineResources: () => InspectBundledEngineResources() as ReturnType<NativeDesktopShell['inspectBundledEngineResources']>,
+    getDesktopPreferences: () => GetDesktopPreferences() as ReturnType<NativeDesktopShell['getDesktopPreferences']>,
+    saveDesktopPreferences: (preferences) => SaveDesktopPreferences(preferences) as ReturnType<NativeDesktopShell['saveDesktopPreferences']>,
+    getRemoteInstanceRegistry: () => GetRemoteInstanceRegistry() as ReturnType<NativeDesktopShell['getRemoteInstanceRegistry']>,
+    selectRemoteInstance: (request) => SelectRemoteInstance(request) as ReturnType<NativeDesktopShell['selectRemoteInstance']>,
+    onboardRemoteInstance: (request) => OnboardRemoteInstance(request as unknown as Parameters<typeof OnboardRemoteInstance>[0]) as ReturnType<NativeDesktopShell['onboardRemoteInstance']>,
+    updateRemoteInstance: (request) => UpdateRemoteInstance(request) as ReturnType<NativeDesktopShell['updateRemoteInstance']>,
+    removeRemoteInstance: (request) => RemoveRemoteInstance(request) as ReturnType<NativeDesktopShell['removeRemoteInstance']>,
+    discoverLocalDaemon: () => DiscoverLocalDaemon() as ReturnType<NativeDesktopShell['discoverLocalDaemon']>,
+    controlLocalDaemon: (request) => ControlLocalDaemon(request) as ReturnType<NativeDesktopShell['controlLocalDaemon']>,
+    daemonAPIRequest: (request) => DaemonAPIRequest(request as unknown as Parameters<typeof DaemonAPIRequest>[0]) as ReturnType<NativeDesktopShell['daemonAPIRequest']>,
     requestGUIOwnedNonServiceDaemonLaunch: (request) =>
-      app.RequestGUIOwnedNonServiceDaemonLaunch(request) as ReturnType<NativeDesktopShell['requestGUIOwnedNonServiceDaemonLaunch']>,
+      RequestGUIOwnedNonServiceDaemonLaunch(request) as ReturnType<NativeDesktopShell['requestGUIOwnedNonServiceDaemonLaunch']>,
     adoptGUIOwnedNonServiceDaemon: (sessionID) =>
-      app.AdoptGUIOwnedNonServiceDaemon(sessionID) as ReturnType<NativeDesktopShell['adoptGUIOwnedNonServiceDaemon']>,
+      AdoptGUIOwnedNonServiceDaemon(sessionID) as ReturnType<NativeDesktopShell['adoptGUIOwnedNonServiceDaemon']>,
     getGUIOwnedNonServiceDaemonSession: () =>
-      app.GetGUIOwnedNonServiceDaemonSession() as ReturnType<NativeDesktopShell['getGUIOwnedNonServiceDaemonSession']>,
+      GetGUIOwnedNonServiceDaemonSession() as ReturnType<NativeDesktopShell['getGUIOwnedNonServiceDaemonSession']>,
     getGUIOwnedNonServiceDaemonState: () =>
-      app.GetGUIOwnedNonServiceDaemonState() as ReturnType<NativeDesktopShell['getGUIOwnedNonServiceDaemonState']>,
+      GetGUIOwnedNonServiceDaemonState() as ReturnType<NativeDesktopShell['getGUIOwnedNonServiceDaemonState']>,
     stopGUIOwnedNonServiceDaemonThroughAPI: (sessionID) =>
-      app.StopGUIOwnedNonServiceDaemonThroughAPI(sessionID) as ReturnType<NativeDesktopShell['stopGUIOwnedNonServiceDaemonThroughAPI']>,
+      StopGUIOwnedNonServiceDaemonThroughAPI(sessionID) as ReturnType<NativeDesktopShell['stopGUIOwnedNonServiceDaemonThroughAPI']>,
     readBundledEngineResourceManifest: () => unsupported('Legacy bundled manifest workflow'),
     observeBundledEngineResources: () => unsupported('Legacy bundled manifest workflow'),
     getLocalLifecycleSettings: () => unsupported('Legacy service setup workflow'),
@@ -66,8 +57,8 @@ export function installWailsNativeShellBridge(): boolean {
     getDaemonStartupIntegrationStatus: () => unsupported('Daemon startup integration'),
     openGuiFromDaemonTray: () => unsupported('Daemon tray integration'),
     showMainWindowFromDaemonTray: () => unsupported('Daemon tray integration'),
-    storeRemoteInstanceCredential: (record, secret) => app.StoreRemoteInstanceCredential(record, secret) as ReturnType<NativeDesktopShell['storeRemoteInstanceCredential']>,
-    deleteRemoteInstanceCredential: (credentialRef) => app.DeleteRemoteInstanceCredential(credentialRef)
+    storeRemoteInstanceCredential: (record, secret) => StoreRemoteInstanceCredential(record, secret) as ReturnType<NativeDesktopShell['storeRemoteInstanceCredential']>,
+    deleteRemoteInstanceCredential: (credentialRef) => DeleteRemoteInstanceCredential(credentialRef)
   };
   return true;
 }

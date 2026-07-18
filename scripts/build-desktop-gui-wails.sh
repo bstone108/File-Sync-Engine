@@ -368,6 +368,7 @@ FALLBACKGO
         test -s "$macos_dir/fse-desktop"
       }
 
+      wails generate module
       npm run build
       wails_build_failed=0
       if [ -n "${FSE_DESKTOP_WAILS_TAGS:-}" ]; then

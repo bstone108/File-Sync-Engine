@@ -72,7 +72,7 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 	sources := mainTS + bridge + appSvelte + daemonAPI
 	for _, want := range []string{
 		"installWailsNativeShellBridge();",
-		"window.go?.main?.App",
+		`from "../../wailsjs/go/main/App"`,
 		"window.fseDesktopShell",
 		"RequestGUIOwnedNonServiceDaemonLaunch",
 		"AdoptGUIOwnedNonServiceDaemon",
@@ -99,6 +99,40 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 	}
 	if strings.Contains(appSvelte, "on:click={launchGUIOwnedNonServiceDaemon} disabled={lifecycleLoading || !bundleGate?.bundleVerified}") {
 		t.Fatal("native launch must not be disabled by the obsolete all-target frontend bundle gate")
+	}
+}
+
+func TestDesktopGUIWailsBridgeUsesGeneratedBindingsInsteadOfOptionalWindowGlobals(t *testing.T) {
+	root := filepath.Join("..", "..")
+	bridge := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "wailsNativeShell.ts"))
+	isolatedBuild := readRequiredFile(t, filepath.Join(root, "scripts", "build-desktop-gui-wails.sh"))
+	nativeMacBuild := readRequiredFile(t, filepath.Join(root, "scripts", "build-desktop-gui-wails-native-macos.sh"))
+	builderDockerfile := readRequiredFile(t, filepath.Join(root, "development", "desktop-wails-builder", "Dockerfile"))
+
+	for _, want := range []string{
+		`from "../../wailsjs/go/main/App"`,
+		"RequestGUIOwnedNonServiceDaemonLaunch",
+		"DiscoverLocalDaemon",
+		"DaemonAPIRequest",
+	} {
+		if !strings.Contains(bridge, want) {
+			t.Fatalf("desktop GUI bridge must call generated Wails binding %q", want)
+		}
+	}
+	if strings.Contains(bridge, "window.go?.main?.App") {
+		t.Fatal("desktop GUI bridge must not rely on the optional window.go global namespace")
+	}
+	for name, script := range map[string]string{"isolated Wails build": isolatedBuild, "native macOS Wails build": nativeMacBuild} {
+		generate := strings.Index(script, "wails generate module")
+		frontendBuild := strings.Index(script, "npm run build")
+		if generate < 0 || frontendBuild < 0 || generate > frontendBuild {
+			t.Fatalf("%s must generate Wails frontend bindings before the frontend build", name)
+		}
+	}
+	for _, want := range []string{"FROM node:22-bookworm AS node-runtime", "COPY --from=node-runtime", "/usr/local/bin/node"} {
+		if !strings.Contains(builderDockerfile, want) {
+			t.Fatalf("desktop Wails builder must provide the supported Node 22 frontend runtime: missing %q", want)
+		}
 	}
 }
 
