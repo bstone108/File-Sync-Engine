@@ -71,6 +71,8 @@ IMAGE="${FSE_DESKTOP_WAILS_BUILDER_IMAGE:-}"
 RUNTIME="${FSE_DESKTOP_CONTAINER_RUNTIME:-docker}"
 TARGETS="${FSE_DESKTOP_WAILS_TARGETS:-linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64}"
 LINUX_WEBKIT_API="${FSE_DESKTOP_LINUX_WEBKIT_API:-4.1}"
+REQUIRED_WAILS_BUILDER_GO_VERSION=1.25.7
+REQUIRED_WAILS_BUILDER_NODE_MAJOR=22
 NETWORK_ARGS=()
 if [[ -n "${FSE_DESKTOP_CONTAINER_NETWORK:-}" ]]; then
   NETWORK_ARGS+=(--network "${FSE_DESKTOP_CONTAINER_NETWORK}")
@@ -159,6 +161,17 @@ image_inspect_architecture() {
   "$RUNTIME" image inspect --format '{{.Architecture}}' "$image"
 }
 
+verify_builder_image_runtime_labels() {
+  local image="$1"
+  local labels
+  labels="$($RUNTIME image inspect --format '{{json .Config.Labels}}' "$image")"
+  if [[ "$labels" != *"\"org.filesyncengine.desktop.wails.go-version\":\"$REQUIRED_WAILS_BUILDER_GO_VERSION\""* || "$labels" != *"\"org.filesyncengine.desktop.wails.node-major\":\"$REQUIRED_WAILS_BUILDER_NODE_MAJOR\""* ]]; then
+    printf 'stale or incompatible Wails builder image: %s\n' "$image" >&2
+    printf 'Expected labels: Go %s and Node major %s. Rebuild it with scripts/build-desktop-wails-builder-image.sh before building desktop artifacts.\n' "$REQUIRED_WAILS_BUILDER_GO_VERSION" "$REQUIRED_WAILS_BUILDER_NODE_MAJOR" >&2
+    return 1
+  fi
+}
+
 host_architecture() {
   case "$(uname -m)" in
     x86_64|amd64) printf '%s' amd64 ;;
@@ -208,6 +221,7 @@ for platform in $TARGETS; do
     printf 'Build/select the isolated builder image first; no host build tooling will be installed by this script.\n' >&2
     exit 1
   fi
+  verify_builder_image_runtime_labels "$image"
   image_arch="$(image_inspect_architecture "$image")"
   require_non_emulated_target_run "$platform" "$image_arch" "$(host_architecture)"
   RUN_PLATFORM_ARGS=()

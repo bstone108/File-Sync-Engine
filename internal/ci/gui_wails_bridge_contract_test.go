@@ -136,6 +136,32 @@ func TestDesktopGUIWailsBridgeUsesGeneratedBindingsInsteadOfOptionalWindowGlobal
 	}
 }
 
+func TestDesktopGUIWailsBuildRejectsStaleBuilderImagesBeforeWindowsArtifactBuild(t *testing.T) {
+	root := filepath.Join("..", "..")
+	dockerfile := readRequiredFile(t, filepath.Join(root, "development", "desktop-wails-builder", "Dockerfile"))
+	isolatedBuild := readRequiredFile(t, filepath.Join(root, "scripts", "build-desktop-gui-wails.sh"))
+	imageBuild := readRequiredFile(t, filepath.Join(root, "scripts", "build-desktop-wails-builder-image.sh"))
+
+	for _, want := range []string{
+		`org.filesyncengine.desktop.wails.go-version="1.25.7"`,
+		`org.filesyncengine.desktop.wails.node-major="22"`,
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Fatalf("desktop Wails builder image must declare its runtime compatibility label %q", want)
+		}
+	}
+	for _, want := range []string{
+		"REQUIRED_WAILS_BUILDER_GO_VERSION=1.25.7",
+		"REQUIRED_WAILS_BUILDER_NODE_MAJOR=22",
+		"verify_builder_image_runtime_labels",
+		"stale or incompatible Wails builder image",
+	} {
+		if !strings.Contains(isolatedBuild+imageBuild, want) {
+			t.Fatalf("desktop Wails build scripts must reject stale builder images before artifact builds: missing %q", want)
+		}
+	}
+}
+
 func TestDesktopGUISettingsExposeOnlyImplementedNativeLifecycleControls(t *testing.T) {
 	root := filepath.Join("..", "..")
 	appSvelte := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))

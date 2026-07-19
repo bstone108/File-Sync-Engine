@@ -41,6 +41,8 @@ IMAGE_TAG="${1:-fse-desktop-wails-builder:debian12-wails2.10.2}"
 RUNTIME="${FSE_DESKTOP_CONTAINER_RUNTIME:-docker}"
 CACHE_ROOT="/development/fse-desktop-wails-builder-cache"
 DOCKERFILE_INPUT="${FSE_DESKTOP_WAILS_BUILDER_DOCKERFILE:-development/desktop-wails-builder/Dockerfile}"
+REQUIRED_WAILS_BUILDER_GO_VERSION=1.25.7
+REQUIRED_WAILS_BUILDER_NODE_MAJOR=22
 if [[ "$DOCKERFILE_INPUT" = /* ]]; then
   DOCKERFILE="$DOCKERFILE_INPUT"
 else
@@ -72,6 +74,17 @@ EOF
     exit 1
   fi
 fi
+
+verify_builder_image_runtime_labels() {
+  local labels
+  labels="$($RUNTIME image inspect --format '{{json .Config.Labels}}' "$IMAGE_TAG")"
+  if [[ "$labels" != *"\"org.filesyncengine.desktop.wails.go-version\":\"$REQUIRED_WAILS_BUILDER_GO_VERSION\""* || "$labels" != *"\"org.filesyncengine.desktop.wails.node-major\":\"$REQUIRED_WAILS_BUILDER_NODE_MAJOR\""* ]]; then
+    printf 'stale or incompatible Wails builder image: %s\n' "$IMAGE_TAG" >&2
+    printf 'Expected labels: Go %s and Node major %s.\n' "$REQUIRED_WAILS_BUILDER_GO_VERSION" "$REQUIRED_WAILS_BUILDER_NODE_MAJOR" >&2
+    return 1
+  fi
+}
+
 mkdir -p "$CACHE_ROOT"
 
 # With the default runtime this executes as: docker build --tag "$IMAGE_TAG" ...
@@ -79,6 +92,8 @@ mkdir -p "$CACHE_ROOT"
   --tag "$IMAGE_TAG" \
   --file "$DOCKERFILE" \
   "$(dirname "$DOCKERFILE")"
+
+verify_builder_image_runtime_labels
 
 cat <<EOF
 Built isolated desktop GUI Wails builder image: $IMAGE_TAG

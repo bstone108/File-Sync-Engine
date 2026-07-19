@@ -13,6 +13,11 @@ COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 ARG DEBIAN_FRONTEND=noninteractive
 ARG WAILS_VERSION=v2.10.2
 
+# Build scripts reject a cached image without these labels instead of silently
+# compiling a current desktop source tree with an obsolete Go/Node runtime.
+LABEL org.filesyncengine.desktop.wails.go-version="1.25.7" \
+      org.filesyncengine.desktop.wails.node-major="22"
+
 # Linux GUI/WebKit dependencies, Node 22 frontend tooling, Go, and Windows cross compilers.
 # Darwin targets are listed in the build contract but still require a compatible Apple SDK/osxcross
 # layer supplied by the isolated builder environment before real macOS outputs can be produced.
