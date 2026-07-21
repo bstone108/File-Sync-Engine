@@ -227,6 +227,42 @@ func TestRequestGUIOwnedNonServiceDaemonLaunchWaitsForReachableAPI(t *testing.T)
 	}
 }
 
+func TestRequestGUIOwnedNonServiceDaemonLaunchCleansUpFailedStartupBeforeReturning(t *testing.T) {
+	tmp := t.TempDir()
+	engine := filepath.Join(tmp, "resources", "engine", runtimeTargetOS(), runtimeTargetArch(), runtimeExecutableName())
+	if err := os.MkdirAll(filepath.Dir(engine), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engine, []byte("engine"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	terminatedPID := 0
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{
+		resourceRoot: filepath.Join(tmp, "resources", "engine"),
+		stateRoot:    filepath.Join(tmp, "state"),
+		launcher:     func(string, []string, []string) (int, error) { return 7373, nil },
+		terminateProcess: func(pid int) error {
+			terminatedPID = pid
+			return nil
+		},
+		probeSession: func(GUIManagedNonServiceDaemonSession) (DaemonRuntimeState, error) {
+			return DaemonRuntimeState{}, errors.New("connection refused")
+		},
+		readinessAttempts: 1,
+	}
+
+	if _, err := app.RequestGUIOwnedNonServiceDaemonLaunch(GUIOwnedNonServiceDaemonLaunchRequest{}); err == nil || !strings.Contains(err.Error(), "did not become reachable") {
+		t.Fatalf("expected actionable readiness error, got %v", err)
+	}
+	if session, err := app.GetGUIOwnedNonServiceDaemonSession(); err != nil || session != nil {
+		t.Fatalf("failed startup must not remain reconnectable: session=%#v err=%v", session, err)
+	}
+	if terminatedPID != 7373 {
+		t.Fatalf("failed startup did not terminate the owned daemon process: pid=%d", terminatedPID)
+	}
+}
+
 func TestGetGUIOwnedNonServiceDaemonStateReportsRealAPIStatus(t *testing.T) {
 	tmp := t.TempDir()
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

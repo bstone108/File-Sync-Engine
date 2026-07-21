@@ -77,6 +77,7 @@ type desktopNativeRuntime struct {
 	stateRoot             string
 	platform              string
 	launcher              func(command string, args []string, env []string) (int, error)
+	terminateProcess      func(pid int) error
 	commandRunner         func(name string, args ...string) ([]byte, error)
 	stopClient            *http.Client
 	apiClient             *http.Client
@@ -202,7 +203,10 @@ func (a *App) RequestGUIOwnedNonServiceDaemonLaunch(request GUIOwnedNonServiceDa
 	}
 	state, err := rt.waitUntilReachable(session)
 	if err != nil {
-		return GUIManagedNonServiceDaemonSession{}, fmt.Errorf("bundled daemon process started (PID %d) but its API did not become reachable: %w; see %s", pid, err, filepath.Join(sessionDir, "logs", "daemon.jsonl"))
+		if cleanupErr := rt.cleanupFailedGUIOwnedDaemonStart(session); cleanupErr != nil {
+			return GUIManagedNonServiceDaemonSession{}, fmt.Errorf("bundled daemon process started (PID %d) but its API did not become reachable: %w; automatic cleanup failed: %v; see %s", pid, err, cleanupErr, filepath.Join(sessionDir, "logs", "daemon.jsonl"))
+		}
+		return GUIManagedNonServiceDaemonSession{}, fmt.Errorf("bundled daemon process started (PID %d) but its API did not become reachable: %w; the failed process was stopped and its session was cleared, so retrying Start local engine is safe; see %s", pid, err, filepath.Join(sessionDir, "logs", "daemon.jsonl"))
 	}
 	session.ConnectionState = state.ConnectionState
 	session.NodeName = state.NodeName
@@ -388,6 +392,29 @@ func (rt *desktopNativeRuntime) clearSession() error {
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	return nil
+}
+
+func (rt *desktopNativeRuntime) cleanupFailedGUIOwnedDaemonStart(session GUIManagedNonServiceDaemonSession) error {
+	if session.PID <= 0 {
+		return errors.New("failed daemon start has no process ID")
+	}
+	if rt.terminateProcess != nil {
+		if err := rt.terminateProcess(session.PID); err != nil {
+			return fmt.Errorf("stop failed daemon process: %w", err)
+		}
+	} else {
+		process, err := os.FindProcess(session.PID)
+		if err != nil {
+			return fmt.Errorf("find failed daemon process: %w", err)
+		}
+		if err := process.Kill(); err != nil {
+			return fmt.Errorf("stop failed daemon process: %w", err)
+		}
+	}
+	if err := rt.clearSession(); err != nil {
+		return fmt.Errorf("clear failed daemon session: %w", err)
 	}
 	return nil
 }
