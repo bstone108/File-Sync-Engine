@@ -81,6 +81,25 @@ func TestRequestGUIOwnedNonServiceDaemonLaunchStartsSeparateVerifiedDaemonAndPer
 	}
 }
 
+func TestDesktopRuntimeUsesSiblingEngineDirectoryForPackagedGUI(t *testing.T) {
+	tmp := t.TempDir()
+	executable := filepath.Join(tmp, "app", "fse-desktop.exe")
+	engineRoot := filepath.Join(tmp, "engine")
+	if err := os.MkdirAll(engineRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("desktop"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := desktopEngineResourceRootForExecutable(executable); got != engineRoot {
+		t.Fatalf("packaged engine root = %q, want sibling %q", got, engineRoot)
+	}
+}
+
 func TestAdoptGUIOwnedNonServiceDaemonReturnsPersistedSessionByID(t *testing.T) {
 	tmp := t.TempDir()
 	app := NewApp()

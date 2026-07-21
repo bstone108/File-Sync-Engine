@@ -516,13 +516,9 @@ func defaultDesktopPreferences() DesktopPreferences {
 }
 
 func (a *App) InspectBundledEngineResources() (BundledEngineInspection, error) {
-	root := a.desktopRuntime().resourceRoot
-	if root == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			return BundledEngineInspection{}, err
-		}
-		root = filepath.Join(filepath.Dir(exe), "resources", "engine")
+	root, err := a.desktopRuntime().engineResourceRoot()
+	if err != nil {
+		return BundledEngineInspection{}, err
 	}
 	data, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {

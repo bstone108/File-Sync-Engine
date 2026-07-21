@@ -322,15 +322,31 @@ func (rt *desktopNativeRuntime) launch(command string, args []string, env []stri
 }
 
 func (rt *desktopNativeRuntime) engineExecutablePath() (string, error) {
-	root := rt.resourceRoot
-	if root == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			return "", err
-		}
-		root = filepath.Join(filepath.Dir(exe), "resources", "engine")
+	root, err := rt.engineResourceRoot()
+	if err != nil {
+		return "", err
 	}
 	return filepath.Join(root, runtimeTargetOS(), runtimeTargetArch(), runtimeExecutableName()), nil
+}
+
+func (rt *desktopNativeRuntime) engineResourceRoot() (string, error) {
+	if rt.resourceRoot != "" {
+		return rt.resourceRoot, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return desktopEngineResourceRootForExecutable(exe), nil
+}
+
+func desktopEngineResourceRootForExecutable(executable string) string {
+	appDirectory := filepath.Dir(executable)
+	packagedRoot := filepath.Clean(filepath.Join(appDirectory, "..", "engine"))
+	if info, err := os.Stat(packagedRoot); err == nil && info.IsDir() {
+		return packagedRoot
+	}
+	return filepath.Join(appDirectory, "resources", "engine")
 }
 
 func (rt *desktopNativeRuntime) ensureStateRoot() (string, error) {
