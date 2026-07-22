@@ -46,6 +46,27 @@ func TestDesktopGUIExposesWarningsAndBackupWorkflowsThroughNativeAPI(t *testing.
 	}
 }
 
+func TestDesktopGUIFetchesBackupJobsWithDaemonSupportedGETRoute(t *testing.T) {
+	root := filepath.Join("..", "..")
+	daemonAPI := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "daemonApi.ts"))
+	nativeProxy := readRequiredFile(t, filepath.Join(root, "desktop-gui", "app_control.go"))
+
+	start := strings.Index(daemonAPI, "export async function fetchBackupJobs")
+	if start < 0 {
+		t.Fatal("desktop daemon API helper must expose fetchBackupJobs")
+	}
+	function := daemonAPI[start:]
+	if end := strings.Index(function, "\n}"); end >= 0 {
+		function = function[:end+2]
+	}
+	if !strings.Contains(function, "const query = snapshotId.trim() ? `?snapshotId=${encodeURIComponent(snapshotId.trim())}` : '';") || !strings.Contains(function, "daemonAPIRequest<BackupJobsResponse>(settings, `/v1/backup/jobs${query}`)") || strings.Contains(function, "method: 'POST'") {
+		t.Fatalf("backup jobs must use the daemon-supported GET route, got %s", function)
+	}
+	if !strings.Contains(nativeProxy, `"/v1/backup/jobs": {http.MethodGet: true}`) {
+		t.Fatal("native daemon proxy must allow GET /v1/backup/jobs")
+	}
+}
+
 func TestDesktopGUIExposesDaemonTransferReadModel(t *testing.T) {
 	root := filepath.Join("..", "..")
 	appSvelte := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))

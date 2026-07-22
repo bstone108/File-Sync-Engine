@@ -419,5 +419,6 @@ export async function runBackupScrub(settings: DaemonConnectionSettings): Promis
 }
 
 export async function fetchBackupJobs(settings: DaemonConnectionSettings, snapshotId = ''): Promise<BackupJobsResponse> {
-  return await daemonAPIRequest<BackupJobsResponse>(settings, '/v1/backup/jobs', { method: 'POST', body: jsonBody({ snapshotId: snapshotId || undefined }) });
+  const query = snapshotId.trim() ? `?snapshotId=${encodeURIComponent(snapshotId.trim())}` : '';
+  return await daemonAPIRequest<BackupJobsResponse>(settings, `/v1/backup/jobs${query}`);
 }

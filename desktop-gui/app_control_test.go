@@ -864,3 +864,28 @@ func TestDaemonAPIProxyPreservesDaemonErrorMessage(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestDaemonAPIProxyUsesGETForBackupJobsReadModel(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/backup/jobs" {
+			t.Fatalf("request = %s %s, want GET /v1/backup/jobs", r.Method, r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"restoreJobs":[],"retentionJobs":[],"repairJobs":[]}`)
+	}))
+	defer server.Close()
+
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{
+		apiClient:          server.Client(),
+		credentialResolver: func(string) (string, error) { return "native-only-secret", nil },
+	}
+	response, err := app.DaemonAPIRequest(NativeDaemonAPIRequest{
+		APIBaseURL: server.URL, CredentialRef: "native://local", Method: http.MethodGet, Path: "/v1/backup/jobs",
+	})
+	if err != nil {
+		t.Fatalf("backup jobs proxy: %v", err)
+	}
+	if !json.Valid(response.Body) || strings.Contains(string(response.Body), "native-only-secret") {
+		t.Fatalf("unexpected proxy response: %s", response.Body)
+	}
+}
