@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -765,6 +766,38 @@ func TestControlLocalDaemonRunsPlatformManagerAndReturnsRefreshedStatus(t *testi
 	}
 	if got.ConnectionState != "running" {
 		t.Fatalf("status = %#v", got)
+	}
+}
+
+func TestControlLocalDaemonRestartsWindowsServiceWithStopThenStart(t *testing.T) {
+	var commands [][]string
+	probed := false
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{
+		platform: "windows",
+		serviceCandidates: []localDaemonCandidate{{
+			ID: "scm:FileSyncEngine", Kind: "service", Manager: "scm", ServiceName: "FileSyncEngine",
+			APIBaseURL: "https://127.0.0.1:22420", CredentialRef: "config://key",
+		}},
+		commandRunner: func(name string, args ...string) ([]byte, error) {
+			commands = append(commands, append([]string{name}, args...))
+			return []byte("STATE              : 4  RUNNING"), nil
+		},
+		probeCandidate: func(candidate localDaemonCandidate) (DaemonRuntimeState, error) {
+			probed = true
+			return DaemonRuntimeState{ConnectionState: "running", NodeName: "windows-service"}, nil
+		},
+	}
+
+	state, err := app.ControlLocalDaemon(LocalDaemonControlRequest{Action: "restart", Source: "scm:FileSyncEngine"})
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if got, want := commands, [][]string{{"sc.exe", "stop", "FileSyncEngine"}, {"sc.exe", "start", "FileSyncEngine"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("commands = %#v, want %#v", got, want)
+	}
+	if !probed || state.ConnectionState != "running" || state.NodeName != "windows-service" {
+		t.Fatalf("state = %#v, probed=%v", state, probed)
 	}
 }
 

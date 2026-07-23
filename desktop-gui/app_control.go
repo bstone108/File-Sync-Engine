@@ -120,14 +120,22 @@ func (a *App) ControlLocalDaemon(request LocalDaemonControlRequest) (DaemonRunti
 	if selected == nil {
 		return DaemonRuntimeState{}, fmt.Errorf("local daemon service %q was not discovered; start the portable daemon instead", request.Source)
 	}
+	managerActions := []string{action}
+	if selected.Manager == "scm" && action == "restart" {
+		// Windows sc.exe has no restart verb. Keep the restart operation native,
+		// explicit, and observable rather than sending an unsupported command.
+		managerActions = []string{"stop", "start"}
+	}
 	if action != "status" {
-		name, args, err := managerCommand(*selected, action)
-		if err != nil {
-			return DaemonRuntimeState{}, err
-		}
-		output, runErr := rt.runCommand(name, args...)
-		if runErr != nil {
-			return DaemonRuntimeState{}, fmt.Errorf("%s failed: %w: %s", strings.Join(append([]string{name}, args...), " "), runErr, strings.TrimSpace(string(output)))
+		for _, managerAction := range managerActions {
+			name, args, err := managerCommand(*selected, managerAction)
+			if err != nil {
+				return DaemonRuntimeState{}, err
+			}
+			output, runErr := rt.runCommand(name, args...)
+			if runErr != nil {
+				return DaemonRuntimeState{}, fmt.Errorf("%s failed: %w: %s", strings.Join(append([]string{name}, args...), " "), runErr, strings.TrimSpace(string(output)))
+			}
 		}
 	}
 	if action == "stop" {
