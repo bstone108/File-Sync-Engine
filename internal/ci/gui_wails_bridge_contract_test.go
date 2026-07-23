@@ -89,8 +89,9 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 	bridge := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "wailsNativeShell.ts"))
 	appSvelte := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))
 	daemonAPI := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "daemonApi.ts"))
+	nativeProxy := readRequiredFile(t, filepath.Join(root, "desktop-gui", "app_control.go"))
 
-	sources := mainTS + bridge + appSvelte + daemonAPI
+	sources := mainTS + bridge + appSvelte + daemonAPI + nativeProxy
 	for _, want := range []string{
 		"installWailsNativeShellBridge();",
 		`from "../../wailsjs/go/main/App"`,
@@ -153,6 +154,40 @@ func TestDesktopGUIWailsBridgeUsesGeneratedBindingsInsteadOfOptionalWindowGlobal
 	for _, want := range []string{"FROM node:22-bookworm AS node-runtime", "COPY --from=node-runtime", "/usr/local/bin/node"} {
 		if !strings.Contains(builderDockerfile, want) {
 			t.Fatalf("desktop Wails builder must provide the supported Node 22 frontend runtime: missing %q", want)
+		}
+	}
+}
+
+func TestDesktopGUIRequiresNativeBridgeForDaemonAPIAuthentication(t *testing.T) {
+	root := filepath.Join("..", "..")
+	appSvelte := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "App.svelte"))
+	daemonAPI := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "daemonApi.ts"))
+
+	for _, want := range []string{
+		"Native desktop daemon bridge is unavailable",
+		"nativeShell.daemonAPIRequest",
+	} {
+		if !strings.Contains(daemonAPI, want) {
+			t.Fatalf("desktop daemon API client must require the native bridge for local authentication: missing %q", want)
+		}
+	}
+	connectionSettingsEnd := strings.Index(daemonAPI, "export type DaemonStatus")
+	requestStart := strings.Index(daemonAPI, "async function daemonAPIRequest")
+	requestEnd := strings.Index(daemonAPI[requestStart:], "\n}\n\nfunction jsonBody")
+	if connectionSettingsEnd < 0 || requestStart < 0 || requestEnd < 0 {
+		t.Fatal("desktop daemon API client contract boundaries are missing")
+	}
+	connectionSettings := daemonAPI[:connectionSettingsEnd]
+	requestImplementation := daemonAPI[requestStart : requestStart+requestEnd]
+	for _, forbidden := range []string{
+		"apiKey?: string",
+		"settings.apiKey",
+		"headers.set('X-FSE-API-Key'",
+		"fetch(`${baseURL(settings)}${path}`",
+		"name=\"apiKey\"",
+	} {
+		if strings.Contains(connectionSettings+requestImplementation+appSvelte, forbidden) {
+			t.Fatalf("desktop daemon API client must not expose local API keys to browser fetch or UI: found %q", forbidden)
 		}
 	}
 }

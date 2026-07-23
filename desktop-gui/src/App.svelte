@@ -98,10 +98,9 @@
   };
 
   let apiBaseURL = 'https://127.0.0.1:22420';
-  let apiKey = '';
   let localCredentialRef = '';
-  $: daemonConnectionSettings = { apiBaseURL, apiKey: apiKey || undefined, credentialRef: localCredentialRef || undefined };
-  $: hasDaemonCredential = Boolean(localCredentialRef || apiKey);
+  $: daemonConnectionSettings = { apiBaseURL, credentialRef: localCredentialRef || undefined };
+  $: hasDaemonCredential = Boolean(localCredentialRef);
   let status: DaemonStatus | null = null;
   let bundledEngineInspection: BundledEngineInspection | null = null;
   let bundledEngineInspectionMessage = 'Bundled engine manifest has not been inspected.';
@@ -344,7 +343,6 @@
     if (selected) {
       apiBaseURL = selected.apiBaseURL;
       localCredentialRef = selected.credentialRef ?? '';
-      apiKey = '';
       if (persist && !remoteLifecycleLoading) void persistRemoteSelection().catch(async (error) => {
         remoteRegistryMessage = error instanceof Error ? error.message : String(error);
         await loadRemoteRegistry();
@@ -950,7 +948,6 @@
 
   function reflectLocalDaemonSession(session: GUIManagedNonServiceDaemonSession) {
     localCredentialRef = session.credentialRef;
-    apiKey = '';
     managedDaemonInstances = managedDaemonInstances.map((instance) => instance.kind === 'local' ? {
       ...instance,
       apiBaseURL: session.encryptedApiBaseURL,
@@ -1269,9 +1266,8 @@
   {#if selectedManagedInstance.kind === 'remote'}
   <section class="connection-card">
     <h2>Remote engine connection</h2>
-    <p>Connect to {selectedManagedInstance.label} through its authenticated API.</p>
+    <p>Connect to {selectedManagedInstance.label} through its authenticated native credential. API keys are stored only in the OS credential vault and are never entered into the running browser surface.</p>
     <label>API URL<input bind:value={apiBaseURL} name="apiBaseURL" autocomplete="off" /></label>
-    <label>API key<input bind:value={apiKey} name="apiKey" type="password" autocomplete="off" /></label>
     <button type="button" on:click={connectToDaemon} disabled={loading || !hasDaemonCredential}>{loading ? 'Connecting…' : 'Connect'}</button>
     {#if errorMessage}<p class="error">{errorMessage}</p>{/if}
     {#if status}<pre>{JSON.stringify(status, null, 2)}</pre>{/if}

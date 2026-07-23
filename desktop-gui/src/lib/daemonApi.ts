@@ -1,6 +1,5 @@
 export type DaemonConnectionSettings = {
   apiBaseURL: string;
-  apiKey?: string;
   credentialRef?: string;
 };
 
@@ -197,40 +196,23 @@ export type SnapshotRetentionResponse = { jobId?: string; deprecatedSnapshots?: 
 export type BackupScrubResponse = { archive?: Record<string, unknown>; checkpoints?: Record<string, unknown>; repairPlan?: Record<string, unknown>; [key: string]: unknown };
 export type BackupJobsResponse = { restoreJobs: unknown[]; retentionJobs: unknown[]; repairJobs: unknown[] };
 
-function baseURL(settings: DaemonConnectionSettings): string {
-  return settings.apiBaseURL.replace(/\/+$/, '');
-}
-
 async function daemonAPIRequest<T>(
   settings: DaemonConnectionSettings,
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
   const nativeShell = typeof window === 'undefined' ? undefined : window.fseDesktopShell;
-  if (settings.credentialRef && nativeShell) {
-    const response = await nativeShell.daemonAPIRequest({
-      apiBaseURL: settings.apiBaseURL,
-      credentialRef: settings.credentialRef,
-      method: init.method ?? 'GET',
-      path,
-      body: init.body === undefined ? undefined : JSON.parse(String(init.body))
-    });
-    return (typeof response.body === 'string' ? JSON.parse(response.body) : response.body) as T;
+  if (!nativeShell || !settings.credentialRef) {
+    throw new Error('Native desktop daemon bridge is unavailable or no native credential is configured for the selected daemon. Start the packaged desktop application and connect through its local engine controls.');
   }
-  if (!settings.apiKey) {
-    throw new Error('No native credential reference or API key is available for the selected daemon.');
-  }
-  const headers = new Headers(init.headers);
-  headers.set('X-FSE-API-Key', settings.apiKey);
-  headers.set('Accept', 'application/json');
-  if (init.body !== undefined && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
-  const response = await fetch(`${baseURL(settings)}${path}`, { ...init, headers });
-  if (!response.ok) {
-    throw new Error(`daemon API request ${path} failed: ${response.status}`);
-  }
-  return await response.json() as T;
+  const response = await nativeShell.daemonAPIRequest({
+    apiBaseURL: settings.apiBaseURL,
+    credentialRef: settings.credentialRef,
+    method: init.method ?? 'GET',
+    path,
+    body: init.body === undefined ? undefined : JSON.parse(String(init.body))
+  });
+  return (typeof response.body === 'string' ? JSON.parse(response.body) : response.body) as T;
 }
 
 function jsonBody(body: unknown): string {
