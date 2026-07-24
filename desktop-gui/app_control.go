@@ -364,6 +364,9 @@ func (rt *desktopNativeRuntime) proxyClient(ref string) (*http.Client, error) {
 			return nil, err
 		}
 		certPath = cfg.API.Encryption.CertFile
+		if certPath != "" && !filepath.IsAbs(certPath) {
+			certPath = filepath.Join(filepath.Dir(string(pathBytes)), certPath)
+		}
 	} else if strings.HasPrefix(ref, "native://fse-desktop/gui-owned/") {
 		session, err := rt.loadSession()
 		if err != nil {

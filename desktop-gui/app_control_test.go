@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -920,5 +921,40 @@ func TestDaemonAPIProxyUsesGETForBackupJobsReadModel(t *testing.T) {
 	}
 	if !json.Valid(response.Body) || strings.Contains(string(response.Body), "native-only-secret") {
 		t.Fatalf("unexpected proxy response: %s", response.Body)
+	}
+}
+
+func TestDaemonAPIProxyUsesConfigRelativeServiceCertificate(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/status" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"nodeName": "relative-cert-service"})
+	}))
+	defer server.Close()
+
+	tmp := t.TempDir()
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(filepath.Join(tmp, "api.crt"), certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(tmp, "config.jsonc")
+	listen := strings.TrimPrefix(server.URL, "https://")
+	config := fmt.Sprintf(`{"api":{"listen":%q,"apiKey":"service-secret","encryption":{"mode":"manual-tls","certFile":"api.crt"}}}`, listen)
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := loadConfiguredServiceCandidate("systemd-user:fse", "systemd-user", "fse", configPath)
+	if err != nil {
+		t.Fatalf("load candidate: %v", err)
+	}
+
+	app := NewApp()
+	response, err := app.DaemonAPIRequest(NativeDaemonAPIRequest{APIBaseURL: candidate.APIBaseURL, CredentialRef: candidate.CredentialRef, Method: http.MethodGet, Path: "/v1/status"})
+	if err != nil {
+		t.Fatalf("proxy config-relative service certificate: %v", err)
+	}
+	if !strings.Contains(string(response.Body), "relative-cert-service") || strings.Contains(string(response.Body), "service-secret") {
+		t.Fatalf("unexpected response: %s", response.Body)
 	}
 }

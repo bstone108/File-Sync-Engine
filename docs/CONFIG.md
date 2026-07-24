@@ -69,6 +69,7 @@ The daemon runtime, `scan`, API state loading, `metadata compact`, `metadata imp
 - `api.key` is required at runtime.
 - If missing, the daemon generates and persists one.
 - Clients must send it as `X-FSE-API-Key`.
+- API TLS `certFile` and `keyFile` paths may be absolute or relative to the active config file. The native desktop service-adoption bridge resolves a relative `certFile` the same way, so an installed service remains controllable through its authenticated HTTPS API.
 - `api.encryption.trustedCertificateSha256` can pin the active daemon API TLS certificate. Authenticated `GET /v1/api/trust` reports the current TLS mode, active certificate fingerprint, configured trusted fingerprint, and match status without exposing API keys or private keys. Authenticated `POST /v1/api/trust-command` with `{"action":"pin-active-certificate"}` writes the active certificate fingerprint into config so GUI/pairing clients can adopt the current daemon certificate without editing the full config object; the completion event is redacted and does not include the full fingerprint.
 
 ## Transfer rate limits
