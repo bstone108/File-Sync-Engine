@@ -136,6 +136,11 @@ func (a *App) ControlLocalDaemon(request LocalDaemonControlRequest) (DaemonRunti
 			if runErr != nil {
 				return DaemonRuntimeState{}, fmt.Errorf("%s failed: %w: %s", strings.Join(append([]string{name}, args...), " "), runErr, strings.TrimSpace(string(output)))
 			}
+			if selected.Manager == "scm" && action == "restart" && managerAction == "stop" {
+				if err := rt.waitForWindowsServiceStopped(*selected); err != nil {
+					return DaemonRuntimeState{}, err
+				}
+			}
 		}
 	}
 	if action == "stop" {
@@ -202,6 +207,32 @@ func (a *App) DaemonAPIRequest(request NativeDaemonAPIRequest) (NativeDaemonAPIR
 		return NativeDaemonAPIResponse{}, errors.New("daemon API returned invalid JSON")
 	}
 	return NativeDaemonAPIResponse{Status: resp.StatusCode, Body: body}, nil
+}
+
+func (rt *desktopNativeRuntime) waitForWindowsServiceStopped(candidate localDaemonCandidate) error {
+	attempts := rt.serviceStopPollAttempts
+	if attempts == 0 {
+		attempts = 50
+	}
+	interval := rt.serviceStopPollInterval
+	if interval == 0 {
+		interval = 100 * time.Millisecond
+	}
+	var lastState string
+	for attempt := 0; attempt < attempts; attempt++ {
+		output, err := rt.runCommand("sc.exe", "query", candidate.ServiceName)
+		if err != nil {
+			return fmt.Errorf("sc.exe query %s while waiting for stop failed: %w: %s", candidate.ServiceName, err, strings.TrimSpace(string(output)))
+		}
+		lastState = strings.TrimSpace(string(output))
+		if strings.Contains(lastState, "STOPPED") {
+			return nil
+		}
+		if attempt+1 < attempts {
+			time.Sleep(interval)
+		}
+	}
+	return fmt.Errorf("Windows service %s did not reach STOPPED before restart; last SCM state: %s", candidate.ServiceName, lastState)
 }
 
 func (rt *desktopNativeRuntime) defaultServiceCandidates() []localDaemonCandidate {

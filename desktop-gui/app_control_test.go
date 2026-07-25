@@ -782,6 +782,9 @@ func TestControlLocalDaemonRestartsWindowsServiceWithStopThenStart(t *testing.T)
 		}},
 		commandRunner: func(name string, args ...string) ([]byte, error) {
 			commands = append(commands, append([]string{name}, args...))
+			if strings.Join(append([]string{name}, args...), " ") == "sc.exe query FileSyncEngine" {
+				return []byte("STATE              : 1  STOPPED"), nil
+			}
 			return []byte("STATE              : 4  RUNNING"), nil
 		},
 		probeCandidate: func(candidate localDaemonCandidate) (DaemonRuntimeState, error) {
@@ -794,11 +797,51 @@ func TestControlLocalDaemonRestartsWindowsServiceWithStopThenStart(t *testing.T)
 	if err != nil {
 		t.Fatalf("restart: %v", err)
 	}
-	if got, want := commands, [][]string{{"sc.exe", "stop", "FileSyncEngine"}, {"sc.exe", "start", "FileSyncEngine"}}; !reflect.DeepEqual(got, want) {
+	if got, want := commands, [][]string{{"sc.exe", "stop", "FileSyncEngine"}, {"sc.exe", "query", "FileSyncEngine"}, {"sc.exe", "start", "FileSyncEngine"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands = %#v, want %#v", got, want)
 	}
 	if !probed || state.ConnectionState != "running" || state.NodeName != "windows-service" {
 		t.Fatalf("state = %#v, probed=%v", state, probed)
+	}
+}
+
+func TestControlLocalDaemonWaitsForWindowsServiceToStopBeforeRestart(t *testing.T) {
+	var commands [][]string
+	queryCount := 0
+	app := NewApp()
+	app.desktop = &desktopNativeRuntime{
+		platform: "windows",
+		serviceCandidates: []localDaemonCandidate{{
+			ID: "scm:FileSyncEngine", Kind: "service", Manager: "scm", ServiceName: "FileSyncEngine",
+			APIBaseURL: "https://127.0.0.1:22420", CredentialRef: "config://key",
+		}},
+		commandRunner: func(name string, args ...string) ([]byte, error) {
+			commands = append(commands, append([]string{name}, args...))
+			if strings.Join(append([]string{name}, args...), " ") == "sc.exe query FileSyncEngine" {
+				queryCount++
+				if queryCount == 1 {
+					return []byte("STATE              : 3  STOP_PENDING"), nil
+				}
+				return []byte("STATE              : 1  STOPPED"), nil
+			}
+			return []byte("STATE              : 4  RUNNING"), nil
+		},
+		probeCandidate: func(localDaemonCandidate) (DaemonRuntimeState, error) {
+			return DaemonRuntimeState{ConnectionState: "running", NodeName: "windows-service"}, nil
+		},
+	}
+
+	if _, err := app.ControlLocalDaemon(LocalDaemonControlRequest{Action: "restart", Source: "scm:FileSyncEngine"}); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	want := [][]string{
+		{"sc.exe", "stop", "FileSyncEngine"},
+		{"sc.exe", "query", "FileSyncEngine"},
+		{"sc.exe", "query", "FileSyncEngine"},
+		{"sc.exe", "start", "FileSyncEngine"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
 }
 
