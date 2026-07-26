@@ -134,12 +134,7 @@ jobs:
       - name: Build and smoke-test native Windows desktop lifecycle
         shell: pwsh
         run: |
-          $bundle = Join-Path $env:RUNNER_TEMP "fse-desktop-smoke"
-          $appDir = Join-Path $bundle "app"
-          $engineDir = Join-Path $bundle "engine\\windows\\amd64"
-          New-Item -ItemType Directory -Force $appDir, $engineDir | Out-Null
           go build -trimpath -o fse.exe ./cmd/fse
-          Copy-Item fse.exe (Join-Path $engineDir "fse.exe")
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
           $env:Path = "$(go env GOPATH)\\bin;$env:Path"
           Push-Location desktop-gui
@@ -148,9 +143,8 @@ jobs:
           npm run typecheck
           npm run build
           wails build -clean -platform windows/amd64 -o fse-desktop.exe
-          Copy-Item build/bin/fse-desktop.exe (Join-Path $appDir "fse-desktop.exe")
           Pop-Location
-          & scripts/windows-desktop-smoke.ps1 -BundleRoot $bundle
+          & scripts/windows-desktop-smoke.ps1 -EnginePath fse.exe -DesktopSource desktop-gui
 
   build-all-smoke:
     name: scripts/build-all.sh smoke

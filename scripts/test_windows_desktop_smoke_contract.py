@@ -33,13 +33,10 @@ def main() -> None:
         require(workflow, fragment)
 
     for fragment in (
-        "fse-desktop.exe",
-        "engine\\windows\\amd64\\fse.exe",
-        "gui-owned-daemon-session.json",
-        "X-FSE-API-Key",
-        "/v1/status",
-        "/v1/stop",
-        "Start-Process",
+        "FSE_WINDOWS_SMOKE_ENGINE",
+        "TestWindowsBundledDaemonLifecycleSmoke",
+        "native App bridge directly against a real Windows daemon",
+        "go test . -run TestWindowsBundledDaemonLifecycleSmoke -count=1",
     ):
         require(smoke, fragment)
 

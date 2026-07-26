@@ -394,7 +394,7 @@ func TestDesktopStabilizationDocsCarryPlatformFailureInventory(t *testing.T) {
 		"API connects and GUI can control daemon",
 		"logs/errors are visible",
 		"first-use setup reaches sync-ready state",
-		"Historical Windows `native desktop shell is not available` binding failure is fixed in source; the current hosted smoke gate must still prove launch/lifecycle behavior",
+		"Historical Windows `native desktop shell is not available` binding failure is fixed in source; the hosted gate compiles the Wails application and, because GitHub runners have no interactive desktop/WebView2 session, directly exercises the same native App bridge against a real staged Windows daemon: launch, authenticated HTTPS `/v1/status`, and `/v1/stop`",
 		"Known failure: macOS Apple Silicon packages can report `app is damaged and can't be opened`",
 		"Inventory status: unproven until smoke-tested on host or VM",
 	} {
