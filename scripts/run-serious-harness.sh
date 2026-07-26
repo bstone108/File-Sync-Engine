@@ -25,6 +25,7 @@ run_in() {
 }
 
 run python3 scripts/test_windows_wails_ci_contract.py
+run python3 scripts/test_windows_desktop_smoke_contract.py
 
 # Serious pitfall contracts only: safety, auth/path boundaries, block verification,
 # lazy verification baseline safety, provisional API visibility, write-before-delete

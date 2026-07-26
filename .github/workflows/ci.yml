@@ -113,6 +113,45 @@ jobs:
             throw "Wails reported success but build/bin/fse-desktop.exe is missing"
           }
 
+  windows-desktop-wails-smoke:
+    name: Windows native desktop lifecycle smoke
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop-gui/package-lock.json
+      - name: Build and smoke-test native Windows desktop lifecycle
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP "fse-desktop-smoke"
+          $appDir = Join-Path $bundle "app"
+          $engineDir = Join-Path $bundle "engine\\windows\\amd64"
+          New-Item -ItemType Directory -Force $appDir, $engineDir | Out-Null
+          go build -trimpath -o fse.exe ./cmd/fse
+          Copy-Item fse.exe (Join-Path $engineDir "fse.exe")
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          $env:Path = "$(go env GOPATH)\\bin;$env:Path"
+          Push-Location desktop-gui
+          wails generate module
+          npm ci
+          npm run typecheck
+          npm run build
+          wails build -clean -platform windows/amd64 -o fse-desktop.exe
+          Copy-Item build/bin/fse-desktop.exe (Join-Path $appDir "fse-desktop.exe")
+          Pop-Location
+          & scripts/windows-desktop-smoke.ps1 -BundleRoot $bundle
+
   build-all-smoke:
     name: scripts/build-all.sh smoke
     runs-on: ubuntu-latest

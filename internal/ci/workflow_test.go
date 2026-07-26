@@ -394,7 +394,7 @@ func TestDesktopStabilizationDocsCarryPlatformFailureInventory(t *testing.T) {
 		"API connects and GUI can control daemon",
 		"logs/errors are visible",
 		"first-use setup reaches sync-ready state",
-		"Known failure: Windows builds report `native desktop shell is not available`",
+		"Historical Windows `native desktop shell is not available` binding failure is fixed in source; the current hosted smoke gate must still prove launch/lifecycle behavior",
 		"Known failure: macOS Apple Silicon packages can report `app is damaged and can't be opened`",
 		"Inventory status: unproven until smoke-tested on host or VM",
 	} {
