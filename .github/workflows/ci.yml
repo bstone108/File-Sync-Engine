@@ -108,7 +108,7 @@ jobs:
           npm ci
           npm run typecheck
           npm run build
-          wails build -clean -platform windows/amd64 -o fse-desktop
+          wails build -clean -platform windows/amd64 -o fse-desktop.exe
           if (-not (Test-Path build/bin/fse-desktop.exe)) {
             throw "Wails reported success but build/bin/fse-desktop.exe is missing"
           }

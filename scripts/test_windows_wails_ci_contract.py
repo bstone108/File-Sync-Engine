@@ -31,8 +31,7 @@ def main() -> None:
         "npm ci",
         "npm run typecheck",
         "npm run build",
-        "wails build -clean",
-        "-platform windows/amd64",
+        "wails build -clean -platform windows/amd64 -o fse-desktop.exe",
         "fse-desktop.exe",
     ):
         require(source, fragment)
