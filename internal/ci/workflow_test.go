@@ -43,9 +43,8 @@ func TestCrossPlatformWorkflowCoversTestHarnessAndSixTargets(t *testing.T) {
 
 func TestWorkflowsUseNode24ReadyGitHubActions(t *testing.T) {
 	workflows := map[string]string{
-		"ci.yml":        readWorkflow(t, "ci.yml"),
-		"container.yml": readWorkflow(t, "container.yml"),
-		"release.yml":   readWorkflow(t, "release.yml"),
+		"ci.yml":      readWorkflow(t, "ci.yml"),
+		"release.yml": readWorkflow(t, "release.yml"),
 	}
 
 	for name, workflow := range workflows {
@@ -61,7 +60,7 @@ func TestWorkflowsUseNode24ReadyGitHubActions(t *testing.T) {
 		}
 	}
 
-	combined := strings.Join([]string{workflows["ci.yml"], workflows["container.yml"], workflows["release.yml"]}, "\n")
+	combined := strings.Join([]string{workflows["ci.yml"], workflows["release.yml"]}, "\n")
 	for _, want := range []string{
 		"actions/checkout@v6",
 		"actions/setup-go@v6",
@@ -341,6 +340,7 @@ func TestReleaseWorkflowPublishesGitHubRelease(t *testing.T) {
 		"linux-desktop-artifacts",
 		"windows-desktop-artifacts",
 		"macos-desktop-artifacts",
+		"publish-container",
 		"actions/download-artifact@v7",
 		"release-assets",
 		"RELEASE_ASSET_SHA256SUMS",
@@ -489,33 +489,39 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 	}
 }
 
-func TestDockerPublishWorkflowDocumentsVersioningAndUpdateVerification(t *testing.T) {
-	workflow := readWorkflow(t, "container.yml")
+func TestReleaseWorkflowPublishesSynchronizedContainerImage(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
 	docs := readRequiredFile(t, filepath.Join("..", "..", "docs", "DOCKER.md"))
 
 	for _, want := range []string{
-		"docker/build-push-action",
-		"ghcr.io",
-		"type=semver,pattern={{version}}",
-		"type=semver,pattern={{major}}.{{minor}}",
-		"type=sha",
+		"publish-container:",
+		"needs: version-preflight",
+		"Build, publish, and verify GHCR image",
+		"docker/setup-buildx-action@v3",
+		"docker/login-action@v3",
+		"docker/build-push-action@v6",
+		"ghcr.io/${{ github.repository }}:${{ needs.version-preflight.outputs.version }}",
+		"linux/amd64,linux/arm64",
 		"cosign sign",
 		"cosign verify",
-		"docker/metadata-action",
+		"publish-container",
 	} {
 		if !strings.Contains(workflow, want) {
-			t.Fatalf("container workflow missing %q", want)
+			t.Fatalf("unified release workflow missing container contract %q", want)
 		}
 	}
-	for _, forbidden := range []string{"FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey"} {
+	for _, forbidden := range []string{"FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey", "container.yml"} {
 		if strings.Contains(workflow, forbidden) {
-			t.Fatalf("container workflow must not publish or log runtime secrets %q", forbidden)
+			t.Fatalf("unified release workflow must not contain %q", forbidden)
 		}
+	}
+	if _, err := os.Stat(filepath.Join("..", "..", ".github", "workflows", "container.yml")); !os.IsNotExist(err) {
+		t.Fatalf("independent tag-triggered container workflow must be removed, stat err=%v", err)
 	}
 	for _, want := range []string{
+		"same release version",
+		"Release artifacts",
 		"GHCR",
-		"semantic version tag",
-		"immutable SHA tag",
 		"cosign",
 		"verify the image signature",
 		"/config",

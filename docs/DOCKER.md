@@ -72,7 +72,9 @@ Set `FSE_IDENTITY_EXPORT_PATH` to write a JSON identity package from the current
 
 ## Publishing and update verification
 
-`.github/workflows/container.yml` publishes signed GHCR images for `linux/amd64` and `linux/arm64` on release tags or manual dispatches. It does **not** currently provide `linux/arm/v7`; that target remains an evidence-and-dependency investigation item. Before upgrade, verify the image signature:
+`Release artifacts` is the only publishing flow for GHCR images, daemon binaries, desktop packages, and the GitHub Release. Its explicit `YYYY.MM.DD.NN` release version is applied to every surface: every artifact shares the **same release version**, and the signed GHCR image is published as `ghcr.io/<owner>/<repo>:<version>` only after the matching daemon and desktop artifacts build successfully, and the GitHub Release is created only after that image has been signed and verified. No Docker-only version, tag-triggered container workflow, or independent container compile/publish path is allowed. It currently publishes `linux/amd64` and `linux/arm64`; `linux/arm/v7` remains an evidence-and-dependency investigation item.
+
+Before upgrade, verify the image signature:
 
 ```bash
 cosign verify ghcr.io/<owner>/<repo>:<version> \
@@ -80,4 +82,4 @@ cosign verify ghcr.io/<owner>/<repo>:<version> \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 ```
 
-Use a semantic version tag for normal updates or an immutable SHA tag for reproducibility. Replacing an image must not replace `/config` state.
+Use the exact shared `YYYY.MM.DD.NN` release-version tag for normal updates. The immutable image digest recorded by the release workflow is available for reproducible pinning. Replacing an image must not replace `/config` state.
