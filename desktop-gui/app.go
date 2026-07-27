@@ -566,7 +566,7 @@ func writeGUIOwnedDaemonConfig(path, listen, apiKey, stateDir string) error {
   "nodeName": "fse-desktop-gui-owned-daemon",
   "api": {
     "listen": "%s",
-    "apiKey": "%s",
+    "key": "%s",
     "encryption": {
       "mode": "manual-tls",
       "certFile": "%s",
