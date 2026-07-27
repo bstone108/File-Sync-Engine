@@ -519,7 +519,7 @@ func TestDockerPublishWorkflowDocumentsVersioningAndUpdateVerification(t *testin
 		"cosign",
 		"verify the image signature",
 		"/config",
-		"bundled default optional web GUI",
+		"Headless by default",
 	} {
 		if !strings.Contains(docs, want) {
 			t.Fatalf("Docker docs missing %q", want)

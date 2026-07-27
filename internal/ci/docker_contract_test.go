@@ -37,7 +37,7 @@ func TestDockerDistributionDefaultsRootPersistentStateAtConfig(t *testing.T) {
 
 	for _, want := range []string{
 		"CONFIG_PATH=\"${FSE_CONFIG_PATH:-/config/config.jsonc}\"",
-		"mkdir -p /config/logs /config/metadata /config/web",
+		"mkdir -p /config/logs /config/metadata",
 		"PUID",
 		"PGID",
 		"FSE_API_LISTEN",
@@ -61,41 +61,38 @@ func TestDockerDistributionDefaultsRootPersistentStateAtConfig(t *testing.T) {
 	}
 }
 
-func TestDockerContainerBundlesWebGUIEnabledByDefault(t *testing.T) {
+func TestDockerContainerDefaultsHeadlessWithoutBundledWebGUI(t *testing.T) {
 	root := filepath.Join("..", "..")
 	dockerfile := readRequiredFile(t, filepath.Join(root, "Dockerfile"))
 	entrypoint := readRequiredFile(t, filepath.Join(root, "scripts", "container-entrypoint.sh"))
 	docs := readRequiredFile(t, filepath.Join(root, "docs", "DOCKER.md"))
-	bundlePath := filepath.Join(root, "web-gui", "dist", "fse-web-container-default.zip")
-	if _, err := os.Stat(bundlePath); err != nil {
-		t.Fatalf("container web GUI bundle missing at %s: %v", bundlePath, err)
-	}
-	for _, want := range []string{
-		"COPY web-gui/dist/fse-web-container-default.zip /opt/fse/web/fse-web-container-default.zip",
-		"FSE_WEB_GUI_ENABLED=true",
-		"FSE_WEB_GUI_PACKAGE=/opt/fse/web/fse-web-container-default.zip",
-		"FSE_WEB_GUI_INSTALL_DIR=/config/web/current",
+
+	for _, want := range []struct {
+		text string
+		from string
+	}{
+		{"FSE_WEB_GUI_ENABLED=false", dockerfile},
+		{"EXPOSE 22420 22000", dockerfile},
+		{"FSE_CONTAINER_FIRST_RUN=true fse container-bootstrap \"$CONFIG_PATH\"", entrypoint},
+		{"Headless by default", docs},
+		{"FSE_WEB_GUI_ENABLED=true", docs},
 	} {
-		if !strings.Contains(dockerfile, want) {
-			t.Fatalf("Dockerfile missing bundled web GUI default %q:\n%s", want, dockerfile)
+		if !strings.Contains(want.from, want.text) {
+			t.Fatalf("headless Docker contract missing %q", want.text)
 		}
 	}
-	for _, want := range []string{
-		"FSE_CONTAINER_FIRST_RUN=true fse container-bootstrap \"$CONFIG_PATH\"",
-		"fse container-bootstrap \"$CONFIG_PATH\"",
+	for _, forbidden := range []string{
+		"COPY web-gui/",
+		"/opt/fse/web",
+		"FSE_WEB_GUI_PACKAGE=",
+		"FSE_WEB_GUI_LISTEN=",
+		"FSE_WEB_GUI_HTTPS_LISTEN=",
+		"FSE_WEB_GUI_CHECKSUM=",
+		"8385",
+		"8943",
 	} {
-		if !strings.Contains(entrypoint, want) {
-			t.Fatalf("container entrypoint missing bundled web GUI default %q:\n%s", want, entrypoint)
-		}
-	}
-	for _, want := range []string{
-		"The container image bundles the default optional web GUI package and enables it on first-run config creation.",
-		"FSE_WEB_GUI_ENABLED",
-		"FSE_WEB_GUI_PACKAGE",
-		"FSE_WEB_GUI_CHECKSUM",
-	} {
-		if !strings.Contains(docs, want) {
-			t.Fatalf("Docker docs missing bundled web GUI default %q:\n%s", want, docs)
+		if strings.Contains(dockerfile, forbidden) {
+			t.Fatalf("headless core Dockerfile must not bundle or expose web GUI material %q", forbidden)
 		}
 	}
 }
@@ -131,77 +128,41 @@ func TestContainerEntrypointExportsIdentityPackageWithoutRegenerating(t *testing
 	}
 }
 
-func TestContainerDefaultWebGUIIsDevelopmentStatusPage(t *testing.T) {
+func TestDockerDistributionKeepsWebGUIPackageOutsideCoreImage(t *testing.T) {
 	root := filepath.Join("..", "..")
 	dockerfile := readRequiredFile(t, filepath.Join(root, "Dockerfile"))
 	containerBootstrap := readRequiredFile(t, filepath.Join(root, "internal", "containerbootstrap", "bootstrap.go"))
-	bundlePath := filepath.Join(root, "web-gui", "dist", "fse-web-container-default.zip")
-	index := readRequiredZipFile(t, bundlePath, "index.html")
 
-	for _, want := range []string{
-		"Development in progress",
-		"Engine status",
-		"/health",
-		"container-default-dev-status",
-	} {
-		if !strings.Contains(index, want) {
-			t.Fatalf("container default web GUI missing development status marker %q:\n%s", want, index)
-		}
-	}
-	checksum := sha256HexFile(t, bundlePath)
-	for _, haystack := range []struct {
-		name string
-		text string
-	}{
-		{"Dockerfile", dockerfile},
-		{"containerbootstrap", containerBootstrap},
-	} {
-		if !strings.Contains(haystack.text, checksum) {
-			t.Fatalf("%s missing current web GUI bundle checksum %s", haystack.name, checksum)
+	for _, text := range []string{dockerfile, containerBootstrap} {
+		for _, forbidden := range []string{"fse-web-container-default.zip", "/opt/fse/web", "9f65e8d0ad7bff683a81a9ca081fd8aae53ed43df896b65f1b9c6fd56e0610ab"} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("core container distribution must not carry a web GUI package reference %q", forbidden)
+			}
 		}
 	}
 }
 
-func TestDockerContainerExposesWebGUIAndRuntimePermissionControls(t *testing.T) {
+func TestDockerContainerHeadlessDefaultsKeepRuntimePermissionControls(t *testing.T) {
 	root := filepath.Join("..", "..")
 	dockerfile := readRequiredFile(t, filepath.Join(root, "Dockerfile"))
 	entrypoint := readRequiredFile(t, filepath.Join(root, "scripts", "container-entrypoint.sh"))
 	docs := readRequiredFile(t, filepath.Join(root, "docs", "DOCKER.md"))
 
-	for _, want := range []string{
-		"EXPOSE 22420 22000 8385",
-		"8943",
-		"FSE_WEB_GUI_LISTEN=0.0.0.0:8385",
-		"FSE_WEB_GUI_HTTPS_LISTEN=0.0.0.0:8943",
-		"FSE_WEB_GUI_TLS_ENABLED=true",
-		"FSE_UMASK=002",
-	} {
-		if !strings.Contains(dockerfile, want) {
-			t.Fatalf("Dockerfile missing Docker web GUI/permission default %q:\n%s", want, dockerfile)
-		}
+	if !strings.Contains(dockerfile, "FSE_UMASK=002") {
+		t.Fatalf("Dockerfile missing runtime permission default")
 	}
 	for _, want := range []string{
-		"FSE_CONTAINER_FIRST_RUN=true fse container-bootstrap \"$CONFIG_PATH\"",
 		"umask \"${FSE_UMASK:-002}\"",
 		"uid=\"${PUID:-${UID:-99}}\"",
 		"gid=\"${PGID:-${GID:-100}}\"",
 	} {
 		if !strings.Contains(entrypoint, want) {
-			t.Fatalf("entrypoint missing runtime permission control %q:\n%s", want, entrypoint)
+			t.Fatalf("entrypoint missing runtime permission control %q", want)
 		}
 	}
-	for _, want := range []string{
-		"FSE_WEB_GUI_TLS_ENABLED",
-		"FSE_WEB_GUI_HTTPS_LISTEN",
-		"8943:8943",
-		"FSE_UMASK",
-		"Unraid",
-		"nobody",
-		"99:100",
-		"8385:8385",
-	} {
+	for _, want := range []string{"FSE_UMASK", "Unraid", "nobody", "99:100"} {
 		if !strings.Contains(docs, want) {
-			t.Fatalf("Docker docs missing web GUI/runtime permission guidance %q:\n%s", want, docs)
+			t.Fatalf("Docker docs missing runtime permission guidance %q", want)
 		}
 	}
 }

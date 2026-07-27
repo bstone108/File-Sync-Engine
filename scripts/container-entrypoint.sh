@@ -4,7 +4,7 @@ set -eu
 CONFIG_PATH="${FSE_CONFIG_PATH:-/config/config.jsonc}"
 CONFIG_DIR="$(dirname "$CONFIG_PATH")"
 mkdir -p "$CONFIG_DIR"
-mkdir -p /config/logs /config/metadata /config/web
+mkdir -p /config/logs /config/metadata
 umask "${FSE_UMASK:-002}"
 
 # fse container-bootstrap reads non-secret runtime defaults such as FSE_API_LISTEN,

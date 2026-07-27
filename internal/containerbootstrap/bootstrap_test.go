@@ -54,6 +54,20 @@ func TestApplyFirstRunDefaultsUsesContainerRuntimeValues(t *testing.T) {
 	}
 }
 
+func TestDefaultsFromEnvironmentKeepsCoreContainerHeadless(t *testing.T) {
+	t.Setenv("FSE_WEB_GUI_ENABLED", "")
+	t.Setenv("FSE_WEB_GUI_PACKAGE", "")
+	t.Setenv("FSE_WEB_GUI_LISTEN", "")
+	t.Setenv("FSE_WEB_GUI_TLS_ENABLED", "")
+	t.Setenv("FSE_WEB_GUI_HTTPS_LISTEN", "")
+	t.Setenv("FSE_WEB_GUI_CHECKSUM", "")
+
+	defaults := DefaultsFromEnvironment()
+	if defaults.WebGUIEnabled || defaults.WebGUIPackage != "" || defaults.WebGUIListen != "" || defaults.WebGUITLSEnabled || defaults.WebGUIHTTPSListen != "" || defaults.WebGUIChecksum != "" {
+		t.Fatalf("core container web GUI defaults must be disabled and package-free: %+v", defaults)
+	}
+}
+
 func TestExportIdentityPackageWritesAtomicallyAndPreservesExistingUnlessForced(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "identity.json")

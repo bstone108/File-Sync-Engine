@@ -32,13 +32,13 @@ func DefaultsFromEnvironment() RuntimeDefaults {
 		LogOutput:         envOrDefault("FSE_LOG_OUTPUT", "/config/logs/fse.jsonl"),
 		DiscoveryLocal:    envBoolOrDefault("FSE_DISCOVERY_LOCAL", true),
 		DiscoveryDHT:      envBoolOrDefault("FSE_DISCOVERY_DHT", false),
-		WebGUIEnabled:     envBoolOrDefault("FSE_WEB_GUI_ENABLED", true),
-		WebGUIPackage:     envOrDefault("FSE_WEB_GUI_PACKAGE", "/opt/fse/web/fse-web-container-default.zip"),
-		WebGUIInstallDir:  envOrDefault("FSE_WEB_GUI_INSTALL_DIR", "/config/web/current"),
-		WebGUIListen:      envOrDefault("FSE_WEB_GUI_LISTEN", "0.0.0.0:8385"),
-		WebGUITLSEnabled:  envBoolOrDefault("FSE_WEB_GUI_TLS_ENABLED", true),
-		WebGUIHTTPSListen: envOrDefault("FSE_WEB_GUI_HTTPS_LISTEN", "0.0.0.0:8943"),
-		WebGUIChecksum:    envOrDefault("FSE_WEB_GUI_CHECKSUM", "9f65e8d0ad7bff683a81a9ca081fd8aae53ed43df896b65f1b9c6fd56e0610ab"),
+		WebGUIEnabled:     envBoolOrDefault("FSE_WEB_GUI_ENABLED", false),
+		WebGUIPackage:     os.Getenv("FSE_WEB_GUI_PACKAGE"),
+		WebGUIInstallDir:  os.Getenv("FSE_WEB_GUI_INSTALL_DIR"),
+		WebGUIListen:      os.Getenv("FSE_WEB_GUI_LISTEN"),
+		WebGUITLSEnabled:  envBoolOrDefault("FSE_WEB_GUI_TLS_ENABLED", false),
+		WebGUIHTTPSListen: os.Getenv("FSE_WEB_GUI_HTTPS_LISTEN"),
+		WebGUIChecksum:    os.Getenv("FSE_WEB_GUI_CHECKSUM"),
 	}
 }
 
