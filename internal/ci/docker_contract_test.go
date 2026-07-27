@@ -61,6 +61,39 @@ func TestDockerDistributionDefaultsRootPersistentStateAtConfig(t *testing.T) {
 	}
 }
 
+func TestDockerBuildContextExcludesRepositoryAndNonDaemonPayloads(t *testing.T) {
+	root := filepath.Join("..", "..")
+	ignore := readRequiredFile(t, filepath.Join(root, ".dockerignore"))
+
+	patterns := make(map[string]bool)
+	for _, line := range strings.Split(ignore, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			patterns[line] = true
+		}
+	}
+	for _, want := range []string{
+		".git/",
+		".github/",
+		"desktop-gui/",
+		"mobile-gui/",
+		"web-gui/",
+		"development/",
+		"docs/",
+		"build/",
+		"builds/",
+	} {
+		if !patterns[want] {
+			t.Fatalf("Docker build context must exclude %q:\n%s", want, ignore)
+		}
+	}
+	for _, requiredSource := range []string{"cmd/", "internal/", "scripts/", "go.mod", "go.sum"} {
+		if patterns[requiredSource] {
+			t.Fatalf("Docker build context must retain daemon build input %q:\n%s", requiredSource, ignore)
+		}
+	}
+}
+
 func TestDockerContainerDefaultsHeadlessWithoutBundledWebGUI(t *testing.T) {
 	root := filepath.Join("..", "..")
 	dockerfile := readRequiredFile(t, filepath.Join(root, "Dockerfile"))
