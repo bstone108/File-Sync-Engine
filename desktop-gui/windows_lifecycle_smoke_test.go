@@ -20,7 +20,22 @@ func TestWindowsBundledDaemonLifecycleSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read built Windows daemon: %v", err)
 	}
-	root := t.TempDir()
+	root, err := os.MkdirTemp("", "fse-windows-lifecycle-")
+	if err != nil {
+		t.Fatalf("create Windows lifecycle smoke workspace: %v", err)
+	}
+	defer func() {
+		if t.Failed() {
+			logPath := filepath.Join(root, "state", "sessions")
+			matches, _ := filepath.Glob(filepath.Join(logPath, "*", "logs", "daemon.jsonl"))
+			for _, match := range matches {
+				if bytes, readErr := os.ReadFile(match); readErr == nil {
+					t.Logf("daemon startup log (%s):\n%s", match, string(bytes))
+				}
+			}
+		}
+		_ = os.RemoveAll(root)
+	}()
 	resourceRoot := filepath.Join(root, "engine")
 	enginePath := filepath.Join(resourceRoot, "windows", "amd64", "fse.exe")
 	if err := os.MkdirAll(filepath.Dir(enginePath), 0o700); err != nil {
