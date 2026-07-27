@@ -47,12 +47,3 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	cleanup = false
 	return syncDir(dir)
 }
-
-func syncDir(dir string) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	return f.Sync()
-}
