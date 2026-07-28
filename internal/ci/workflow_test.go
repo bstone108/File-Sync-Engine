@@ -95,6 +95,7 @@ func TestRootReadmeDockerExamplesKeepTheCoreHeadless(t *testing.T) {
 	}
 }
 
+
 func TestWorkflowsUseNode24ReadyGitHubActions(t *testing.T) {
 	workflows := map[string]string{
 		"ci.yml":      readWorkflow(t, "ci.yml"),
@@ -493,6 +494,19 @@ func TestDesktopWailsBuildScriptsStageOnlyTargetEngineResource(t *testing.T) {
 	} {
 		if !strings.Contains(nativeMacScript, want) {
 			t.Fatalf("native macOS Wails script must prune copied GUI resources before Wails build; missing %q", want)
+		}
+	}
+}
+
+func TestMacOSInfoPlistAllowsLocalNetworkingForWailsAssetServer(t *testing.T) {
+	plist := readRequiredFile(t, filepath.Join("..", "..", "desktop-gui", "build", "darwin", "Info.plist"))
+	for _, want := range []string{
+		"NSAppTransportSecurity",
+		"NSAllowsLocalNetworking",
+		"<true/>",
+	} {
+		if !strings.Contains(plist, want) {
+			t.Fatalf("macOS Info.plist missing Wails local asset-server requirement %q", want)
 		}
 	}
 }
