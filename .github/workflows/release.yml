@@ -423,6 +423,44 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+      - name: Download same-run Linux daemon artifacts for Docker image
+        uses: actions/download-artifact@v7
+        with:
+          path: ${{ runner.temp }}/daemon-artifacts
+          pattern: file-sync-engine-daemon-linux-*-${{ needs.version-preflight.outputs.version }}-${{ github.sha }}
+          merge-multiple: false
+      - name: Verify and stage same-run Linux daemon artifacts
+        shell: bash
+        env:
+          ARTIFACT_ROOT: ${{ runner.temp }}/daemon-artifacts
+        run: |
+          set -euo pipefail
+          rm -rf docker-artifacts
+          mkdir -p docker-artifacts
+          for binary in fse-linux-amd64 fse-linux-arm64 fse-linux-armv7; do
+            mapfile -t matches < <(find "$ARTIFACT_ROOT" -type f -name "$binary" -print)
+            if [[ "${#matches[@]}" -ne 1 ]]; then
+              printf 'expected exactly one same-run release artifact named %s, found %s\n' "$binary" "${#matches[@]}" >&2
+              exit 1
+            fi
+            binary_path="${matches[0]}"
+            checksum_path="$(dirname "$binary_path")/SHA256SUMS"
+            if [[ ! -f "$checksum_path" ]]; then
+              printf 'missing SHA256SUMS beside same-run release artifact: %s\n' "$binary_path" >&2
+              exit 1
+            fi
+            expected="$(awk -v name="$binary" '$2 == name { print $1 }' "$checksum_path")"
+            if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+              printf 'missing or invalid checksum for %s\n' "$binary" >&2
+              exit 1
+            fi
+            actual="$(sha256sum "$binary_path" | awk '{ print $1 }')"
+            if [[ "$actual" != "$expected" ]]; then
+              printf 'checksum mismatch for same-run release artifact %s\n' "$binary" >&2
+              exit 1
+            fi
+            install -m 0755 "$binary_path" "docker-artifacts/$binary"
+          done
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR

@@ -1,16 +1,10 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.25-alpine AS builder
-WORKDIR /src
-RUN apk add --no-cache git ca-certificates
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/fse ./cmd/fse
-
 FROM alpine:3.20
+ARG TARGETARCH
+ARG TARGETVARIANT
 RUN apk add --no-cache ca-certificates su-exec
-COPY --from=builder /out/fse /usr/local/bin/fse
+COPY --chmod=0755 docker-artifacts/fse-linux-${TARGETARCH}${TARGETVARIANT} /usr/local/bin/fse
 COPY scripts/container-entrypoint.sh /usr/local/bin/fse-container-entrypoint
 RUN chmod 0755 /usr/local/bin/fse-container-entrypoint \
     && mkdir -p /config/logs /config/metadata

@@ -94,6 +94,35 @@ func TestDockerBuildContextExcludesRepositoryAndNonDaemonPayloads(t *testing.T) 
 	}
 }
 
+func TestDockerImageUsesSameRunPrebuiltReleaseDaemon(t *testing.T) {
+	root := filepath.Join("..", "..")
+	dockerfile := readRequiredFile(t, filepath.Join(root, "Dockerfile"))
+	workflow := readRequiredFile(t, filepath.Join(root, ".github", "workflows", "release.yml"))
+
+	for _, want := range []string{
+		"ARG TARGETARCH",
+		"ARG TARGETVARIANT",
+		"COPY --chmod=0755 docker-artifacts/fse-linux-${TARGETARCH}${TARGETVARIANT} /usr/local/bin/fse",
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Fatalf("Docker image must select a matching same-run release daemon, missing %q", want)
+		}
+	}
+	if strings.Contains(dockerfile, "go build") || strings.Contains(dockerfile, "FROM golang:") {
+		t.Fatal("Docker image must not rebuild the daemon after the release artifact job has already built it")
+	}
+	for _, want := range []string{
+		"Download same-run Linux daemon artifacts for Docker image",
+		"daemon-artifacts",
+		"sha256sum",
+		"fse-linux-armv7",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release container job must download and verify same-run daemon artifacts, missing %q", want)
+		}
+	}
+}
+
 func TestDockerContainerDefaultsHeadlessWithoutBundledWebGUI(t *testing.T) {
 	root := filepath.Join("..", "..")
 	dockerfile := readRequiredFile(t, filepath.Join(root, "Dockerfile"))

@@ -50,11 +50,17 @@ func TestGoModulesDoNotRetainUnsupportedVulnerableDependencies(t *testing.T) {
 	}
 }
 
-func TestDockerBuilderUsesGoToolchainThatSatisfiesPatchedDependencies(t *testing.T) {
+func TestDockerImageConsumesReleaseDaemonBuiltWithPatchedToolchain(t *testing.T) {
 	root := repoRoot(t)
-	content := readTextFile(t, filepath.Join(root, "Dockerfile"))
-	if !strings.Contains(content, "FROM golang:1.25-alpine AS builder") {
-		t.Fatalf("Dockerfile builder must use Go 1.25 for patched dependency versions")
+	dockerfile := readTextFile(t, filepath.Join(root, "Dockerfile"))
+	workflow := readTextFile(t, filepath.Join(root, ".github", "workflows", "release.yml"))
+	if strings.Contains(dockerfile, "FROM golang:") || strings.Contains(dockerfile, "go build") {
+		t.Fatal("Docker image must consume the checksum-verified same-run release daemon rather than compiling a second binary")
+	}
+	for _, want := range []string{"Download same-run Linux daemon artifacts for Docker image", "go-version-file: go.mod"} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow must build the daemon using the declared patched Go toolchain and stage it for Docker, missing %q", want)
+		}
 	}
 }
 
