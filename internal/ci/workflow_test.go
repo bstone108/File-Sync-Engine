@@ -396,6 +396,7 @@ func TestReleaseWorkflowPublishesGitHubRelease(t *testing.T) {
 		"macos-desktop-artifacts",
 		"publish-container",
 		"actions/download-artifact@v7",
+		"pattern: \"!*.dockerbuild\"",
 		"release-assets",
 		"RELEASE_ASSET_SHA256SUMS",
 		"gh release create",
