@@ -23,6 +23,9 @@ for target in "${TARGETS[@]}"; do
   CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$OUT/$NAME" ./cmd/fse
 done
 
+echo "building linux/arm/v7 -> $OUT/fse-linux-armv7"
+CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$OUT/fse-linux-armv7" ./cmd/fse
+
 cp README.md "$OUT/docs/"
 (
   cd "$OUT"

@@ -98,6 +98,15 @@ jobs:
             build/${{ steps.version.outputs.version }}/SHA256SUMS
           if-no-files-found: error
 
+      - name: Upload linux armv7 daemon artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: file-sync-engine-daemon-linux-armv7-${{ steps.version.outputs.version }}-${{ github.sha }}
+          path: |
+            build/${{ steps.version.outputs.version }}/fse-linux-armv7
+            build/${{ steps.version.outputs.version }}/SHA256SUMS
+          if-no-files-found: error
+
   linux-desktop-artifacts:
     needs: version-preflight
     name: Linux desktop installer artifacts (${{ matrix.target }} ${{ matrix.webkit_slug }})
@@ -433,7 +442,7 @@ jobs:
           labels: |
             org.opencontainers.image.version=${{ needs.version-preflight.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
       - name: Sign image digest

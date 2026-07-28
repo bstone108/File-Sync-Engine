@@ -14,7 +14,9 @@ also one more fair warning, some of the encryption used is placeholders.  it's n
 
 ## Docker
 
-### docker compose
+The container image is an early server/NAS prototype. Its core image is **headless by default**: it contains the daemon only, creates the web GUI configuration disabled, and exposes only the API and sync ports. Keep `/config` persistent when replacing the image.
+
+### Docker Compose
 
 ```yaml
 services:
@@ -25,8 +27,6 @@ services:
     ports:
       - "22420:22420"
       - "22000:22000"
-      - "8385:8385"
-      - "8943:8943"
     volumes:
       - ./config:/config
     environment:
@@ -39,14 +39,11 @@ services:
       FSE_LOG_OUTPUT: /config/logs/fse.jsonl
       FSE_DISCOVERY_LOCAL: "true"
       FSE_DISCOVERY_DHT: "false"
-      FSE_WEB_GUI_ENABLED: "true"
-      FSE_WEB_GUI_LISTEN: 0.0.0.0:8385
-      FSE_WEB_GUI_TLS_ENABLED: "true"
-      FSE_WEB_GUI_HTTPS_LISTEN: 0.0.0.0:8943
+      FSE_WEB_GUI_ENABLED: "false"
       FSE_UMASK: "002"
 ```
 
-### docker run
+### Docker run
 
 ```bash
 docker run -d \
@@ -54,8 +51,6 @@ docker run -d \
   --restart unless-stopped \
   -p 22420:22420 \
   -p 22000:22000 \
-  -p 8385:8385 \
-  -p 8943:8943 \
   -v "$PWD/config:/config" \
   -e PUID=99 \
   -e PGID=100 \
@@ -66,36 +61,23 @@ docker run -d \
   -e FSE_LOG_OUTPUT=/config/logs/fse.jsonl \
   -e FSE_DISCOVERY_LOCAL=true \
   -e FSE_DISCOVERY_DHT=false \
-  -e FSE_WEB_GUI_ENABLED=true \
-  -e FSE_WEB_GUI_LISTEN=0.0.0.0:8385 \
-  -e FSE_WEB_GUI_TLS_ENABLED=true \
-  -e FSE_WEB_GUI_HTTPS_LISTEN=0.0.0.0:8943 \
+  -e FSE_WEB_GUI_ENABLED=false \
   -e FSE_UMASK=002 \
   ghcr.io/bstone108/file-sync-engine:latest
 ```
 
 ### Variables
 
-- `PUID`: User ID to run as inside the container. Default is `99`.
-- `PGID`: Group ID to run as inside the container. Default is `100`.
-- `UID`: Fallback user ID if `PUID` is not set.
-- `GID`: Fallback group ID if `PGID` is not set.
-- `FSE_RUN_AS_ROOT`: Set to `true` to run as root instead of switching to `PUID`/`PGID`. Default is `false`.
-- `FSE_CONFIG_PATH`: Path to the config file inside the container. Default is `/config/config.jsonc`.
-- `FSE_API_LISTEN`: API listen address. Default is `0.0.0.0:22420`.
-- `FSE_SYNC_LISTEN`: Sync listener address. Default is `tcp://0.0.0.0:22000`.
-- `FSE_LOG_LEVEL`: Log level for the daemon. Default is `info`.
-- `FSE_LOG_OUTPUT`: Log file path. Default is `/config/logs/fse.jsonl`.
-- `FSE_DISCOVERY_LOCAL`: Enables local discovery on first config creation. Default is `true`.
-- `FSE_DISCOVERY_DHT`: Enables DHT discovery on first config creation. Default is `false`.
-- `FSE_WEB_GUI_ENABLED`: Enables the bundled web GUI on first config creation. Default is `true`.
-- `FSE_WEB_GUI_PACKAGE`: Web GUI package path. Default is `/opt/fse/web/fse-web-container-default.zip`.
-- `FSE_WEB_GUI_INSTALL_DIR`: Web GUI install directory. Default is `/config/web/current`.
-- `FSE_WEB_GUI_LISTEN`: HTTP web GUI listen address. Default is `0.0.0.0:8385`.
-- `FSE_WEB_GUI_TLS_ENABLED`: Enables HTTPS for the web GUI on first config creation. Default is `true`.
-- `FSE_WEB_GUI_HTTPS_LISTEN`: HTTPS web GUI listen address. Default is `0.0.0.0:8943`.
-- `FSE_WEB_GUI_CHECKSUM`: SHA-256 checksum for the bundled web GUI package.
+- `PUID` / `PGID`: User and group IDs used to own `/config` and run the daemon. Defaults are `99` and `100`.
+- `UID` / `GID`: Fallback IDs when `PUID` / `PGID` are unset.
+- `FSE_RUN_AS_ROOT`: Set to `true` only for a debug container that must remain root. Default is `false`.
+- `FSE_CONFIG_PATH`: Config path inside the container. Default is `/config/config.jsonc`.
+- `FSE_API_LISTEN`: API listen address on first configuration creation. Default is `0.0.0.0:22420`.
+- `FSE_SYNC_LISTEN`: Sync listener on first configuration creation. Default is `tcp://0.0.0.0:22000`.
+- `FSE_LOG_LEVEL` / `FSE_LOG_OUTPUT`: First-run structured-log configuration.
+- `FSE_DISCOVERY_LOCAL` / `FSE_DISCOVERY_DHT`: First-run discovery switches.
+- `FSE_WEB_GUI_ENABLED`: Explicit opt-in configuration for a separately delivered GUI package. Default is `false`.
 - `FSE_UMASK`: File permission mask used by the entrypoint. Default is `002`.
-- `FSE_IDENTITY_EXPORT_PATH`: Optional path to write a container identity export package.
-- `FSE_IDENTITY_EXPORT_FORCE`: Set to `true` to overwrite an existing identity export file. Default is `false`.
-- `FSE_CONTAINER_FIRST_RUN`: Internal flag used by the entrypoint when it creates the config for the first time.
+- `FSE_IDENTITY_EXPORT_PATH` / `FSE_IDENTITY_EXPORT_FORCE`: Optional identity-export controls. Do not point exports at logs or world-readable mounts.
+
+The optional web GUI is not yet a working deployment interface. Do not expose GUI ports or enable it in a normal server deployment until the separately delivered package, credential-safe proxy boundary, and real installation/restart smoke evidence are complete. Browser code must never receive the daemon API key. See [`docs/DOCKER.md`](docs/DOCKER.md) for the current container contract, network diagnostics, and release-signature verification.

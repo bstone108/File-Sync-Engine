@@ -41,6 +41,60 @@ func TestCrossPlatformWorkflowCoversTestHarnessAndSixTargets(t *testing.T) {
 	}
 }
 
+func TestContainerReleaseAndCIExplicitlySupportLinuxARMv7(t *testing.T) {
+	ciWorkflow := readWorkflow(t, "ci.yml")
+	releaseWorkflow := readWorkflow(t, "release.yml")
+	buildScript := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-all.sh"))
+	dockerDocs := readRequiredFile(t, filepath.Join("..", "..", "docs", "DOCKER.md"))
+
+	for _, want := range []string{
+		"target: linux-armv7",
+		"GOARCH: arm",
+		"GOARM: 7",
+		"name: file-sync-engine-daemon-${{ matrix.target }}-${{ github.sha }}",
+	} {
+		if !strings.Contains(ciWorkflow, want) {
+			t.Fatalf("CI workflow must build a GOARM=7 daemon artifact, missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"fse-linux-armv7",
+		"file-sync-engine-daemon-linux-armv7-${{ steps.version.outputs.version }}-${{ github.sha }}",
+		"linux/amd64,linux/arm64,linux/arm/v7",
+	} {
+		if !strings.Contains(releaseWorkflow, want) {
+			t.Fatalf("release workflow must publish a Linux ARMv7 daemon/image contract, missing %q", want)
+		}
+	}
+	if !strings.Contains(buildScript, "GOOS=linux GOARCH=arm GOARM=7") {
+		t.Fatalf("build-all script must cross-compile the Linux ARMv7 daemon")
+	}
+	for _, want := range []string{"linux/arm/v7", "not runtime proof"} {
+		if !strings.Contains(dockerDocs, want) {
+			t.Fatalf("Docker documentation must distinguish ARMv7 release support from runtime evidence, missing %q", want)
+		}
+	}
+}
+
+func TestRootReadmeDockerExamplesKeepTheCoreHeadless(t *testing.T) {
+	readme := readRequiredFile(t, filepath.Join("..", "..", "README.md"))
+
+	for _, want := range []string{
+		"FSE_WEB_GUI_ENABLED: \"false\"",
+		"FSE_WEB_GUI_ENABLED=false",
+		"The optional web GUI is not yet a working deployment interface.",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("root Docker example must preserve headless-default boundary, missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"8385:8385", "8943:8943", "FSE_WEB_GUI_ENABLED: \"true\"", "FSE_WEB_GUI_ENABLED=true", "FSE_WEB_GUI_PACKAGE: Web GUI package path"} {
+		if strings.Contains(readme, forbidden) {
+			t.Fatalf("root Docker example advertises an unavailable bundled GUI setting %q", forbidden)
+		}
+	}
+}
+
 func TestWorkflowsUseNode24ReadyGitHubActions(t *testing.T) {
 	workflows := map[string]string{
 		"ci.yml":      readWorkflow(t, "ci.yml"),
