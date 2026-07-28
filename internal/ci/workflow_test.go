@@ -532,6 +532,8 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"codesign --verify --deep --strict",
 		"desktop-gui/wails-output/darwin-$ARCH",
 		"fse-desktop.app/Contents/MacOS/fse-desktop",
+		"Contents/Resources/engine",
+		"Contents/Resources/docs-snapshot/README.md",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("native macOS Wails script missing %q", want)

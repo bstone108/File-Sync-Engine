@@ -113,9 +113,16 @@ is_windows_target() {
   esac
 }
 
+is_darwin_target() {
+  case "$1" in
+    darwin-amd64|darwin-arm64) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 preflight_inputs() {
   local missing=0
-  local target engine_rel wails_dir wails_executable
+  local target engine_rel wails_dir wails_executable bundled_engine bundled_docs
   local needs_windows_installer=0
   for entry in "${TARGETS[@]}"; do
     target="${entry%%:*}"
@@ -140,6 +147,18 @@ preflight_inputs() {
     if [[ ! -f "$ENGINE_RESOURCE_ROOT/$engine_rel" ]]; then
       printf 'missing engine resource for %s: %s\n' "$target" "$ENGINE_RESOURCE_ROOT/$engine_rel" >&2
       missing=1
+    fi
+    if is_darwin_target "$target"; then
+      bundled_engine="$wails_dir/fse-desktop.app/Contents/Resources/engine/$engine_rel"
+      bundled_docs="$wails_dir/fse-desktop.app/Contents/Resources/docs-snapshot/README.md"
+      if [[ ! -s "$bundled_engine" ]]; then
+        printf 'missing embedded macOS engine resource for %s: %s\n' "$target" "$bundled_engine" >&2
+        missing=1
+      fi
+      if [[ ! -s "$bundled_docs" ]]; then
+        printf 'missing embedded macOS documentation for %s: %s\n' "$target" "$bundled_docs" >&2
+        missing=1
+      fi
     fi
   done
   if [[ "$needs_windows_installer" -eq 1 ]] && ! command -v makensis >/dev/null 2>&1; then
@@ -249,15 +268,23 @@ copy_target() {
   local staging="$OUT_DIR/.staging/$target"
   local zip_name="fse-desktop-${VERSION}-${target}.zip"
 
-  mkdir -p "$staging/app" "$staging/engine" "$staging/docs-snapshot"
+  mkdir -p "$staging/app"
   cp -a "$wails_dir"/. "$staging/app/"
-  stage_target_engine_resources "$target" "$engine_rel" "$staging/engine"
-  cp "$ROOT/README.md" "$staging/docs-snapshot/"
-
-  (
-    cd "$staging"
-    zip -qr "$OUT_DIR/$zip_name" app engine docs-snapshot
-  )
+  if is_darwin_target "$target"; then
+    # macOS payload is already code-signed inside fse-desktop.app/Contents/Resources.
+    (
+      cd "$staging"
+      zip -qr "$OUT_DIR/$zip_name" app
+    )
+  else
+    mkdir -p "$staging/engine" "$staging/docs-snapshot"
+    stage_target_engine_resources "$target" "$engine_rel" "$staging/engine"
+    cp "$ROOT/README.md" "$staging/docs-snapshot/"
+    (
+      cd "$staging"
+      zip -qr "$OUT_DIR/$zip_name" app engine docs-snapshot
+    )
+  fi
   printf '%s\n' "$zip_name"
   if is_windows_target "$target"; then
     build_windows_installer "$target" "$staging"

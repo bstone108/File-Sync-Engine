@@ -125,6 +125,25 @@ func TestDesktopRuntimeUsesSiblingEngineDirectoryForPackagedGUI(t *testing.T) {
 	}
 }
 
+func TestDesktopRuntimeUsesMacOSBundleResourcesForPackagedGUI(t *testing.T) {
+	tmp := t.TempDir()
+	executable := filepath.Join(tmp, "fse-desktop.app", "Contents", "MacOS", "fse-desktop")
+	engineRoot := filepath.Join(tmp, "fse-desktop.app", "Contents", "Resources", "engine")
+	if err := os.MkdirAll(engineRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("desktop"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := desktopEngineResourceRootForExecutable(executable); got != engineRoot {
+		t.Fatalf("macOS bundled engine root = %q, want %q", got, engineRoot)
+	}
+}
+
 func TestAdoptGUIOwnedNonServiceDaemonReturnsPersistedSessionByID(t *testing.T) {
 	tmp := t.TempDir()
 	app := NewApp()

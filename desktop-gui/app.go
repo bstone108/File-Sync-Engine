@@ -344,9 +344,16 @@ func (rt *desktopNativeRuntime) engineResourceRoot() (string, error) {
 
 func desktopEngineResourceRootForExecutable(executable string) string {
 	appDirectory := filepath.Dir(executable)
-	packagedRoot := filepath.Clean(filepath.Join(appDirectory, "..", "engine"))
-	if info, err := os.Stat(packagedRoot); err == nil && info.IsDir() {
-		return packagedRoot
+	for _, candidate := range []string{
+		// A macOS application bundle keeps managed payload under Contents/Resources.
+		filepath.Join(appDirectory, "..", "Resources", "engine"),
+		// Preserve the older sibling layout for non-macOS packaged outputs.
+		filepath.Join(appDirectory, "..", "engine"),
+		filepath.Join(appDirectory, "resources", "engine"),
+	} {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return filepath.Clean(candidate)
+		}
 	}
 	return filepath.Join(appDirectory, "resources", "engine")
 }

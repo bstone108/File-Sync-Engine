@@ -122,6 +122,14 @@ stage_target_engine_resource_subset "darwin/$ARCH" "$WORK_DIR/resources/engine"
     exit 1
   fi
   test -s "$APP_BUNDLE/Contents/MacOS/fse-desktop"
+  # macOS ships one self-contained .app: the selected daemon and user-facing
+  # release documentation live under Contents/Resources, not beside the bundle.
+  mkdir -p "$APP_BUNDLE/Contents/Resources"
+  cp -R "$WORK_DIR/resources/engine" "$APP_BUNDLE/Contents/Resources/engine"
+  mkdir -p "$APP_BUNDLE/Contents/Resources/docs-snapshot"
+  cp "$ROOT/README.md" "$APP_BUNDLE/Contents/Resources/docs-snapshot/README.md"
+  test -s "$APP_BUNDLE/Contents/Resources/engine/darwin/$ARCH/fse"
+  test -s "$APP_BUNDLE/Contents/Resources/docs-snapshot/README.md"
   codesign --force --deep --sign - "$APP_BUNDLE"
   codesign --verify --deep --strict "$APP_BUNDLE"
   cp -R "$APP_BUNDLE" "$TARGET_OUT/fse-desktop.app"

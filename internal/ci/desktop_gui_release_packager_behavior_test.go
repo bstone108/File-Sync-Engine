@@ -165,6 +165,43 @@ printf 'fake nsis installer for %s\n' "$script" > "$out"
 	}
 }
 
+func TestDesktopGUIReleasePackagerKeepsMacOSPayloadInsideAppBundle(t *testing.T) {
+	root := filepath.Join("..", "..")
+	tmp := t.TempDir()
+	wailsRoot := filepath.Join(tmp, "wails-output")
+	engineRoot := filepath.Join(tmp, "engine")
+	outDir := filepath.Join(tmp, "out")
+	appRoot := filepath.Join(wailsRoot, "darwin-amd64", "fse-desktop.app", "Contents")
+	mustWriteFile(t, filepath.Join(appRoot, "MacOS", "fse-desktop"), "desktop")
+	mustWriteFile(t, filepath.Join(appRoot, "Resources", "engine", "darwin", "amd64", "fse"), "embedded engine")
+	mustWriteFile(t, filepath.Join(appRoot, "Resources", "docs-snapshot", "README.md"), "embedded docs")
+	mustWriteFile(t, filepath.Join(engineRoot, "manifest.json"), `{"entries":[{"target":"darwin-amd64","relativePath":"darwin/amd64/fse"}]}`)
+	mustWriteFile(t, filepath.Join(engineRoot, "darwin", "amd64", "fse"), "source engine")
+
+	cmd := exec.Command("bash", "scripts/package-desktop-gui-release.sh", "0.1.99-test", wailsRoot, engineRoot, outDir)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "FSE_DESKTOP_GUI_RELEASE_TARGETS=darwin-amd64")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("packager failed for embedded macOS bundle:\n%s", output)
+	}
+	archive := filepath.Join(outDir, "fse-desktop-0.1.99-test-darwin-amd64.zip")
+	for _, want := range []string{
+		"app/fse-desktop.app/Contents/MacOS/fse-desktop",
+		"app/fse-desktop.app/Contents/Resources/engine/darwin/amd64/fse",
+		"app/fse-desktop.app/Contents/Resources/docs-snapshot/README.md",
+	} {
+		if !zipContains(t, archive, want) {
+			t.Fatalf("macOS archive did not retain bundle payload %q", want)
+		}
+	}
+	for _, forbidden := range []string{"engine/darwin/amd64/fse", "docs-snapshot/README.md"} {
+		if zipContains(t, archive, forbidden) {
+			t.Fatalf("macOS archive must not put payload outside the .app bundle: %q", forbidden)
+		}
+	}
+}
+
 func mustMkdir(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
