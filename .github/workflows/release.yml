@@ -418,6 +418,7 @@ jobs:
       - windows-desktop-artifacts
       - macos-desktop-artifacts
     outputs:
+      image: ${{ steps.image-ref.outputs.repository }}
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
@@ -430,6 +431,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve lowercase GHCR repository
+        id: image-ref
+        shell: bash
+        run: printf 'repository=ghcr.io/%s\n' "${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - name: Build and push synchronized release image
         id: build
         uses: docker/build-push-action@v6
@@ -437,8 +442,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ needs.version-preflight.outputs.version }}
-            ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+            ${{ steps.image-ref.outputs.repository }}:${{ needs.version-preflight.outputs.version }}
+            ${{ steps.image-ref.outputs.repository }}:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.version=${{ needs.version-preflight.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -448,13 +453,13 @@ jobs:
       - name: Sign image digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          IMAGE: ghcr.io/${{ github.repository }}
+          IMAGE: ${{ steps.image-ref.outputs.repository }}
           VERSION: ${{ needs.version-preflight.outputs.version }}
         run: cosign sign --yes "${IMAGE}:${VERSION}@${DIGEST}"
       - name: Verify image signature
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          IMAGE: ghcr.io/${{ github.repository }}
+          IMAGE: ${{ steps.image-ref.outputs.repository }}
           VERSION: ${{ needs.version-preflight.outputs.version }}
         run: |
           cosign verify "${IMAGE}:${VERSION}@${DIGEST}" \
@@ -530,7 +535,7 @@ jobs:
           cat > "$notes_file" <<NOTES
           Automated File Sync Engine release $VERSION.
 
-          This release contains daemon and desktop GUI build artifacts produced by GitHub Actions for Linux, Windows, and macOS targets, plus the matching signed GHCR image `ghcr.io/${{ github.repository }}:$VERSION` (digest `${{ needs.publish-container.outputs.digest }}`). Linux desktop installers include both WebKitGTK ABI lanes where applicable.
+          This release contains daemon and desktop GUI build artifacts produced by GitHub Actions for Linux, Windows, and macOS targets, plus the matching signed GHCR image `${{ needs.publish-container.outputs.image }}:$VERSION` (digest `${{ needs.publish-container.outputs.digest }}`). Linux desktop installers include both WebKitGTK ABI lanes where applicable.
           NOTES
 
           if gh release view "$TAG" >/dev/null 2>&1; then
