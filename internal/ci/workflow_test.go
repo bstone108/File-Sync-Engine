@@ -498,6 +498,19 @@ func TestDesktopWailsBuildScriptsStageOnlyTargetEngineResource(t *testing.T) {
 	}
 }
 
+func TestWindowsWailsBuildDownloadsWebView2PrerequisiteWhenAbsent(t *testing.T) {
+	script := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails.sh"))
+	for _, want := range []string{
+		"FSE_DESKTOP_WAILS_PLATFORM\" = \"windows/amd64\"",
+		"FSE_DESKTOP_WAILS_PLATFORM\" = \"windows/arm64\"",
+		"-webview2 download",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("Windows Wails build must offer WebView2 installation when absent; missing %q", want)
+		}
+	}
+}
+
 func TestMacOSInfoPlistAllowsLocalNetworkingForWailsAssetServer(t *testing.T) {
 	plist := readRequiredFile(t, filepath.Join("..", "..", "desktop-gui", "build", "darwin", "Info.plist"))
 	for _, want := range []string{

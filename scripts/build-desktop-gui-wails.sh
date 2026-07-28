@@ -389,6 +389,13 @@ FALLBACKGO
         if ! wails build -platform "$FSE_DESKTOP_WAILS_PLATFORM" -clean -tags "$FSE_DESKTOP_WAILS_TAGS"; then
           wails_build_failed=1
         fi
+      elif [ "$FSE_DESKTOP_WAILS_PLATFORM" = "windows/amd64" ] || [ "$FSE_DESKTOP_WAILS_PLATFORM" = "windows/arm64" ]; then
+        # Use the official Wails WebView2 bootstrapper path. On a machine without
+        # WebView2, the application prompts the user to download/install it rather
+        # than presenting an unusable blank window.
+        if ! wails build -platform "$FSE_DESKTOP_WAILS_PLATFORM" -webview2 download -clean; then
+          wails_build_failed=1
+        fi
       else
         if ! wails build -platform "$FSE_DESKTOP_WAILS_PLATFORM" -clean; then
           wails_build_failed=1
