@@ -6,9 +6,11 @@ FROM node:22-bookworm AS node-runtime
 FROM golang:1.25-bookworm
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-runtime /usr/local/bin/npm /usr/local/bin/npm
-COPY --from=node-runtime /usr/local/bin/npx /usr/local/bin/npx
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+# COPY dereferences npm/npx symlinks; recreate their original paths so their
+# relative imports resolve from the Node 22 module tree rather than /usr/local/bin.
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG WAILS_VERSION=v2.10.2

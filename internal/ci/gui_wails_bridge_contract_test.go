@@ -151,7 +151,14 @@ func TestDesktopGUIWailsBridgeUsesGeneratedBindingsInsteadOfOptionalWindowGlobal
 			t.Fatalf("%s must generate Wails frontend bindings before the frontend build", name)
 		}
 	}
-	for _, want := range []string{"FROM node:22-bookworm AS node-runtime", "COPY --from=node-runtime", "/usr/local/bin/node"} {
+	for _, want := range []string{
+		"FROM node:22-bookworm AS node-runtime",
+		"COPY --from=node-runtime",
+		"/usr/local/bin/node",
+		"/usr/local/lib/node_modules",
+		"ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm",
+		"ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx",
+	} {
 		if !strings.Contains(builderDockerfile, want) {
 			t.Fatalf("desktop Wails builder must provide the supported Node 22 frontend runtime: missing %q", want)
 		}
@@ -214,6 +221,28 @@ func TestDesktopGUIWailsBuildRejectsStaleBuilderImagesBeforeWindowsArtifactBuild
 	} {
 		if !strings.Contains(isolatedBuild+imageBuild, want) {
 			t.Fatalf("desktop Wails build scripts must reject stale builder images before artifact builds: missing %q", want)
+		}
+	}
+}
+
+func TestLegacyWebKitWailsBuilderUsesSupportedNodeRuntimeAndLabels(t *testing.T) {
+	root := filepath.Join("..", "..")
+	legacyDockerfile := readRequiredFile(t, filepath.Join(root, "development", "desktop-wails-builder", "Dockerfile.linux-webkit40"))
+	for _, want := range []string{
+		"FROM node:22-bookworm AS node-runtime",
+		"COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node",
+		"COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules",
+		"ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm",
+		`org.filesyncengine.desktop.wails.go-version="1.25.7"`,
+		`org.filesyncengine.desktop.wails.node-major="22"`,
+	} {
+		if !strings.Contains(legacyDockerfile, want) {
+			t.Fatalf("legacy WebKit Wails builder missing supported runtime contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{"        nodejs", "        npm"} {
+		if strings.Contains(legacyDockerfile, forbidden) {
+			t.Fatalf("legacy WebKit Wails builder must not install Debian's unsupported Node/npm package %q", forbidden)
 		}
 	}
 }

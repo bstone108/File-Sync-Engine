@@ -2,7 +2,19 @@
 # Legacy WebKitGTK 4.0 Linux desktop GUI Wails builder.
 # Use this only for producing compatibility artifacts for older distributions
 # that still ship the webkit2gtk-4.0 ABI/runtime packages.
+FROM node:22-bookworm AS node-runtime
+
 FROM golang:1.25-bookworm
+
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+# COPY dereferences npm/npx symlinks; recreate their original paths so their
+# relative imports resolve from the Node 22 module tree rather than /usr/local/bin.
+RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+LABEL org.filesyncengine.desktop.wails.go-version="1.25.7" \
+      org.filesyncengine.desktop.wails.node-major="22"
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG WAILS_VERSION=v2.10.2
@@ -12,8 +24,6 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
-        nodejs \
-        npm \
         pkg-config \
         build-essential \
         libgtk-3-dev \
