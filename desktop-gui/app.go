@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -564,6 +566,12 @@ func requireExecutableFile(path string) error {
 }
 
 func writeGUIOwnedDaemonConfig(path, listen, apiKey, stateDir string) error {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate GUI-owned daemon identity: %w", err)
+	}
+	identityPrivateKey := base64.StdEncoding.EncodeToString(privateKey)
+	identityPublicKey := base64.StdEncoding.EncodeToString(publicKey)
 	metadataPath := filepath.ToSlash(filepath.Join(stateDir, "metadata"))
 	logPath := filepath.ToSlash(filepath.Join(stateDir, "logs", "daemon.jsonl"))
 	certPath := filepath.ToSlash(filepath.Join(stateDir, "api.crt"))
@@ -580,6 +588,11 @@ func writeGUIOwnedDaemonConfig(path, listen, apiKey, stateDir string) error {
       "keyFile": "%s"
     }
   },
+  "identity": {
+    "privateKey": "%s",
+    "publicKey": "%s",
+    "encryptionLevel": %d
+  },
   "metadata": {
     "backend": "badger",
     "path": "%s",
@@ -592,7 +605,7 @@ func writeGUIOwnedDaemonConfig(path, listen, apiKey, stateDir string) error {
   "folders": [],
   "peers": []
 }
-`, listen, apiKey, certPath, keyPath, metadataPath, logPath)
+`, listen, apiKey, certPath, keyPath, identityPrivateKey, identityPublicKey, 4, metadataPath, logPath)
 	return atomicWriteFile(path, []byte(config), 0o600)
 }
 
