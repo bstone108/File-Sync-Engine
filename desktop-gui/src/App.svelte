@@ -147,7 +147,7 @@
   let maintenanceFormFolderID = '';
   let webGUIFormAction: 'status' | 'install' | 'update' | 'start' | 'stop' = 'status';
   let configPatchLoggingLevel = 'info';
-  let pairingGroupID = '';
+  const primaryIdentityPackageID = 'primary';
   let pairingPackage: IdentityPairingPackage | null = null;
   let pairingExportText = '';
   let pairingDownloadFilename = '';
@@ -670,8 +670,7 @@
     pairingLoading = true;
     pairingMessage = '';
     try {
-      const groupID = requireNonEmpty(pairingGroupID, 'Identity group ID');
-      pairingPackage = await generateIdentityPairingPackage(daemonConnectionSettings, groupID);
+      pairingPackage = await generateIdentityPairingPackage(daemonConnectionSettings, primaryIdentityPackageID);
       pairingExportText = exportIdentityPackageAsCopyableText(pairingPackage);
       const download = buildIdentityPackageDownload(pairingPackage);
       pairingDownloadFilename = download.filename;
@@ -1703,13 +1702,8 @@
       <section class="connection-card">
         <h2>Identity pairing export/import</h2>
         <p>
-          Generate a same-identity pairing package as copyable pairing text, a downloadable identity file, a QR fallback payload, and an animated visual code frame list.
-          The package still contains identity secret material, so it is never written to logs or generic status events.
+          This exports this engine's single identity for pairing. The package still contains identity secret material, so it is never written to logs or generic status events.
         </p>
-        <label>
-          Identity group ID
-          <input bind:value={pairingGroupID} placeholder="family-sync" />
-        </label>
         <button type="button" on:click={generatePairingPackage} disabled={pairingLoading}>
           Generate pairing package
         </button>

@@ -572,6 +572,7 @@ func writeGUIOwnedDaemonConfig(path, listen, apiKey, stateDir string) error {
 	}
 	identityPrivateKey := base64.StdEncoding.EncodeToString(privateKey)
 	identityPublicKey := base64.StdEncoding.EncodeToString(publicKey)
+	identityBootstrapToken := randomHex(48)
 	metadataPath := filepath.ToSlash(filepath.Join(stateDir, "metadata"))
 	logPath := filepath.ToSlash(filepath.Join(stateDir, "logs", "daemon.jsonl"))
 	certPath := filepath.ToSlash(filepath.Join(stateDir, "api.crt"))
@@ -591,7 +592,8 @@ func writeGUIOwnedDaemonConfig(path, listen, apiKey, stateDir string) error {
   "identity": {
     "privateKey": "%s",
     "publicKey": "%s",
-    "encryptionLevel": %d
+    "encryptionLevel": %d,
+    "groups": [{"id": "primary", "token": "%s", "enabled": true}]
   },
   "metadata": {
     "backend": "badger",
@@ -605,7 +607,7 @@ func writeGUIOwnedDaemonConfig(path, listen, apiKey, stateDir string) error {
   "folders": [],
   "peers": []
 }
-`, listen, apiKey, certPath, keyPath, identityPrivateKey, identityPublicKey, 4, metadataPath, logPath)
+`, listen, apiKey, certPath, keyPath, identityPrivateKey, identityPublicKey, 4, identityBootstrapToken, metadataPath, logPath)
 	return atomicWriteFile(path, []byte(config), 0o600)
 }
 

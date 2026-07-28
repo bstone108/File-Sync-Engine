@@ -39,6 +39,14 @@ func BuildIdentityPackage(cfg config.Config, groupID string) (IdentityPackage, e
 		return IdentityPackage{}, fmt.Errorf("identity public key is required to build an identity package")
 	}
 	group, ok := findEnabledIdentityGroup(cfg.Identity.Groups, groupID)
+	if !ok && groupID == "primary" && cfg.Identity.PrivateKey != "" {
+		// Legacy GUI-owned daemon configurations predate explicit pairing state.
+		// Derive one stable internal bootstrap proof from the existing private
+		// identity, rather than forcing a destructive identity reset on upgrade.
+		proof := sha256.Sum256([]byte("fse-primary-identity-bootstrap-v1:" + cfg.Identity.PrivateKey))
+		group = config.IdentityGroupConfig{ID: "primary", Token: base64.RawURLEncoding.EncodeToString(proof[:]), Enabled: true}
+		ok = true
+	}
 	if !ok {
 		return IdentityPackage{}, fmt.Errorf("enabled identity group %q not found", groupID)
 	}
