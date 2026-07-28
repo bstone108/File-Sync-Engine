@@ -93,7 +93,9 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 
 	sources := mainTS + bridge + appSvelte + daemonAPI + nativeProxy
 	for _, want := range []string{
+		"import { mount } from 'svelte';",
 		"installWailsNativeShellBridge();",
+		"mount(App, {",
 		`from "../../wailsjs/go/main/App"`,
 		"window.fseDesktopShell",
 		"RequestGUIOwnedNonServiceDaemonLaunch",
@@ -116,8 +118,11 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 			t.Fatalf("desktop GUI Wails native-shell bridge missing %q", want)
 		}
 	}
-	if strings.Index(mainTS, "installWailsNativeShellBridge();") > strings.Index(mainTS, "new App(") {
+	if strings.Index(mainTS, "installWailsNativeShellBridge();") > strings.Index(mainTS, "mount(App, {") {
 		t.Fatal("Wails native-shell bridge must be installed before Svelte starts")
+	}
+	if strings.Contains(mainTS, "new App(") {
+		t.Fatal("Svelte 5 desktop bootstrap must use mount(App, ...), not the removed new App API")
 	}
 	if strings.Contains(appSvelte, "on:click={launchGUIOwnedNonServiceDaemon} disabled={lifecycleLoading || !bundleGate?.bundleVerified}") {
 		t.Fatal("native launch must not be disabled by the obsolete all-target frontend bundle gate")
