@@ -14,14 +14,14 @@ also one more fair warning, some of the encryption used is placeholders.  it's n
 
 ## Docker
 
-The container image is an early server/NAS prototype. Its core image is **headless by default**: it contains the daemon only, creates the web GUI configuration disabled, and exposes only the API and sync ports. Keep `/config` persistent when replacing the image.
+The container image is an early server/NAS prototype. Its core image is **headless by default**: it contains the daemon only, creates the web GUI configuration disabled, and exposes only the API and sync ports. Keep `/config` persistent when replacing the image. Replace `<version>` with a published `YYYY.MM.DD.NN` release tag; `latest` is intentionally not published.
 
 ### Docker Compose
 
 ```yaml
 services:
   fse:
-    image: ghcr.io/bstone108/file-sync-engine:latest
+    image: ghcr.io/bstone108/file-sync-engine:<version>
     container_name: fse
     restart: unless-stopped
     ports:
@@ -63,7 +63,7 @@ docker run -d \
   -e FSE_DISCOVERY_DHT=false \
   -e FSE_WEB_GUI_ENABLED=false \
   -e FSE_UMASK=002 \
-  ghcr.io/bstone108/file-sync-engine:latest
+  ghcr.io/bstone108/file-sync-engine:<version>
 ```
 
 ### Variables

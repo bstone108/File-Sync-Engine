@@ -130,6 +130,22 @@ func TestDockerContainerDefaultsHeadlessWithoutBundledWebGUI(t *testing.T) {
 	}
 }
 
+func TestRootDockerExamplesUsePublishedImmutableReleaseTags(t *testing.T) {
+	readme := readRequiredFile(t, filepath.Join("..", "..", "README.md"))
+
+	if strings.Contains(readme, "ghcr.io/bstone108/file-sync-engine:latest") {
+		t.Fatalf("Docker examples must not use the unpublished mutable latest tag")
+	}
+	for _, want := range []string{
+		"ghcr.io/bstone108/file-sync-engine:<version>",
+		"Replace `<version>` with a published `YYYY.MM.DD.NN` release tag",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("Docker examples must guide users to a published immutable release tag, missing %q", want)
+		}
+	}
+}
+
 func TestContainerEntrypointExportsIdentityPackageWithoutRegenerating(t *testing.T) {
 	root := filepath.Join("..", "..")
 	entrypoint := readRequiredFile(t, filepath.Join(root, "scripts", "container-entrypoint.sh"))
