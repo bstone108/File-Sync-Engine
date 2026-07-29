@@ -14,6 +14,31 @@ docker run --rm \
   filesyncengine:local
 ```
 
+## Compose baseline
+
+`compose.yaml` provides the same headless server/NAS baseline with a named persistent
+`fse-config` volume. It requires an explicit published shared release version; it never
+falls back to an unpublished `latest` tag and it keeps the optional web GUI disabled:
+
+```bash
+FSE_IMAGE_TAG=2026.07.28.02 docker compose up -d
+```
+
+If the host already runs Syncthing or another service on its default sync port, use
+a separate **disposable** mapping for FSE rather than sharing a live folder or port:
+
+```bash
+FSE_IMAGE_TAG=2026.07.28.02 FSE_SYNC_HOST_PORT=32000 docker compose up -d
+```
+
+`FSE_API_HOST_PORT` and `FSE_SYNC_HOST_PORT` default to `22420` and `22000` and map
+only the host side; the daemon continues to listen on its standard container ports.
+This host-independent
+baseline publishes only the daemon API and sync ports (`22420` and `22000`), preserves
+`/config` through replacement, and does not install, expose, or enable browser GUI
+assets. Stop it with `docker compose down`; omit `-v` to preserve the named config
+volume.
+
 On first start, the entrypoint creates `/config/config.jsonc`, generates API and identity material inside that file, and delegates non-secret container defaults plus optional identity export to the Go-owned `fse container-bootstrap` helper:
 
 - API listener: `0.0.0.0:22420`

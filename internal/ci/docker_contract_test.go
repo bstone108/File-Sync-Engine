@@ -175,6 +175,55 @@ func TestRootDockerExamplesUsePublishedImmutableReleaseTags(t *testing.T) {
 	}
 }
 
+func TestDockerComposeHeadlessDaemonUsesPersistentConfigAndExplicitReleaseTag(t *testing.T) {
+	root := filepath.Join("..", "..")
+	compose := readRequiredFile(t, filepath.Join(root, "compose.yaml"))
+
+	for _, want := range []string{
+		"services:",
+		"fse:",
+		"ghcr.io/bstone108/file-sync-engine:${FSE_IMAGE_TAG:?Set FSE_IMAGE_TAG to a published YYYY.MM.DD.NN release tag}",
+		"FSE_WEB_GUI_ENABLED: \"false\"",
+		"fse-config:/config",
+		"${FSE_API_HOST_PORT:-22420}:22420/tcp",
+		"${FSE_SYNC_HOST_PORT:-22000}:22000/tcp",
+		"volumes:",
+		"fse-config:",
+	} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("Compose deployment missing %q:\n%s", want, compose)
+		}
+	}
+	for _, forbidden := range []string{
+		"8385:8385",
+		"8943:8943",
+		"FSE_WEB_GUI_ENABLED: \"true\"",
+		"web-gui/",
+	} {
+		if strings.Contains(compose, forbidden) {
+			t.Fatalf("headless Compose baseline must not enable or publish optional GUI material %q:\n%s", forbidden, compose)
+		}
+	}
+}
+
+func TestDockerComposeAllowsSeparateHostPortsForDisposableCoexistence(t *testing.T) {
+	root := filepath.Join("..", "..")
+	compose := readRequiredFile(t, filepath.Join(root, "compose.yaml"))
+	docs := readRequiredFile(t, filepath.Join(root, "docs", "DOCKER.md"))
+
+	for _, want := range []string{
+		"${FSE_API_HOST_PORT:-22420}:22420/tcp",
+		"${FSE_SYNC_HOST_PORT:-22000}:22000/tcp",
+	} {
+		if !strings.Contains(compose, want) {
+			t.Fatalf("Compose deployment must permit a separately mapped host port, missing %q:\n%s", want, compose)
+		}
+	}
+	if !strings.Contains(docs, "FSE_SYNC_HOST_PORT=32000") {
+		t.Fatalf("Docker docs must show a separate disposable sync host port for coexistence testing:\n%s", docs)
+	}
+}
+
 func TestContainerEntrypointExportsIdentityPackageWithoutRegenerating(t *testing.T) {
 	root := filepath.Join("..", "..")
 	entrypoint := readRequiredFile(t, filepath.Join(root, "scripts", "container-entrypoint.sh"))

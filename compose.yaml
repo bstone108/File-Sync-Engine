@@ -1,0 +1,20 @@
+# Headless File Sync Engine server/NAS baseline.
+# Set FSE_IMAGE_TAG to an intentionally published YYYY.MM.DD.NN release version.
+services:
+  fse:
+    image: ghcr.io/bstone108/file-sync-engine:${FSE_IMAGE_TAG:?Set FSE_IMAGE_TAG to a published YYYY.MM.DD.NN release tag}
+    restart: unless-stopped
+    environment:
+      PUID: "99"
+      PGID: "100"
+      FSE_UMASK: "002"
+      # The optional GUI is never enabled by the baseline deployment.
+      FSE_WEB_GUI_ENABLED: "false"
+    ports:
+      - "${FSE_API_HOST_PORT:-22420}:22420/tcp"
+      - "${FSE_SYNC_HOST_PORT:-22000}:22000/tcp"
+    volumes:
+      - fse-config:/config
+
+volumes:
+  fse-config:
