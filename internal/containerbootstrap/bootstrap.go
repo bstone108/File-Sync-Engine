@@ -16,6 +16,7 @@ type RuntimeDefaults struct {
 	DiscoveryLocal    bool
 	DiscoveryDHT      bool
 	WebGUIEnabled     bool
+	WebGUIVersion     string
 	WebGUIPackage     string
 	WebGUIInstallDir  string
 	WebGUIListen      string
@@ -33,6 +34,7 @@ func DefaultsFromEnvironment() RuntimeDefaults {
 		DiscoveryLocal:    envBoolOrDefault("FSE_DISCOVERY_LOCAL", true),
 		DiscoveryDHT:      envBoolOrDefault("FSE_DISCOVERY_DHT", false),
 		WebGUIEnabled:     envBoolOrDefault("FSE_WEB_GUI_ENABLED", false),
+		WebGUIVersion:     os.Getenv("FSE_WEB_GUI_VERSION"),
 		WebGUIPackage:     os.Getenv("FSE_WEB_GUI_PACKAGE"),
 		WebGUIInstallDir:  os.Getenv("FSE_WEB_GUI_INSTALL_DIR"),
 		WebGUIListen:      os.Getenv("FSE_WEB_GUI_LISTEN"),
@@ -90,9 +92,9 @@ func ApplyFirstRunDefaults(cfg config.Config, defaults RuntimeDefaults) config.C
 	cfg.Metadata = config.MetadataConfig{Backend: config.MetadataBackendBadger, Path: "/config/metadata", PerFolder: true}
 	cfg.Discovery.Local = defaults.DiscoveryLocal
 	cfg.Discovery.DHT = defaults.DiscoveryDHT
-	if defaults.WebGUIEnabled {
+	if defaults.webGUIOptInComplete() {
 		cfg.WebGUI.Enabled = true
-		cfg.WebGUI.Version = "container-default"
+		cfg.WebGUI.Version = defaults.WebGUIVersion
 		cfg.WebGUI.PackagePath = defaults.WebGUIPackage
 		cfg.WebGUI.InstallDir = defaults.WebGUIInstallDir
 		cfg.WebGUI.Listen = defaults.WebGUIListen
@@ -105,6 +107,15 @@ func ApplyFirstRunDefaults(cfg config.Config, defaults RuntimeDefaults) config.C
 		}
 	}
 	return cfg
+}
+
+func (d RuntimeDefaults) webGUIOptInComplete() bool {
+	return d.WebGUIEnabled &&
+		d.WebGUIVersion != "" &&
+		d.WebGUIPackage != "" &&
+		d.WebGUIInstallDir != "" &&
+		d.WebGUIListen != "" &&
+		d.WebGUIChecksum != ""
 }
 
 func SaveFirstRunDefaults(path string, defaults RuntimeDefaults) (config.Config, error) {

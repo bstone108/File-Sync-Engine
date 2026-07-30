@@ -62,6 +62,7 @@ Secrets are generated inside `/config/config.jsonc` and are not logged by the en
 | `FSE_DISCOVERY_LOCAL` | `true` | Initial local discovery switch. |
 | `FSE_DISCOVERY_DHT` | `false` | Initial public-DHT discovery switch. |
 | `FSE_WEB_GUI_ENABLED` | `false` | Explicit opt-in for a separately delivered trusted web-GUI package on first config creation. |
+| `FSE_WEB_GUI_VERSION` | unset | Explicit version of the separately delivered web-GUI package; required with every other web-GUI delivery field when opt-in is enabled. |
 | `FSE_WEB_GUI_PACKAGE` | unset | Absolute path of a separately mounted trusted GUI package; required with its version and checksum when the GUI is enabled. |
 | `FSE_WEB_GUI_INSTALL_DIR` | unset | Persistent install directory for an explicitly enabled GUI package. |
 | `FSE_WEB_GUI_LISTEN` | unset | Explicit web-GUI listener. The core image never supplies a web listener. |
@@ -79,7 +80,7 @@ These environment-derived values apply only while the entrypoint creates the fir
 
 ## Optional web GUI delivery boundary
 
-A web GUI is not yet a working server deployment interface. The former bundled status placeholder is intentionally excluded from the core image. When a separately versioned, trusted GUI package is available, deployment must explicitly opt in with `FSE_WEB_GUI_ENABLED=true`, mount or otherwise provide the package, provide its version/checksum and explicit listeners, and use the authenticated daemon lifecycle endpoint to install/start it. The browser must never receive the daemon API key.
+A web GUI is not yet a working server deployment interface. The former bundled status placeholder is intentionally excluded from the core image. When a separately versioned, trusted GUI package is available, deployment must explicitly opt in with `FSE_WEB_GUI_ENABLED=true`, mount or otherwise provide the package, and provide **all** of `FSE_WEB_GUI_VERSION`, `FSE_WEB_GUI_PACKAGE`, `FSE_WEB_GUI_INSTALL_DIR`, `FSE_WEB_GUI_LISTEN`, and `FSE_WEB_GUI_CHECKSUM`. On first run, incomplete opt-in metadata deliberately leaves a valid headless configuration instead of persisting an enabled but unusable GUI configuration. A later daemon-owned lifecycle slice will install/start the package after daemon bootstrap. The browser must never receive the daemon API key.
 
 Until deployment smoke tests prove install/start, restart persistence, and failure isolation, do not treat this configuration seam as a usable web GUI. A failed optional GUI installation must not prevent the headless daemon from running.
 

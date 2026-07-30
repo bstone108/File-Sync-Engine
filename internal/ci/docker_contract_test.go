@@ -159,6 +159,30 @@ func TestDockerContainerDefaultsHeadlessWithoutBundledWebGUI(t *testing.T) {
 	}
 }
 
+func TestDockerOptionalGUIOptInRequiresExplicitTrustedDeliveryMetadata(t *testing.T) {
+	root := filepath.Join("..", "..")
+	entrypoint := readRequiredFile(t, filepath.Join(root, "scripts", "container-entrypoint.sh"))
+	bootstrap := readRequiredFile(t, filepath.Join(root, "internal", "containerbootstrap", "bootstrap.go"))
+	docs := readRequiredFile(t, filepath.Join(root, "docs", "DOCKER.md"))
+
+	for _, want := range []string{
+		"FSE_WEB_GUI_VERSION",
+		"FSE_WEB_GUI_PACKAGE",
+		"FSE_WEB_GUI_INSTALL_DIR",
+		"FSE_WEB_GUI_LISTEN",
+		"FSE_WEB_GUI_CHECKSUM",
+	} {
+		if !strings.Contains(entrypoint, want) || !strings.Contains(bootstrap, want) || !strings.Contains(docs, want) {
+			t.Fatalf("optional GUI opt-in must document and carry explicit trusted delivery field %q", want)
+		}
+	}
+	for _, want := range []string{"webGUIOptInComplete", "d.WebGUIVersion != \"\"", "d.WebGUIPackage != \"\"", "d.WebGUIInstallDir != \"\"", "d.WebGUIListen != \"\"", "d.WebGUIChecksum != \"\""} {
+		if !strings.Contains(bootstrap, want) {
+			t.Fatalf("container bootstrap must fail closed for incomplete GUI opt-in, missing %q", want)
+		}
+	}
+}
+
 func TestRootDockerExamplesUsePublishedImmutableReleaseTags(t *testing.T) {
 	readme := readRequiredFile(t, filepath.Join("..", "..", "README.md"))
 

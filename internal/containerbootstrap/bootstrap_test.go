@@ -29,6 +29,7 @@ func TestApplyFirstRunDefaultsUsesContainerRuntimeValues(t *testing.T) {
 		DiscoveryLocal:    false,
 		DiscoveryDHT:      true,
 		WebGUIEnabled:     true,
+		WebGUIVersion:     "container-test",
 		WebGUIPackage:     "/opt/fse/web/default.zip",
 		WebGUIInstallDir:  "/config/web/current",
 		WebGUIListen:      "0.0.0.0:8385",
@@ -51,6 +52,29 @@ func TestApplyFirstRunDefaultsUsesContainerRuntimeValues(t *testing.T) {
 	}
 	if !updated.WebGUI.Enabled || updated.WebGUI.PackagePath != "/opt/fse/web/default.zip" || updated.WebGUI.HTTPSListen != "0.0.0.0:8943" || updated.WebGUI.ChecksumSHA256 != "abc123" {
 		t.Fatalf("container web GUI defaults not applied: %+v", updated.WebGUI)
+	}
+}
+
+func TestApplyFirstRunDefaultsEnablesWebGUIOnlyForCompleteExplicitOptIn(t *testing.T) {
+	base := config.Config{WebGUI: config.WebGUIConfig{Enabled: false, InstallDir: "./web/current", Listen: "127.0.0.1:8385"}}
+	complete := RuntimeDefaults{
+		WebGUIEnabled:    true,
+		WebGUIVersion:    "2026.07.30.01",
+		WebGUIPackage:    "/packages/fse-web-2026.07.30.01.zip",
+		WebGUIInstallDir: "/config/web/current",
+		WebGUIListen:     "0.0.0.0:8385",
+		WebGUIChecksum:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	updated := ApplyFirstRunDefaults(base, complete)
+	if !updated.WebGUI.Enabled || updated.WebGUI.Version != complete.WebGUIVersion || updated.WebGUI.PackagePath != complete.WebGUIPackage || updated.WebGUI.InstallDir != complete.WebGUIInstallDir || updated.WebGUI.Listen != complete.WebGUIListen || updated.WebGUI.ChecksumSHA256 != complete.WebGUIChecksum {
+		t.Fatalf("complete opt-in was not persisted: %+v", updated.WebGUI)
+	}
+
+	incomplete := complete
+	incomplete.WebGUIVersion = ""
+	unchanged := ApplyFirstRunDefaults(base, incomplete)
+	if unchanged.WebGUI.Enabled || unchanged.WebGUI.Version != "" || unchanged.WebGUI.PackagePath != "" || unchanged.WebGUI.ChecksumSHA256 != "" {
+		t.Fatalf("incomplete opt-in must preserve a valid headless config: %+v", unchanged.WebGUI)
 	}
 }
 
