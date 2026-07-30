@@ -34,6 +34,7 @@ import (
 	"filesyncengine/internal/daemonrun"
 	"filesyncengine/internal/daemonruntime"
 	"filesyncengine/internal/daemonstop"
+	"filesyncengine/internal/daemonwebgui"
 	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/discoverycontrol"
 	"filesyncengine/internal/foldersync"
@@ -155,6 +156,10 @@ func run(configPath string) {
 		WebGUIServer:    webGUIServer,
 		CurrentConfig:   func() config.Config { return cfg },
 	}))
+	webGUIStartup := daemonwebgui.Start(cfg, webGUIServer, apiServer)
+	if webGUIStartup.Err != nil {
+		structuredlog.Event("warn", "webgui.startup.failed", "optional web GUI startup failed", map[string]any{"error": webGUIStartup.Err.Error()})
+	}
 	syncRunner := foldersync.New(syncFolders(cfg))
 	liveEndpointObservations := []routing.EndpointObservation{}
 	httpServer, httpServerPlan, err := daemonapi.PrepareHTTPServer(daemonapi.PrepareHTTPServerOptions{

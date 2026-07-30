@@ -9,6 +9,46 @@ import (
 	"filesyncengine/internal/webgui"
 )
 
+// WebGUIStartupResult reports daemon-owned optional web GUI startup without
+// letting a GUI package or listener failure block the headless daemon.
+type WebGUIStartupResult struct {
+	Response api.WebGUICommandResponse
+	Err      error
+}
+
+// StartConfiguredWebGUI installs and starts an explicitly enabled optional web
+// GUI. It always returns a response so daemon startup can remain available when
+// GUI delivery or listener setup fails.
+func StartConfiguredWebGUI(cfg config.Config, manager *webgui.Server, client *http.Client) WebGUIStartupResult {
+	if !cfg.WebGUI.Enabled {
+		return WebGUIStartupResult{Response: api.WebGUICommandResponse{
+			Action:  "startup",
+			Status:  "disabled",
+			Message: "web GUI is disabled; core daemon is running headless",
+		}}
+	}
+	if _, err := HandleWebGUICommandWithManager(cfg, api.WebGUICommandRequest{Action: "install"}, manager, client); err != nil {
+		return failedWebGUIStartup(err)
+	}
+	response, err := HandleWebGUICommandWithManager(cfg, api.WebGUICommandRequest{Action: "start"}, manager, client)
+	if err != nil {
+		return failedWebGUIStartup(err)
+	}
+	response.Action = "startup"
+	return WebGUIStartupResult{Response: response}
+}
+
+func failedWebGUIStartup(err error) WebGUIStartupResult {
+	return WebGUIStartupResult{
+		Response: api.WebGUICommandResponse{
+			Action:  "startup",
+			Status:  "failed",
+			Message: "optional web GUI unavailable; daemon continues headless",
+		},
+		Err: err,
+	}
+}
+
 // HandleWebGUICommand performs authenticated optional web GUI lifecycle actions
 // without leaking secrets or requiring the core daemon to run a GUI.
 func HandleWebGUICommand(cfg config.Config, req api.WebGUICommandRequest) (api.WebGUICommandResponse, error) {

@@ -183,6 +183,20 @@ func TestDockerOptionalGUIOptInRequiresExplicitTrustedDeliveryMetadata(t *testin
 	}
 }
 
+func TestDaemonOwnsEnabledWebGUIStartupWithoutBlockingHeadlessServer(t *testing.T) {
+	mainSource := readRequiredFile(t, filepath.Join("..", "..", "cmd", "fse", "main.go"))
+	for _, want := range []string{
+		"filesyncengine/internal/daemonwebgui",
+		"daemonwebgui.Start(cfg, webGUIServer, apiServer)",
+		"webgui.startup.failed",
+		"optional web GUI startup failed",
+	} {
+		if !strings.Contains(mainSource, want) {
+			t.Fatalf("daemon startup must own optional GUI failure isolation and reporting, missing %q", want)
+		}
+	}
+}
+
 func TestRootDockerExamplesUsePublishedImmutableReleaseTags(t *testing.T) {
 	readme := readRequiredFile(t, filepath.Join("..", "..", "README.md"))
 

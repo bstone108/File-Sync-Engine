@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"filesyncengine/internal/api"
@@ -27,6 +28,34 @@ func TestHandleWebGUICommandReportsDisabledHeadlessStatus(t *testing.T) {
 	}
 	if response.InstallDir != "" || response.Version != "" || response.URL != "" {
 		t.Fatalf("disabled headless status should not report package/runtime details: %+v", response)
+	}
+}
+
+func TestStartConfiguredWebGUIReportsInstallFailureWithoutStartingServer(t *testing.T) {
+	dir := t.TempDir()
+	pkgPath := filepath.Join(dir, "fse-web.zip")
+	_ = writeWebGUITestZipPackage(t, pkgPath, map[string]string{"index.html": "web", "VERSION": "1.2.3"})
+	manager := webgui.NewServer()
+	cfg := config.Config{WebGUI: config.WebGUIConfig{
+		Enabled:        true,
+		Version:        "1.2.3",
+		PackagePath:    pkgPath,
+		InstallDir:     filepath.Join(dir, "web", "current"),
+		Listen:         "127.0.0.1:0",
+		ChecksumSHA256: strings.Repeat("0", 64),
+	}}
+
+	result := StartConfiguredWebGUI(cfg, manager, nil)
+	response := result.Response
+
+	if response.Status != "failed" || response.Running {
+		t.Fatalf("failed optional GUI startup should not start a server: %+v", response)
+	}
+	if response.Action != "startup" || response.Message != "optional web GUI unavailable; daemon continues headless" {
+		t.Fatalf("failure response should be actionable without package details: %+v", response)
+	}
+	if status := manager.Status(cfg.WebGUI.InstallDir); status.Running || status.Status != "not_installed" {
+		t.Fatalf("failed installation changed manager state: %+v", status)
 	}
 }
 
