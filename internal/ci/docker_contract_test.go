@@ -244,6 +244,39 @@ func TestDockerComposeHeadlessDaemonUsesPersistentConfigAndExplicitReleaseTag(t 
 	}
 }
 
+func TestDockerComposeOptionalGUIOverrideMountsTrustedPackageOutsideHeadlessBaseline(t *testing.T) {
+	root := filepath.Join("..", "..")
+	override := readRequiredFile(t, filepath.Join(root, "compose.web-gui.yaml"))
+	docs := readRequiredFile(t, filepath.Join(root, "docs", "DOCKER.md"))
+
+	for _, want := range []string{
+		"services:",
+		"fse:",
+		"FSE_WEB_GUI_ENABLED: \"true\"",
+		"FSE_WEB_GUI_VERSION: \"${FSE_WEB_GUI_VERSION:?Set FSE_WEB_GUI_VERSION to the trusted package version}\"",
+		"FSE_WEB_GUI_PACKAGE: \"/opt/fse/web-package/fse-web-gui.zip\"",
+		"FSE_WEB_GUI_INSTALL_DIR: \"/config/web-gui\"",
+		"FSE_WEB_GUI_LISTEN: \"0.0.0.0:8385\"",
+		"FSE_WEB_GUI_CHECKSUM: \"${FSE_WEB_GUI_CHECKSUM:?Set FSE_WEB_GUI_CHECKSUM to the trusted package SHA-256}\"",
+		"\"${FSE_WEB_GUI_PACKAGE_HOST_PATH:?Set FSE_WEB_GUI_PACKAGE_HOST_PATH to a trusted GUI package}:/opt/fse/web-package/fse-web-gui.zip:ro\"",
+		"\"${FSE_WEB_GUI_HOST_PORT:-8385}:8385/tcp\"",
+	} {
+		if !strings.Contains(override, want) {
+			t.Fatalf("optional GUI Compose override missing %q:\n%s", want, override)
+		}
+	}
+	for _, forbidden := range []string{"image:", "build:", "web-gui/dist/"} {
+		if strings.Contains(override, forbidden) {
+			t.Fatalf("optional GUI override must mount a caller-supplied package instead of bundling %q:\n%s", forbidden, override)
+		}
+	}
+	for _, want := range []string{"compose.web-gui.yaml", "FSE_WEB_GUI_PACKAGE_HOST_PATH", "FSE_WEB_GUI_CHECKSUM"} {
+		if !strings.Contains(docs, want) {
+			t.Fatalf("Docker docs must explain the explicit optional GUI override and trust inputs, missing %q:\n%s", want, docs)
+		}
+	}
+}
+
 func TestDockerComposeAllowsSeparateHostPortsForDisposableCoexistence(t *testing.T) {
 	root := filepath.Join("..", "..")
 	compose := readRequiredFile(t, filepath.Join(root, "compose.yaml"))

@@ -84,6 +84,37 @@ A web GUI is not yet a complete server deployment interface. The former bundled 
 
 This is a delivery/lifecycle foundation, not browser-GUI readiness: it does not yet prove normal-user folders, peers, transfers, settings, controls, or actionable browser UX. Until disposable deployment smoke tests prove enabled install/start, restart persistence, and failure isolation, do not treat the optional GUI as a usable web interface.
 
+### Explicit Compose overlay
+
+`compose.web-gui.yaml` is an **opt-in overlay**, not part of the baseline. It mounts a
+caller-supplied trusted package read-only, persists the installed files under the existing
+`fse-config` volume, enables the GUI only for first-run configuration, and publishes only the
+explicit GUI host port. It does not add GUI bytes to the core image or expose the daemon API key
+to browser code.
+
+Before starting it, obtain the GUI package and its SHA-256 from the trusted release/delivery
+channel, verify the checksum independently, and use an absolute package path. Do not use the
+historical static placeholder package as a deployment GUI.
+
+```bash
+export FSE_IMAGE_TAG=2026.07.28.02
+export FSE_WEB_GUI_VERSION=<trusted-package-version>
+export FSE_WEB_GUI_PACKAGE_HOST_PATH=/absolute/path/to/fse-web-gui.zip
+export FSE_WEB_GUI_CHECKSUM=<trusted-package-sha256>
+# Optional if host port 8385 is occupied:
+# export FSE_WEB_GUI_HOST_PORT=18385
+
+docker compose -f compose.yaml -f compose.web-gui.yaml up -d
+```
+
+The overlay is intentionally fail-closed: Compose rejects missing version, package path, or
+checksum variables before starting the container. Package verification/install/listener failures
+after startup leave the daemon available headless and report `webgui.startup.failed`; resolve the
+reported delivery problem rather than copying GUI assets into the core image. Because first-run
+container defaults do not overwrite an existing `/config/config.jsonc`, changing these environment
+variables later does not reconfigure an already initialized instance; use the authenticated
+non-secret web-GUI command/config controls after reviewing the change.
+
 ## Container networking diagnostics
 
 The daemon classifies Docker bridge/NAT ranges (`172.17.0.0/16` through `172.31.0.0/16`) as `container_bridge`, not true LAN, unless a deployment supplies precise hints. `/v1/status` reports `container_bridge_isolated` guidance for configured peers that are visible only through such endpoints. Use published ports, exact `discovery.networkHints.publishedPortMappings`, `localContainerGatewayIPs`, `localCIDRs`, or trusted sidecar/helper observations only when the topology is known.

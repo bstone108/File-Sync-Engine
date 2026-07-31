@@ -1,0 +1,15 @@
+# Optional web-GUI deployment overlay. Use only with compose.yaml and an explicitly
+# trusted, separately delivered package; the core image remains headless without it.
+services:
+  fse:
+    environment:
+      FSE_WEB_GUI_ENABLED: "true"
+      FSE_WEB_GUI_VERSION: "${FSE_WEB_GUI_VERSION:?Set FSE_WEB_GUI_VERSION to the trusted package version}"
+      FSE_WEB_GUI_PACKAGE: "/opt/fse/web-package/fse-web-gui.zip"
+      FSE_WEB_GUI_INSTALL_DIR: "/config/web-gui"
+      FSE_WEB_GUI_LISTEN: "0.0.0.0:8385"
+      FSE_WEB_GUI_CHECKSUM: "${FSE_WEB_GUI_CHECKSUM:?Set FSE_WEB_GUI_CHECKSUM to the trusted package SHA-256}"
+    volumes:
+      - "${FSE_WEB_GUI_PACKAGE_HOST_PATH:?Set FSE_WEB_GUI_PACKAGE_HOST_PATH to a trusted GUI package}:/opt/fse/web-package/fse-web-gui.zip:ro"
+    ports:
+      - "${FSE_WEB_GUI_HOST_PORT:-8385}:8385/tcp"
