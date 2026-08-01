@@ -3,65 +3,99 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>File Sync Engine Web GUI</title>
-  <meta name="fse-package" content="container-default-dev-status">
+  <title>File Sync Engine Web Console</title>
+  <meta name="fse-package" content="web-console-status-v1">
   <style>
-    :root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101827; color: #eef4ff; }
-    main { width: min(44rem, calc(100vw - 2rem)); padding: 2rem; border: 1px solid rgba(255,255,255,.18); border-radius: 1rem; background: rgba(17, 24, 39, .88); box-shadow: 0 1rem 3rem rgba(0,0,0,.32); }
-    h1 { margin: 0 0 .75rem; font-size: clamp(2rem, 5vw, 3.4rem); }
-    h2 { margin-block: 1.25rem .5rem; }
-    p { line-height: 1.55; color: #cbd5e1; }
-    .badge { display: inline-flex; align-items: center; gap: .45rem; padding: .35rem .65rem; border-radius: 999px; background: #f59e0b; color: #111827; font-weight: 700; }
-    .status { margin-top: 1rem; padding: 1rem; border-radius: .75rem; background: rgba(15, 23, 42, .9); border: 1px solid rgba(148, 163, 184, .3); }
-    .ok { color: #86efac; }
-    .warn { color: #fcd34d; }
-    code { color: #93c5fd; }
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0b1220; color: #e5edf9; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top right, #1f3b65, transparent 45rem), #0b1220; }
+    main { width: min(56rem, calc(100vw - 2rem)); margin: 3rem auto; }
+    header, section { border: 1px solid #2b405f; border-radius: 1rem; background: rgba(14, 27, 46, .9); box-shadow: 0 1rem 3rem rgba(0, 0, 0, .2); }
+    header { padding: 1.5rem 1.75rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    h1, h2, p { margin-top: 0; }
+    h1 { margin-bottom: .4rem; font-size: clamp(1.8rem, 4vw, 2.8rem); }
+    h2 { margin-bottom: .75rem; }
+    p { color: #b8c9df; line-height: 1.55; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 1rem; margin-top: 1rem; }
+    section { padding: 1.25rem; }
+    .label { display: block; font-size: .8rem; color: #91a9c8; text-transform: uppercase; letter-spacing: .08em; }
+    .value { display: block; margin-top: .35rem; font-size: 1.15rem; font-weight: 700; overflow-wrap: anywhere; }
+    .state { display: inline-flex; align-items: center; border-radius: 999px; padding: .4rem .7rem; font-weight: 700; background: #1d4d37; color: #b8f5c7; }
+    .state.error { background: #622b39; color: #ffd4dc; }
+    button { appearance: none; border: 0; border-radius: .6rem; padding: .7rem 1rem; font: inherit; font-weight: 700; color: #07111f; background: #8bd3ff; cursor: pointer; }
+    button:disabled { opacity: .7; cursor: wait; }
+    #message { min-height: 1.5rem; margin: 1rem 0 0; }
+    .muted { font-size: .9rem; color: #91a9c8; }
   </style>
 </head>
 <body>
   <main>
-    <span class="badge">Development in progress</span>
-    <h1>File Sync Engine Web GUI</h1>
-    <p>
-      The daemon is hosting this placeholder page while the richer web interface is still being built.
-      The Docker/web-GUI scaffolding is active; this page is intentionally simple and safe.
-    </p>
+    <header>
+      <div>
+        <h1>File Sync Engine</h1>
+        <p>Server console — status is read through the daemon-owned browser boundary.</p>
+      </div>
+      <span id="connection-state" class="state" aria-live="polite">Checking status…</span>
+    </header>
 
-    <section class="status" aria-labelledby="engine-status-heading">
+    <section aria-labelledby="engine-status-heading">
       <h2 id="engine-status-heading">Engine status</h2>
-      <p id="engine-status-message" class="warn">Checking <code>/health</code>…</p>
-      <p id="engine-status-details">If this page loaded, the daemon-managed web server is running. The health check confirms the package/server lifecycle.</p>
+      <div class="grid">
+        <div><span class="label">Node</span><span id="node-name" class="value">—</span></div>
+        <div><span class="label">Daemon state</span><span id="daemon-status" class="value">—</span></div>
+        <div><span class="label">Folders</span><span id="folder-count" class="value">—</span></div>
+        <div><span class="label">Peers</span><span id="peer-count" class="value">—</span></div>
+      </div>
+      <button id="refresh" type="button">Refresh status</button>
+      <p id="message" role="status">Loading daemon status…</p>
+      <p class="muted">The native API credential stays inside the daemon. This browser page never receives or stores it.</p>
     </section>
-
-    <section class="status" aria-labelledby="identity-pairing-heading">
+    <section aria-labelledby="identity-pairing-heading">
       <h2 id="identity-pairing-heading">Identity pairing export/import</h2>
       <p>
-        The full browser workflow is still under development. The intended flow remains: request a safe pairing export from
-        <code>/v1/identity-package</code>, show <strong>copyable pairing text</strong>, offer <strong>Download identity file</strong>,
-        accept <strong>Paste or upload identity file</strong>, and submit <strong>Import identity package</strong> data to
-        <code>/v1/identity-import</code> for daemon-owned import execution.
+        The next browser-control slice will request a safe pairing export from
+        <code>/v1/identity-package</code>, show <strong>copyable pairing text</strong>, offer
+        <strong>Download identity file</strong>, accept <strong>Paste or upload identity file</strong>,
+        and submit <strong>Import identity package</strong> data to <code>/v1/identity-import</code>
+        for <strong>daemon-owned import execution</strong>. These controls are intentionally not enabled
+        until their same-origin authorization boundary is implemented.
       </p>
     </section>
   </main>
   <script>
-    const message = document.getElementById('engine-status-message');
-    const details = document.getElementById('engine-status-details');
-    fetch('/health', { cache: 'no-store' })
-      .then((response) => {
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        return response.json();
-      })
-      .then((health) => {
-        message.textContent = 'Engine web server is working.';
-        message.className = 'ok';
-        details.textContent = 'Health status: ' + (health.status || 'unknown') + '; package version: ' + (health.version || 'unknown') + '.';
-      })
-      .catch((error) => {
-        message.textContent = 'Web page loaded, but health check did not complete.';
-        message.className = 'warn';
-        details.textContent = String(error);
-      });
+    const byId = (id) => document.getElementById(id);
+    const state = byId('connection-state');
+    const message = byId('message');
+    const refresh = byId('refresh');
+
+    function setState(text, error) {
+      state.textContent = text;
+      state.className = error ? 'state error' : 'state';
+    }
+
+    async function loadStatus() {
+      refresh.disabled = true;
+      setState('Checking status…', false);
+      message.textContent = 'Loading daemon status…';
+      try {
+        const response = await fetch('/api/v1/status', { cache: 'no-store', credentials: 'same-origin' });
+        if (!response.ok) throw new Error(`Status request failed (HTTP ${response.status})`);
+        const status = await response.json();
+        byId('node-name').textContent = status.nodeName || 'Unnamed node';
+        byId('daemon-status').textContent = status.status || 'unknown';
+        byId('folder-count').textContent = Number.isFinite(status.folders) ? status.folders : '—';
+        byId('peer-count').textContent = Number.isFinite(status.peers) ? status.peers : '—';
+        setState('Connected', false);
+        message.textContent = 'Live daemon status loaded.';
+      } catch (error) {
+        setState('Status unavailable', true);
+        message.textContent = `Unable to load daemon status: ${error.message}. Confirm the daemon is running and review its structured logs.`;
+      } finally {
+        refresh.disabled = false;
+      }
+    }
+
+    refresh.addEventListener('click', loadStatus);
+    loadStatus();
   </script>
 </body>
 </html>

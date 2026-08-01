@@ -149,6 +149,7 @@ func run(configPath string) {
 	registerStoreBackedAPIHandlers(apiServer, cfg, configPath, metadataStore, metadataStorePath)
 	transferControl := transfercontrol.New()
 	webGUIServer := webgui.NewServer()
+	webGUIServer.SetNativeAPI(apiServer.Router(), cfg.API.Key)
 	daemonapihandlers.RegisterStatic(apiServer, daemonapihandlers.BuildStaticHandlers(daemonapihandlers.StaticRuntimeDeps{
 		ConfigPath:      configPath,
 		CurrentStore:    func() state.JSONStore { return metadataStore },

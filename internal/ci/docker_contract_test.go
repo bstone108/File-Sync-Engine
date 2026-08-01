@@ -340,6 +340,25 @@ func TestDockerDistributionKeepsWebGUIPackageOutsideCoreImage(t *testing.T) {
 	}
 }
 
+func TestOptionalWebGUIPackageUsesSameOriginStatusWithoutNativeCredential(t *testing.T) {
+	root := filepath.Join("..", "..")
+	source := readRequiredFile(t, filepath.Join(root, "web-gui", "src", "index.html"))
+	bundle := readRequiredZipFile(t, filepath.Join(root, "web-gui", "dist", "fse-web-container-default.zip"), "index.html")
+
+	for _, page := range []string{source, bundle} {
+		for _, want := range []string{"/api/v1/status", "Engine status", "native API credential stays inside the daemon"} {
+			if !strings.Contains(page, want) {
+				t.Fatalf("functional optional web GUI package missing %q", want)
+			}
+		}
+		for _, forbidden := range []string{"X-FSE-API-Key", "Development in progress", "placeholder page"} {
+			if strings.Contains(page, forbidden) {
+				t.Fatalf("functional optional web GUI package must not expose or present %q", forbidden)
+			}
+		}
+	}
+}
+
 func TestDockerContainerHeadlessDefaultsKeepRuntimePermissionControls(t *testing.T) {
 	root := filepath.Join("..", "..")
 	dockerfile := readRequiredFile(t, filepath.Join(root, "Dockerfile"))

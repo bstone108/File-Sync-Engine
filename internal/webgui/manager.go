@@ -50,11 +50,13 @@ type InstallResult struct {
 }
 
 type StartOptions struct {
-	InstallDir  string
-	Listen      string
-	HTTPSListen string
-	TLSCertFile string
-	TLSKeyFile  string
+	InstallDir       string
+	Listen           string
+	HTTPSListen      string
+	TLSCertFile      string
+	TLSKeyFile       string
+	NativeAPIHandler http.Handler
+	NativeAPIKey     string
 }
 
 type Status struct {
@@ -69,15 +71,26 @@ type Status struct {
 }
 
 type Server struct {
-	mu          sync.Mutex
-	server      *http.Server
-	httpsServer *http.Server
-	ln          net.Listener
-	httpsLn     net.Listener
-	status      Status
+	mu           sync.Mutex
+	server       *http.Server
+	httpsServer  *http.Server
+	ln           net.Listener
+	httpsLn      net.Listener
+	status       Status
+	nativeAPI    http.Handler
+	nativeAPIKey string
 }
 
 func NewServer() *Server { return &Server{} }
+
+// SetNativeAPI configures the daemon-owned status bridge. Its credential remains
+// in the daemon process and is never read from, or forwarded by, browser requests.
+func (s *Server) SetNativeAPI(handler http.Handler, key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nativeAPI = handler
+	s.nativeAPIKey = key
+}
 
 func (s *Server) Start(opts StartOptions) (Status, error) {
 	if opts.InstallDir == "" {
@@ -90,6 +103,18 @@ func (s *Server) Start(opts StartOptions) (Status, error) {
 	version, err := InstalledVersion(opts.InstallDir)
 	if err != nil {
 		return Status{}, err
+	}
+	nativeAPI := opts.NativeAPIHandler
+	nativeAPIKey := opts.NativeAPIKey
+	if nativeAPI == nil || nativeAPIKey == "" {
+		s.mu.Lock()
+		if nativeAPI == nil {
+			nativeAPI = s.nativeAPI
+		}
+		if nativeAPIKey == "" {
+			nativeAPIKey = s.nativeAPIKey
+		}
+		s.mu.Unlock()
 	}
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
@@ -133,13 +158,13 @@ func (s *Server) Start(opts StartOptions) (Status, error) {
 		}
 		return Status{}, errors.New("web GUI server is already running")
 	}
-	httpServer := &http.Server{Handler: webMux(opts.InstallDir, version)}
+	httpServer := &http.Server{Handler: webMux(opts.InstallDir, version, nativeAPI, nativeAPIKey)}
 	var httpsServer *http.Server
 	addr := ln.Addr().String()
 	httpsAddr := ""
 	httpsURL := ""
 	if httpsLn != nil {
-		httpsServer = &http.Server{Handler: webMux(opts.InstallDir, version)}
+		httpsServer = &http.Server{Handler: webMux(opts.InstallDir, version, nativeAPI, nativeAPIKey)}
 		httpsAddr = httpsLn.Addr().String()
 		httpsURL = "https://" + httpsAddr
 	}
@@ -158,12 +183,28 @@ func (s *Server) Start(opts StartOptions) (Status, error) {
 	return status, nil
 }
 
-func webMux(installDir, version string) *http.ServeMux {
+func webMux(installDir, version string, nativeAPI http.Handler, nativeAPIKey string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version})
 	})
+	if nativeAPI != nil && nativeAPIKey != "" {
+		mux.HandleFunc("/api/v1/status", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", http.MethodGet)
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			nativeRequest, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://fse-native/v1/status", nil)
+			if err != nil {
+				http.Error(w, "web status bridge request failed", http.StatusInternalServerError)
+				return
+			}
+			nativeRequest.Header.Set("X-FSE-API-Key", nativeAPIKey)
+			nativeAPI.ServeHTTP(w, nativeRequest)
+		})
+	}
 	mux.Handle("/", http.FileServer(http.Dir(installDir)))
 	return mux
 }

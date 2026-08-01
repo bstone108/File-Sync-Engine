@@ -403,6 +403,8 @@ Supported actions are `status`, `install`, `update`, `start`, and `stop`. `statu
 
 The endpoint publishes `webgui.command.finished`; events include only the action and never include API keys, package paths, checksums, rendered config, or other secrets.
 
+When an enabled package is served, its same-origin read-only `GET /api/v1/status` bridge invokes the daemon's protected `GET /v1/status` handler in-process. The bridge accepts no browser-supplied credential or headers, injects the native API credential only inside the daemon, and exposes no other native API route. It is the first browser-control boundary; folder, peer, transfer, settings, and mutating controls require separately allowlisted, authorization-aware endpoints.
+
 ## Maintenance status and manual scrub trigger
 
 `GET /v1/status` includes a compact `maintenance` object for embedders and the `fse status` CLI, which reads the same endpoint:
