@@ -190,23 +190,28 @@ func webMux(installDir, version string, nativeAPI http.Handler, nativeAPIKey str
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version})
 	})
 	if nativeAPI != nil && nativeAPIKey != "" {
-		mux.HandleFunc("/api/v1/status", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet {
-				w.Header().Set("Allow", http.MethodGet)
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-			nativeRequest, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://fse-native/v1/status", nil)
-			if err != nil {
-				http.Error(w, "web status bridge request failed", http.StatusInternalServerError)
-				return
-			}
-			nativeRequest.Header.Set("X-FSE-API-Key", nativeAPIKey)
-			nativeAPI.ServeHTTP(w, nativeRequest)
-		})
+		mux.HandleFunc("/api/v1/status", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/status"))
+		mux.HandleFunc("/api/v1/folders", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/folders"))
 	}
 	mux.Handle("/", http.FileServer(http.Dir(installDir)))
 	return mux
+}
+
+func nativeReadOnlyBridge(nativeAPI http.Handler, nativeAPIKey, nativePath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		nativeRequest, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://fse-native"+nativePath, nil)
+		if err != nil {
+			http.Error(w, "web read-only bridge request failed", http.StatusInternalServerError)
+			return
+		}
+		nativeRequest.Header.Set("X-FSE-API-Key", nativeAPIKey)
+		nativeAPI.ServeHTTP(w, nativeRequest)
+	}
 }
 
 func (s *Server) serveHTTP(server *http.Server, ln net.Listener) {

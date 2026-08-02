@@ -25,6 +25,9 @@
     button:disabled { opacity: .7; cursor: wait; }
     #message { min-height: 1.5rem; margin: 1rem 0 0; }
     .muted { font-size: .9rem; color: #91a9c8; }
+    .folder-list { display: grid; gap: .75rem; list-style: none; padding: 0; margin: 0; }
+    .folder { border: 1px solid #2b405f; border-radius: .65rem; padding: .85rem 1rem; display: flex; justify-content: space-between; gap: 1rem; }
+    .folder small { color: #91a9c8; }
   </style>
 </head>
 <body>
@@ -49,6 +52,12 @@
       <p id="message" role="status">Loading daemon status…</p>
       <p class="muted">The native API credential stays inside the daemon. This browser page never receives or stores it.</p>
     </section>
+    <section aria-labelledby="folder-overview-heading">
+      <h2 id="folder-overview-heading">Folder overview</h2>
+      <p id="folder-message" class="muted">Loading folders…</p>
+      <ul id="folder-list" class="folder-list" aria-live="polite"></ul>
+      <p class="muted">Folders are read-only in this console. Editing paths, modes, or sharing policy requires a separately authorized control boundary.</p>
+    </section>
     <section aria-labelledby="identity-pairing-heading">
       <h2 id="identity-pairing-heading">Identity pairing export/import</h2>
       <p>
@@ -66,6 +75,8 @@
     const state = byId('connection-state');
     const message = byId('message');
     const refresh = byId('refresh');
+    const folderList = byId('folder-list');
+    const folderMessage = byId('folder-message');
 
     function setState(text, error) {
       state.textContent = text;
@@ -94,8 +105,39 @@
       }
     }
 
-    refresh.addEventListener('click', loadStatus);
+    async function loadFolders() {
+      folderList.replaceChildren();
+      folderMessage.textContent = 'Loading folders…';
+      try {
+        const response = await fetch('/api/v1/folders', { cache: 'no-store', credentials: 'same-origin' });
+        if (!response.ok) throw new Error(`Folder request failed (HTTP ${response.status})`);
+        const folders = await response.json();
+        if (!Array.isArray(folders) || folders.length === 0) {
+          folderMessage.textContent = 'No folders are configured yet.';
+          return;
+        }
+        for (const folder of folders) {
+          const item = document.createElement('li');
+          item.className = 'folder';
+          const name = document.createElement('strong');
+          name.textContent = folder.id || 'Unnamed folder';
+          const detail = document.createElement('small');
+          detail.textContent = `${folder.mode || 'unknown mode'} · ${folder.status || 'unknown status'}`;
+          item.append(name, detail);
+          folderList.append(item);
+        }
+        folderMessage.textContent = `${folders.length} configured folder${folders.length === 1 ? '' : 's'}.`;
+      } catch (error) {
+        folderMessage.textContent = `Unable to load folders: ${error.message}. Confirm the daemon is running and review its structured logs.`;
+      }
+    }
+
+    refresh.addEventListener('click', () => {
+      loadStatus();
+      loadFolders();
+    });
     loadStatus();
+    loadFolders();
   </script>
 </body>
 </html>

@@ -237,6 +237,79 @@ func TestServerProvidesSameOriginStatusWithoutExposingNativeAPIKey(t *testing.T)
 	}
 }
 
+func TestServerProvidesSameOriginFoldersWithoutExposingNativeAPIKey(t *testing.T) {
+	dir := t.TempDir()
+	installDir := filepath.Join(dir, "web", "current")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, versionMarkerName), []byte("5.0.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "index.html"), []byte("functional web app"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var nativeCalls int
+	native := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nativeCalls++
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/folders" {
+			t.Fatalf("native request = %s %s, want GET /v1/folders", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("X-FSE-API-Key"); got != "native-secret" {
+			t.Fatalf("native API key = %q, want injected server-side key", got)
+		}
+		if got := r.Header.Get("X-Forwarded-For"); got != "" {
+			t.Fatalf("browser headers must not be forwarded to native API: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"docs","mode":"sendrecv","status":"idle"}]`))
+	})
+
+	server := NewServer()
+	status, err := server.Start(StartOptions{
+		InstallDir:       installDir,
+		Listen:           "127.0.0.1:0",
+		NativeAPIHandler: native,
+		NativeAPIKey:     "native-secret",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _, _ = server.Stop() }()
+
+	req, err := http.NewRequest(http.MethodGet, status.URL+"/api/v1/folders", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-FSE-API-Key", "browser-supplied-secret")
+	req.Header.Set("X-Forwarded-For", "untrusted")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("same-origin folders request: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != `[{"id":"docs","mode":"sendrecv","status":"idle"}]` {
+		t.Fatalf("same-origin folders response = %d %q", resp.StatusCode, body)
+	}
+	if nativeCalls != 1 {
+		t.Fatalf("native calls = %d, want 1", nativeCalls)
+	}
+
+	blocked, err := http.Post(status.URL+"/api/v1/folders", "application/json", nil)
+	if err != nil {
+		t.Fatalf("blocked folders mutation request: %v", err)
+	}
+	_ = blocked.Body.Close()
+	if blocked.StatusCode != http.StatusMethodNotAllowed || nativeCalls != 1 {
+		t.Fatalf("folders bridge must remain GET-only: status=%d calls=%d", blocked.StatusCode, nativeCalls)
+	}
+}
+
 func TestServerStartHostsHTTPAndHTTPSWhenConfigured(t *testing.T) {
 	dir := t.TempDir()
 	installDir := filepath.Join(dir, "web", "current")
