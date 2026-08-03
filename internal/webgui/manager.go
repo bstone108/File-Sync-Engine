@@ -192,6 +192,7 @@ func webMux(installDir, version string, nativeAPI http.Handler, nativeAPIKey str
 	if nativeAPI != nil && nativeAPIKey != "" {
 		mux.HandleFunc("/api/v1/status", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/status"))
 		mux.HandleFunc("/api/v1/folders", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/folders"))
+		mux.HandleFunc("/api/v1/peers", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/peers"))
 	}
 	mux.Handle("/", http.FileServer(http.Dir(installDir)))
 	return mux

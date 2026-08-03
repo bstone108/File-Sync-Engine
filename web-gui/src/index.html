@@ -25,9 +25,9 @@
     button:disabled { opacity: .7; cursor: wait; }
     #message { min-height: 1.5rem; margin: 1rem 0 0; }
     .muted { font-size: .9rem; color: #91a9c8; }
-    .folder-list { display: grid; gap: .75rem; list-style: none; padding: 0; margin: 0; }
-    .folder { border: 1px solid #2b405f; border-radius: .65rem; padding: .85rem 1rem; display: flex; justify-content: space-between; gap: 1rem; }
-    .folder small { color: #91a9c8; }
+    .folder-list, .peer-list { display: grid; gap: .75rem; list-style: none; padding: 0; margin: 0; }
+    .folder, .peer { border: 1px solid #2b405f; border-radius: .65rem; padding: .85rem 1rem; display: flex; justify-content: space-between; gap: 1rem; }
+    .folder small, .peer small { color: #91a9c8; }
   </style>
 </head>
 <body>
@@ -58,6 +58,12 @@
       <ul id="folder-list" class="folder-list" aria-live="polite"></ul>
       <p class="muted">Folders are read-only in this console. Editing paths, modes, or sharing policy requires a separately authorized control boundary.</p>
     </section>
+    <section aria-labelledby="peer-overview-heading">
+      <h2 id="peer-overview-heading">Peer overview</h2>
+      <p id="peer-message" class="muted">Loading peers…</p>
+      <ul id="peer-list" class="peer-list" aria-live="polite"></ul>
+      <p class="muted">Peers are read-only in this console. Adding, editing, removing, or reconnecting peers requires a separately authorized control boundary.</p>
+    </section>
     <section aria-labelledby="identity-pairing-heading">
       <h2 id="identity-pairing-heading">Identity pairing export/import</h2>
       <p>
@@ -77,6 +83,8 @@
     const refresh = byId('refresh');
     const folderList = byId('folder-list');
     const folderMessage = byId('folder-message');
+    const peerList = byId('peer-list');
+    const peerMessage = byId('peer-message');
 
     function setState(text, error) {
       state.textContent = text;
@@ -132,12 +140,41 @@
       }
     }
 
+    async function loadPeers() {
+      peerList.replaceChildren();
+      peerMessage.textContent = 'Loading peers…';
+      try {
+        const response = await fetch('/api/v1/peers', { cache: 'no-store', credentials: 'same-origin' });
+        if (!response.ok) throw new Error(`Peer request failed (HTTP ${response.status})`);
+        const peers = await response.json();
+        if (!Array.isArray(peers) || peers.length === 0) {
+          peerMessage.textContent = 'No peers are configured yet.';
+          return;
+        }
+        for (const peer of peers) {
+          const item = document.createElement('li');
+          item.className = 'peer';
+          const name = document.createElement('strong');
+          name.textContent = peer.id || 'Unnamed peer';
+          const detail = document.createElement('small');
+          detail.textContent = peer.status || 'unknown status';
+          item.append(name, detail);
+          peerList.append(item);
+        }
+        peerMessage.textContent = `${peers.length} configured peer${peers.length === 1 ? '' : 's'}.`;
+      } catch (error) {
+        peerMessage.textContent = `Unable to load peers: ${error.message}. Confirm the daemon is running and review its structured logs.`;
+      }
+    }
+
     refresh.addEventListener('click', () => {
       loadStatus();
       loadFolders();
+      loadPeers();
     });
     loadStatus();
     loadFolders();
+    loadPeers();
   </script>
 </body>
 </html>
