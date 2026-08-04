@@ -13,15 +13,17 @@ func TestGoModulesPinPatchedSecurityDependencyVersions(t *testing.T) {
 		rel  string
 		want string
 	}{
-		{"go.mod", "golang.org/x/crypto v0.50.0"},
-		{filepath.Join("desktop-gui", "go.mod"), "golang.org/x/crypto v0.50.0"},
-		{"go.mod", "github.com/quic-go/quic-go v0.59.1"},
-		{"go.mod", "github.com/quic-go/webtransport-go v0.10.0"},
+		{"go.mod", "golang.org/x/crypto v0.52.0"},
+		{filepath.Join("desktop-gui", "go.mod"), "golang.org/x/crypto v0.52.0"},
+		{"go.mod", "github.com/quic-go/quic-go v0.60.0"},
+		{"go.mod", "github.com/quic-go/webtransport-go v0.11.1"},
 		{"go.mod", "github.com/golang/glog v1.2.4"},
 		{"go.mod", "go.opentelemetry.io/otel v1.42.0"},
 		{"go.mod", "github.com/ipld/go-ipld-prime v0.23.0"},
-		{"go.mod", "github.com/pion/dtls/v3 v3.1.2"},
+		{"go.mod", "github.com/pion/dtls/v3 v3.1.4"},
+		{"go.mod", "github.com/pion/stun/v3 v3.1.5"},
 		{filepath.Join("desktop-gui", "package.json"), "\"svelte\": \"^5.56.3\""},
+		{filepath.Join("desktop-gui", "package-lock.json"), "\"node_modules/postcss\": {\n      \"version\": \"8.5.25\""},
 		{filepath.Join("desktop-gui", "package.json"), "\"vite\": \"^6.4.2\""},
 		{filepath.Join("desktop-gui", "package.json"), "\"@sveltejs/vite-plugin-svelte\": \"^6.2.4\""},
 	}
