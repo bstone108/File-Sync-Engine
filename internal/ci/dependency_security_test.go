@@ -15,6 +15,7 @@ func TestGoModulesPinPatchedSecurityDependencyVersions(t *testing.T) {
 	}{
 		{"go.mod", "golang.org/x/crypto v0.52.0"},
 		{filepath.Join("desktop-gui", "go.mod"), "golang.org/x/crypto v0.52.0"},
+		{filepath.Join("desktop-gui", "go.mod"), "golang.org/x/net v0.55.0"},
 		{"go.mod", "github.com/quic-go/quic-go v0.60.0"},
 		{"go.mod", "github.com/quic-go/webtransport-go v0.11.1"},
 		{"go.mod", "github.com/golang/glog v1.2.4"},
