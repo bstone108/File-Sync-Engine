@@ -25,9 +25,9 @@
     button:disabled { opacity: .7; cursor: wait; }
     #message { min-height: 1.5rem; margin: 1rem 0 0; }
     .muted { font-size: .9rem; color: #91a9c8; }
-    .folder-list, .peer-list { display: grid; gap: .75rem; list-style: none; padding: 0; margin: 0; }
-    .folder, .peer { border: 1px solid #2b405f; border-radius: .65rem; padding: .85rem 1rem; display: flex; justify-content: space-between; gap: 1rem; }
-    .folder small, .peer small { color: #91a9c8; }
+    .folder-list, .peer-list, .transfer-list { display: grid; gap: .75rem; list-style: none; padding: 0; margin: 0; }
+    .folder, .peer, .transfer { border: 1px solid #2b405f; border-radius: .65rem; padding: .85rem 1rem; display: flex; justify-content: space-between; gap: 1rem; }
+    .folder small, .peer small, .transfer small { color: #91a9c8; }
   </style>
 </head>
 <body>
@@ -64,6 +64,12 @@
       <ul id="peer-list" class="peer-list" aria-live="polite"></ul>
       <p class="muted">Peers are read-only in this console. Adding, editing, removing, or reconnecting peers requires a separately authorized control boundary.</p>
     </section>
+    <section aria-labelledby="transfer-overview-heading">
+      <h2 id="transfer-overview-heading">Transfer activity</h2>
+      <p id="transfer-message" class="muted">Loading transfer activity…</p>
+      <ul id="transfer-list" class="transfer-list" aria-live="polite"></ul>
+      <p class="muted">This read-only view shows active and recent transfer passes. Byte progress and rates will appear only when the daemon publishes them; pausing, resuming, or cancelling transfers requires a separately authorized control boundary.</p>
+    </section>
     <section aria-labelledby="identity-pairing-heading">
       <h2 id="identity-pairing-heading">Identity pairing export/import</h2>
       <p>
@@ -85,6 +91,8 @@
     const folderMessage = byId('folder-message');
     const peerList = byId('peer-list');
     const peerMessage = byId('peer-message');
+    const transferList = byId('transfer-list');
+    const transferMessage = byId('transfer-message');
 
     function setState(text, error) {
       state.textContent = text;
@@ -167,14 +175,49 @@
       }
     }
 
+    function appendTransfer(item, transfer) {
+      const row = document.createElement('li');
+      row.className = 'transfer';
+      const name = document.createElement('strong');
+      name.textContent = `${transfer.folderId || 'Unnamed folder'} · ${transfer.status || 'unknown status'}`;
+      const detail = document.createElement('small');
+      const peer = transfer.peerId ? `peer ${transfer.peerId}` : 'local transfer';
+      detail.textContent = transfer.message ? `${peer} · ${transfer.message}` : peer;
+      row.append(name, detail);
+      item.append(row);
+    }
+
+    async function loadTransfers() {
+      transferList.replaceChildren();
+      transferMessage.textContent = 'Loading transfer activity…';
+      try {
+        const response = await fetch('/api/v1/transfers', { cache: 'no-store', credentials: 'same-origin' });
+        if (!response.ok) throw new Error(`Transfer request failed (HTTP ${response.status})`);
+        const transfers = await response.json();
+        const active = Array.isArray(transfers.active) ? transfers.active : [];
+        const history = Array.isArray(transfers.history) ? transfers.history : [];
+        for (const transfer of [...active, ...history]) appendTransfer(transferList, transfer);
+        if (active.length + history.length === 0) {
+          transferMessage.textContent = 'No active or recent transfer passes are available yet.';
+          return;
+        }
+        const rates = transfers.liveRatesAvailable ? ' Live rates are available.' : ' Live rates are not available yet.';
+        transferMessage.textContent = `${active.length} active and ${history.length} recent transfer pass${history.length === 1 ? '' : 'es'}.${rates}`;
+      } catch (error) {
+        transferMessage.textContent = `Unable to load transfer activity: ${error.message}. Confirm the daemon is running and review its structured logs.`;
+      }
+    }
+
     refresh.addEventListener('click', () => {
       loadStatus();
       loadFolders();
       loadPeers();
+      loadTransfers();
     });
     loadStatus();
     loadFolders();
     loadPeers();
+    loadTransfers();
   </script>
 </body>
 </html>

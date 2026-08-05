@@ -403,7 +403,7 @@ Supported actions are `status`, `install`, `update`, `start`, and `stop`. `statu
 
 The endpoint publishes `webgui.command.finished`; events include only the action and never include API keys, package paths, checksums, rendered config, or other secrets.
 
-When an enabled package is served, its same-origin read-only `GET /api/v1/status`, `GET /api/v1/folders`, and `GET /api/v1/peers` bridges invoke the daemon's protected `GET /v1/status`, `GET /v1/folders`, and `GET /v1/peers` handlers in-process. The bridges accept no browser-supplied credential or headers, inject the native API credential only inside the daemon, and expose no other native API routes. The folder and peer views are read-only; folder edits, peer/transfer actions, settings, and every mutating control require separately allowlisted, authorization-aware endpoints.
+When an enabled package is served, its same-origin read-only `GET /api/v1/status`, `GET /api/v1/folders`, `GET /api/v1/peers`, and `GET /api/v1/transfers` bridges invoke the daemon's protected `GET /v1/status`, `GET /v1/folders`, `GET /v1/peers`, and `GET /v1/transfers` handlers in-process. The transfer bridge deliberately discards browser query parameters and uses the daemon's bounded default history limit. The bridges accept no browser-supplied credential or headers, inject the native API credential only inside the daemon, and expose no other native API routes. The folder, peer, and transfer views are read-only; folder edits, peer/transfer actions, settings, and every mutating control require separately allowlisted, authorization-aware endpoints.
 
 ## Maintenance status and manual scrub trigger
 
