@@ -194,6 +194,7 @@ func webMux(installDir, version string, nativeAPI http.Handler, nativeAPIKey str
 		mux.HandleFunc("/api/v1/folders", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/folders"))
 		mux.HandleFunc("/api/v1/peers", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/peers"))
 		mux.HandleFunc("/api/v1/transfers", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/transfers"))
+		mux.HandleFunc("/api/v1/actionable-errors", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/actionable-errors"))
 	}
 	mux.Handle("/", http.FileServer(http.Dir(installDir)))
 	return mux

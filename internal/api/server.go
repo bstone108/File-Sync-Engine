@@ -626,6 +626,19 @@ type LogsResponse struct {
 	Entries []Event `json:"entries"`
 }
 
+// ActionableErrorsResponse is a browser-safe operational summary. It deliberately
+// excludes event messages, paths, peer IDs, folder IDs, and credentials because
+// those diagnostic details can contain private deployment information.
+type ActionableErrorsResponse struct {
+	Errors []ActionableError `json:"errors"`
+}
+
+type ActionableError struct {
+	Kind   string `json:"kind"`
+	Action string `json:"action"`
+	Count  int    `json:"count"`
+}
+
 type ProgressState struct {
 	QueuedHashJobs         int `json:"queuedHashJobs"`
 	ActiveHashJobs         int `json:"activeHashJobs"`
@@ -679,6 +692,7 @@ func (s *Server) Router() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/status", s.requireKey(s.handleStatus))
 	mux.HandleFunc("/v1/logs", s.requireKey(s.handleLogs))
+	mux.HandleFunc("/v1/actionable-errors", s.requireKey(s.handleActionableErrors))
 	mux.HandleFunc("/v1/events", s.requireKey(s.handleEvents))
 	mux.HandleFunc("/v1/folders", s.requireKey(s.handleFolders))
 	mux.HandleFunc("/v1/peers", s.requireKey(s.handlePeers))
@@ -918,6 +932,51 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		entries = entries[len(entries)-limit:]
 	}
 	writeJSON(w, LogsResponse{Entries: entries})
+}
+
+func (s *Server) handleActionableErrors(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.RLock()
+	events := append([]Event(nil), s.events...)
+	s.mu.RUnlock()
+
+	errors := make([]ActionableError, 0)
+	indexes := map[string]int{}
+	for _, event := range events {
+		kind, action, ok := actionableErrorSummary(event.Type)
+		if !ok {
+			continue
+		}
+		if index, exists := indexes[kind]; exists {
+			errors[index].Count++
+			continue
+		}
+		indexes[kind] = len(errors)
+		errors = append(errors, ActionableError{Kind: kind, Action: action, Count: 1})
+	}
+	writeJSON(w, ActionableErrorsResponse{Errors: errors})
+}
+
+func actionableErrorSummary(eventType string) (kind, action string, ok bool) {
+	switch eventType {
+	case "sync.error":
+		return "sync", "Review the daemon logs and folder access on the server.", true
+	case "peer.sync.error":
+		return "peer_sync", "Check peer reachability and the peer configuration on the server.", true
+	case "watch.error", "folder.warning":
+		return "folder", "Review folder access and pending-write warnings on the server.", true
+	case "discovery.error":
+		return "discovery", "Review discovery settings and network reachability on the server.", true
+	case "metadata.catchup.error":
+		return "metadata", "Review metadata synchronization and peer availability on the server.", true
+	case "webgui.startup.failed":
+		return "web_gui", "Review the optional web GUI delivery and listener configuration on the server.", true
+	default:
+		return "", "", false
+	}
 }
 
 func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {

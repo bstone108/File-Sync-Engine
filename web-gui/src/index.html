@@ -25,9 +25,9 @@
     button:disabled { opacity: .7; cursor: wait; }
     #message { min-height: 1.5rem; margin: 1rem 0 0; }
     .muted { font-size: .9rem; color: #91a9c8; }
-    .folder-list, .peer-list, .transfer-list { display: grid; gap: .75rem; list-style: none; padding: 0; margin: 0; }
-    .folder, .peer, .transfer { border: 1px solid #2b405f; border-radius: .65rem; padding: .85rem 1rem; display: flex; justify-content: space-between; gap: 1rem; }
-    .folder small, .peer small, .transfer small { color: #91a9c8; }
+    .folder-list, .peer-list, .transfer-list, .error-list { display: grid; gap: .75rem; list-style: none; padding: 0; margin: 0; }
+    .folder, .peer, .transfer, .error { border: 1px solid #2b405f; border-radius: .65rem; padding: .85rem 1rem; display: flex; justify-content: space-between; gap: 1rem; }
+    .folder small, .peer small, .transfer small, .error small { color: #91a9c8; }
   </style>
 </head>
 <body>
@@ -70,6 +70,12 @@
       <ul id="transfer-list" class="transfer-list" aria-live="polite"></ul>
       <p class="muted">This read-only view shows active and recent transfer passes. Byte progress and rates will appear only when the daemon publishes them; pausing, resuming, or cancelling transfers requires a separately authorized control boundary.</p>
     </section>
+    <section aria-labelledby="errors-heading">
+      <h2 id="errors-heading">Actionable errors</h2>
+      <p id="error-message" class="muted">Loading actionable errors…</p>
+      <ul id="error-list" class="error-list" aria-live="polite"></ul>
+      <p class="muted">This summary does not show raw daemon logs, file paths, or credentials. Review the daemon logs on the server for diagnostic details.</p>
+    </section>
     <section aria-labelledby="identity-pairing-heading">
       <h2 id="identity-pairing-heading">Identity pairing export/import</h2>
       <p>
@@ -93,6 +99,8 @@
     const peerMessage = byId('peer-message');
     const transferList = byId('transfer-list');
     const transferMessage = byId('transfer-message');
+    const errorList = byId('error-list');
+    const errorMessage = byId('error-message');
 
     function setState(text, error) {
       state.textContent = text;
@@ -208,16 +216,47 @@
       }
     }
 
+    async function loadActionableErrors() {
+      errorList.replaceChildren();
+      errorMessage.textContent = 'Loading actionable errors…';
+      try {
+        const response = await fetch('/api/v1/actionable-errors', { cache: 'no-store', credentials: 'same-origin' });
+        if (!response.ok) throw new Error(`Actionable-error request failed (HTTP ${response.status})`);
+        const result = await response.json();
+        const errors = Array.isArray(result.errors) ? result.errors : [];
+        if (errors.length === 0) {
+          errorMessage.textContent = 'No actionable errors are currently reported.';
+          return;
+        }
+        for (const error of errors) {
+          const row = document.createElement('li');
+          row.className = 'error';
+          const kind = document.createElement('strong');
+          kind.textContent = error.kind || 'daemon';
+          const action = document.createElement('small');
+          const count = Number.isFinite(error.count) ? ` (${error.count} occurrence${error.count === 1 ? '' : 's'})` : '';
+          action.textContent = `${error.action || 'Review the daemon logs on the server.'}${count}`;
+          row.append(kind, action);
+          errorList.append(row);
+        }
+        errorMessage.textContent = `${errors.length} actionable error ${errors.length === 1 ? 'category' : 'categories'} reported.`;
+      } catch (error) {
+        errorMessage.textContent = `Unable to load actionable errors: ${error.message}. Confirm the daemon is running and review its structured logs.`;
+      }
+    }
+
     refresh.addEventListener('click', () => {
       loadStatus();
       loadFolders();
       loadPeers();
       loadTransfers();
+      loadActionableErrors();
     });
     loadStatus();
     loadFolders();
     loadPeers();
     loadTransfers();
+    loadActionableErrors();
   </script>
 </body>
 </html>

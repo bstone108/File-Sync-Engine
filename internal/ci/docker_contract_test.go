@@ -346,7 +346,7 @@ func TestOptionalWebGUIPackageUsesSameOriginStatusWithoutNativeCredential(t *tes
 	bundle := readRequiredZipFile(t, filepath.Join(root, "web-gui", "dist", "fse-web-container-default.zip"), "index.html")
 
 	for _, page := range []string{source, bundle} {
-		for _, want := range []string{"/api/v1/status", "/api/v1/folders", "/api/v1/peers", "/api/v1/transfers", "Engine status", "Folder overview", "Peer overview", "Transfer activity", "native API credential stays inside the daemon"} {
+		for _, want := range []string{"/api/v1/status", "/api/v1/folders", "/api/v1/peers", "/api/v1/transfers", "/api/v1/actionable-errors", "Engine status", "Folder overview", "Peer overview", "Transfer activity", "Actionable errors", "native API credential stays inside the daemon", "does not show raw daemon logs, file paths, or credentials"} {
 			if !strings.Contains(page, want) {
 				t.Fatalf("functional optional web GUI package missing %q", want)
 			}

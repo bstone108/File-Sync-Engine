@@ -1201,6 +1201,45 @@ func TestLogsEndpointReturnsRecentEventsWithoutSSE(t *testing.T) {
 	}
 }
 
+func TestActionableErrorsEndpointReturnsAllowlistedSummariesWithoutDiagnosticDetails(t *testing.T) {
+	server := NewServer(State{NodeName: "node-a"}, "secret")
+	server.Publish(Event{Type: "sync.error", FolderID: "docs", Path: "/private/projects/docs/secret.txt", Message: "open /private/projects/docs/secret.txt failed with token native-secret"})
+	server.Publish(Event{Type: "daemon.started", Message: "ordinary non-error event"})
+
+	badMethod := httptest.NewRecorder()
+	badMethodReq := httptest.NewRequest(http.MethodPost, "/v1/actionable-errors", nil)
+	badMethodReq.Header.Set("X-FSE-API-Key", "secret")
+	server.Router().ServeHTTP(badMethod, badMethodReq)
+	if badMethod.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("bad method code = %d", badMethod.Code)
+	}
+
+	unauthorized := httptest.NewRecorder()
+	server.Router().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/v1/actionable-errors", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized code = %d", unauthorized.Code)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/actionable-errors?limit=100", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	ok := httptest.NewRecorder()
+	server.Router().ServeHTTP(ok, req)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("actionable errors code = %d body=%s", ok.Code, ok.Body.String())
+	}
+	body := ok.Body.String()
+	for _, want := range []string{`"errors"`, `"kind":"sync"`, `"action":"Review the daemon logs and folder access on the server."`, `"count":1`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("actionable errors response missing %s: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"/private/projects", "secret.txt", "native-secret", "ordinary non-error event", `"path"`, `"message"`, `"folderID"`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("actionable errors response leaked diagnostic detail %q: %s", forbidden, body)
+		}
+	}
+}
+
 func TestFoldersAndPeersExposeRuntimeState(t *testing.T) {
 	server := NewServer(State{
 		NodeName: "node-a",
