@@ -107,6 +107,25 @@ jobs:
             build/${{ steps.version.outputs.version }}/SHA256SUMS
           if-no-files-found: error
 
+  web-gui-package:
+    needs: version-preflight
+    name: Verify optional web GUI package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Verify separately delivered web GUI package
+        shell: bash
+        run: unzip -t web-gui/dist/fse-web-container-default.zip
+
+      - name: Upload optional web GUI package
+        uses: actions/upload-artifact@v7
+        with:
+          name: fse-web-gui-package-${{ needs.version-preflight.outputs.version }}-${{ github.sha }}
+          path: web-gui/dist/fse-web-container-default.zip
+          if-no-files-found: error
+
   linux-desktop-artifacts:
     needs: version-preflight
     name: Linux desktop installer artifacts (${{ matrix.target }} ${{ matrix.webkit_slug }})
@@ -510,6 +529,7 @@ jobs:
     needs:
       - version-preflight
       - linux-release-artifacts
+      - web-gui-package
       - linux-desktop-artifacts
       - windows-desktop-artifacts
       - macos-desktop-artifacts

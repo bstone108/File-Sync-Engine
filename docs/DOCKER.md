@@ -84,6 +84,8 @@ The package in `web-gui/dist/` is now a small **read-only functional reference p
 
 Deployment must explicitly opt in with `FSE_WEB_GUI_ENABLED=true`, mount or otherwise provide a trusted package, and provide **all** of `FSE_WEB_GUI_VERSION`, `FSE_WEB_GUI_PACKAGE`, `FSE_WEB_GUI_INSTALL_DIR`, `FSE_WEB_GUI_LISTEN`, and `FSE_WEB_GUI_CHECKSUM`. On first run, incomplete opt-in metadata deliberately leaves a valid headless configuration instead of persisting an enabled but unusable GUI configuration. For a complete opt-in, daemon startup installs the verified package and starts its configured listener. Package/checksum/listener failures emit a `webgui.startup.failed` event and structured warning while the core daemon continues headless. The browser must never receive the daemon API key.
 
+For each intentional release, download the separately delivered trusted package asset named `fse-web-gui-package-<version>.zip` and the matching `RELEASE_ASSET_SHA256SUMS` from that GitHub Release. Verify the asset checksum before mounting it. This keeps the package outside the core image while ensuring the GUI package, release checksum, and GHCR image use the same release version.
+
 ### Explicit Compose overlay
 
 `compose.web-gui.yaml` is an **opt-in overlay**, not part of the baseline. It mounts a

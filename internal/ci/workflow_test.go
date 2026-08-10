@@ -417,6 +417,33 @@ func TestReleaseWorkflowPublishesGitHubRelease(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowPublishesVerifiedOptionalWebGUIPackageAsset(t *testing.T) {
+	workflow := readWorkflow(t, "release.yml")
+	docs := readRequiredFile(t, filepath.Join("..", "..", "docs", "DOCKER.md"))
+
+	for _, want := range []string{
+		"web-gui-package:",
+		"needs: version-preflight",
+		"web-gui/dist/fse-web-container-default.zip",
+		"name: fse-web-gui-package-${{ needs.version-preflight.outputs.version }}-${{ github.sha }}",
+		"web-gui-package",
+		"RELEASE_ASSET_SHA256SUMS",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow must publish the separately delivered optional web GUI package, missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"fse-web-gui-package-<version>.zip",
+		"RELEASE_ASSET_SHA256SUMS",
+		"separately delivered trusted package",
+	} {
+		if !strings.Contains(docs, want) {
+			t.Fatalf("Docker docs must explain the optional web GUI release asset trust path, missing %q", want)
+		}
+	}
+}
+
 func TestDesktopStabilizationDocsRequirePlatformSmokeEvidenceBeforeTestReady(t *testing.T) {
 	desktopDocs := readRequiredFile(t, filepath.Join("..", "..", "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
 	externalMatrix := readRequiredFile(t, filepath.Join("..", "..", "docs", "EXTERNAL_TESTING_MATRIX.md"))
