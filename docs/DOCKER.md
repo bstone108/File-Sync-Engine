@@ -39,6 +39,30 @@ baseline publishes only the daemon API and sync ports (`22420` and `22000`), pre
 assets. Stop it with `docker compose down`; omit `-v` to preserve the named config
 volume.
 
+## Host-network fallback for Docker hosts without bridge/NAT publishing
+
+If a Docker host intentionally disables bridge/NAT publishing, use Linux host networking
+as the deployment fallback. It does not use Docker port publishing: the daemon binds the
+host network directly, so choose unused host ports and apply the host firewall policy before
+allowing an external device to connect. Do not combine host networking with `-p`.
+
+```bash
+docker run -d --name fse \
+  --network host \
+  -e FSE_API_LISTEN=0.0.0.0:22420 \
+  -e FSE_SYNC_LISTEN=tcp://0.0.0.0:22000 \
+  -e FSE_WEB_GUI_ENABLED=false \
+  -v fse-config:/config \
+  ghcr.io/bstone108/file-sync-engine:<version>
+```
+
+For the explicit optional GUI, retain the verified package mount and delivery values from
+the overlay, add `--network host`, omit its `-p` mapping, and use
+`FSE_WEB_GUI_LISTEN=0.0.0.0:8385`. The package stays outside the core image, and the
+same host firewall policy controls browser access. This fallback is Linux-specific and
+is not Compose evidence; use normal bridge/Compose deployment where the host provides
+working port publication.
+
 On first start, the entrypoint creates `/config/config.jsonc`, generates API and identity material inside that file, and delegates non-secret container defaults plus optional identity export to the Go-owned `fse container-bootstrap` helper:
 
 - API listener: `0.0.0.0:22420`

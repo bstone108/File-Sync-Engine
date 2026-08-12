@@ -295,6 +295,26 @@ func TestDockerComposeAllowsSeparateHostPortsForDisposableCoexistence(t *testing
 	}
 }
 
+func TestDockerDocsProvideExplicitHostNetworkFallbackForNoNATHosts(t *testing.T) {
+	root := filepath.Join("..", "..")
+	docs := readRequiredFile(t, filepath.Join(root, "docs", "DOCKER.md"))
+
+	for _, want := range []string{
+		"## Host-network fallback for Docker hosts without bridge/NAT publishing",
+		"--network host",
+		"does not use Docker port publishing",
+		"FSE_API_LISTEN=0.0.0.0:22420",
+		"FSE_SYNC_LISTEN=tcp://0.0.0.0:22000",
+		"FSE_WEB_GUI_LISTEN=0.0.0.0:8385",
+		"Do not combine host networking with `-p`",
+		"external device",
+	} {
+		if !strings.Contains(docs, want) {
+			t.Fatalf("Docker docs missing host-network fallback safety/deployment contract %q", want)
+		}
+	}
+}
+
 func TestContainerEntrypointExportsIdentityPackageWithoutRegenerating(t *testing.T) {
 	root := filepath.Join("..", "..")
 	entrypoint := readRequiredFile(t, filepath.Join(root, "scripts", "container-entrypoint.sh"))
