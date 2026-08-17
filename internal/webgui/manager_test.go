@@ -514,6 +514,61 @@ func TestServerProvidesSameOriginActionableErrorsWithoutExposingNativeAPIKey(t *
 	}
 }
 
+func TestServerReadOnlyBridgeDoesNotExposeNativeResponseHeaders(t *testing.T) {
+	dir := t.TempDir()
+	installDir := filepath.Join(dir, "web", "current")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, versionMarkerName), []byte("5.0.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installDir, "index.html"), []byte("functional web app"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	native := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/status" {
+			t.Fatalf("native request = %s %s, want GET /v1/status", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Set-Cookie", "native-session=secret; HttpOnly")
+		w.Header().Set("Location", "https://native.example/private")
+		w.Header().Set("Access-Control-Allow-Origin", "https://native.example")
+		w.Header().Set("X-FSE-API-Key", "native-secret")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"starting"}`))
+	})
+
+	server := NewServer()
+	status, err := server.Start(StartOptions{InstallDir: installDir, Listen: "127.0.0.1:0", NativeAPIHandler: native, NativeAPIKey: "native-secret"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _, _ = server.Stop() }()
+
+	resp, err := http.Get(status.URL + "/api/v1/status")
+	if err != nil {
+		t.Fatalf("same-origin status request: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusAccepted || string(body) != `{"status":"starting"}` {
+		t.Fatalf("same-origin status response = %d %q", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q, want application/json", got)
+	}
+	for _, header := range []string{"Set-Cookie", "Location", "Access-Control-Allow-Origin", "X-FSE-API-Key"} {
+		if got := resp.Header.Get(header); got != "" {
+			t.Fatalf("browser response leaked native header %s=%q", header, got)
+		}
+	}
+}
+
 func TestServerStartHostsHTTPAndHTTPSWhenConfigured(t *testing.T) {
 	dir := t.TempDir()
 	installDir := filepath.Join(dir, "web", "current")

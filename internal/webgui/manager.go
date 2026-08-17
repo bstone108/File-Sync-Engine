@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -213,7 +214,13 @@ func nativeReadOnlyBridge(nativeAPI http.Handler, nativeAPIKey, nativePath strin
 			return
 		}
 		nativeRequest.Header.Set("X-FSE-API-Key", nativeAPIKey)
-		nativeAPI.ServeHTTP(w, nativeRequest)
+		recorder := httptest.NewRecorder()
+		nativeAPI.ServeHTTP(recorder, nativeRequest)
+		if contentType := recorder.Header().Get("Content-Type"); contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		w.WriteHeader(recorder.Code)
+		_, _ = w.Write(recorder.Body.Bytes())
 	}
 }
 
