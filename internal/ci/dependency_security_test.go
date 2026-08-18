@@ -27,6 +27,7 @@ func TestGoModulesPinPatchedSecurityDependencyVersions(t *testing.T) {
 		{filepath.Join("desktop-gui", "package-lock.json"), "\"node_modules/postcss\": {\n      \"version\": \"8.5.25\""},
 		{filepath.Join("desktop-gui", "package.json"), "\"vite\": \"^6.4.2\""},
 		{filepath.Join("desktop-gui", "package.json"), "\"@sveltejs/vite-plugin-svelte\": \"^6.2.4\""},
+		{filepath.Join("desktop-gui", "package-lock.json"), "\"node_modules/nanoid\": {\n      \"version\": \"3.3.18\""},
 	}
 	for _, check := range checks {
 		content := readTextFile(t, filepath.Join(root, check.rel))
