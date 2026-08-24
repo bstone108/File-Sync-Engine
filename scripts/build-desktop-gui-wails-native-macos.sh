@@ -54,7 +54,7 @@ if [[ "$host_arch" != "$ARCH" ]]; then
   exit 1
 fi
 
-for tool in go npm wails codesign; do
+for tool in go npm wails; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'required macOS desktop build tool not found on PATH: %s\n' "$tool" >&2
     exit 1
@@ -130,8 +130,10 @@ stage_target_engine_resource_subset "darwin/$ARCH" "$WORK_DIR/resources/engine"
   cp "$ROOT/README.md" "$APP_BUNDLE/Contents/Resources/docs-snapshot/README.md"
   test -s "$APP_BUNDLE/Contents/Resources/engine/darwin/$ARCH/fse"
   test -s "$APP_BUNDLE/Contents/Resources/docs-snapshot/README.md"
-  codesign --force --deep --sign - "$APP_BUNDLE"
-  codesign --verify --deep --strict "$APP_BUNDLE"
+  # Do not ad-hoc sign here. Copying the bundled daemon into the .app invalidates
+  # any signature Wails applied during `wails build`. GitHub Actions runs
+  # scripts/sign-and-notarize-macos-desktop.sh next to Developer ID-sign,
+  # notarize, and staple the complete bundle.
   cp -R "$APP_BUNDLE" "$TARGET_OUT/fse-desktop.app"
 )
 

@@ -3,4 +3,5 @@ development/*
 !development/desktop-wails-builder/*
 /tmp/
 *.log
+*.p12
 /desktop-gui/wails-output/

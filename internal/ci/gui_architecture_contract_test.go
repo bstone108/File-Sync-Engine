@@ -1877,6 +1877,7 @@ func TestDesktopGUIReleasePackagerCreatesReviewablePerTargetArchives(t *testing.
 		"desktop-gui/resources/engine/manifest.json",
 		"wails-output",
 		"fse-desktop-${VERSION}-${target}.zip",
+		"fse-desktop-${VERSION}-${target}.dmg",
 		"SHA256SUMS",
 		"docs-snapshot",
 		"zip -qr",
@@ -1909,6 +1910,8 @@ func TestDesktopGUIReleasePackagerCreatesReviewablePerTargetArchives(t *testing.
 		"Desktop GUI release packaging now has a reviewable script",
 		"already-built Wails desktop outputs",
 		"one zip per target under `build/<version>/desktop-gui/`",
+		"notarized/stapled `.dmg`",
+		"scripts/sign-and-notarize-macos-desktop.sh",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Fatalf("desktop GUI architecture doc missing release packaging progress %q:\n%s", want, doc)

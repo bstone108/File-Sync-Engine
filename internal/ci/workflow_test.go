@@ -2,7 +2,9 @@ package ci
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -478,7 +480,10 @@ func TestDesktopStabilizationDocsCarryPlatformFailureInventory(t *testing.T) {
 		"logs/errors are visible",
 		"first-use setup reaches sync-ready state",
 		"Historical Windows `native desktop shell is not available` binding failure is fixed in source; the hosted gate compiles the Wails application and, because GitHub runners have no interactive desktop/WebView2 session, directly exercises the same native App bridge against a real staged Windows daemon: launch, authenticated HTTPS `/v1/status`, and `/v1/stop`",
-		"Known failure: macOS Apple Silicon packages can report `app is damaged and can't be opened`",
+		"Historical failure: macOS Apple Silicon packages could report `app is damaged and can't be opened`",
+		"Developer ID",
+		"notarize",
+		"staple",
 		"Inventory status: unproven until smoke-tested on host or VM",
 	} {
 		if !strings.Contains(desktopDocs, want) {
@@ -551,9 +556,49 @@ func TestMacOSInfoPlistAllowsLocalNetworkingForWailsAssetServer(t *testing.T) {
 	}
 }
 
+func TestMacOSDesktopEntitlementsEnableHardenedRuntimeWithoutSandbox(t *testing.T) {
+	entitlements := readRequiredFile(t, filepath.Join("..", "..", "desktop-gui", "build", "darwin", "entitlements.plist"))
+	for _, want := range []string{
+		"com.apple.security.cs.allow-jit",
+		"com.apple.security.cs.allow-unsigned-executable-memory",
+		"com.apple.security.cs.disable-library-validation",
+		"WKWebView",
+		"Go runtime",
+		"App Sandbox entitlements",
+		"network.client",
+	} {
+		if !strings.Contains(entitlements, want) {
+			t.Fatalf("macOS entitlements missing hardened-runtime justification %q", want)
+		}
+	}
+	if strings.Contains(entitlements, "<key>com.apple.security.app-sandbox</key>") {
+		t.Fatal("macOS desktop entitlements must not enable App Sandbox; the GUI launches a bundled daemon and uses user-selected sync folders")
+	}
+	if strings.Contains(entitlements, "<key>com.apple.security.network.client</key>") || strings.Contains(entitlements, "<key>com.apple.security.network.server</key>") {
+		t.Fatal("macOS desktop entitlements must not add sandbox network keys; this app is not sandboxed")
+	}
+}
+
+func TestMacOSSignAndNotarizeScriptRefusesNonDarwinHosts(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("non-Darwin guard is exercised on Linux CI")
+	}
+	root := filepath.Join("..", "..")
+	cmd := exec.Command("bash", "scripts/sign-and-notarize-macos-desktop.sh", "fse-desktop.app", "2026.08.11.02", "arm64")
+	cmd.Dir = root
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("sign/notarize script unexpectedly succeeded off macOS:\n%s", output)
+	}
+	if got := string(output); !strings.Contains(got, "native macOS runner required") {
+		t.Fatalf("sign/notarize script did not refuse non-Darwin host; output:\n%s", got)
+	}
+}
+
 func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
 	script := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails-native-macos.sh"))
+	signScript := readRequiredFile(t, filepath.Join("..", "..", "scripts", "sign-and-notarize-macos-desktop.sh"))
 
 	for _, want := range []string{
 		"macos-desktop-artifacts",
@@ -565,9 +610,17 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"darwin-arm64",
 		"FSE_DESKTOP_MACOS_ARCH: ${{ matrix.arch }}",
 		"scripts/build-desktop-gui-wails-native-macos.sh",
+		"scripts/sign-and-notarize-macos-desktop.sh",
+		"secrets.APPLE_CERTIFICATE_BASE64",
+		"secrets.APPLE_CERTIFICATE_PASSWORD",
+		"secrets.APPLE_ID",
+		"secrets.APPLE_APP_SPECIFIC_PASSWORD",
+		"secrets.APPLE_TEAM_ID",
+		"Developer ID Application: BRANDON BROWNING STONE (K6N4J68LTY)",
 		"FSE_DESKTOP_GUI_RELEASE_TARGETS: darwin-${{ matrix.arch }}",
 		"fse-desktop-${{ matrix.target }}-installer",
 		"build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.zip",
+		"build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.dmg",
 		"upload-artifact",
 	} {
 		if !strings.Contains(workflow, want) {
@@ -577,24 +630,57 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 	if strings.Contains(workflow, "macos-13") {
 		t.Fatalf("release workflow must not use retired/absent macos-13 runner labels")
 	}
+	buildIndex := strings.Index(workflow, "scripts/build-desktop-gui-wails-native-macos.sh")
+	signIndex := strings.Index(workflow, `scripts/sign-and-notarize-macos-desktop.sh "desktop-gui/wails-output/darwin-${{ matrix.arch }}/fse-desktop.app"`)
+	packageIndex := strings.Index(workflow, "FSE_DESKTOP_GUI_RELEASE_TARGETS: darwin-${{ matrix.arch }}")
+	if buildIndex == -1 || signIndex == -1 || packageIndex == -1 {
+		t.Fatal("release workflow missing macOS build, Developer ID sign/notarize, or package step")
+	}
+	if buildIndex > signIndex || signIndex > packageIndex {
+		t.Fatal("macOS release job must build the .app, then Developer ID-sign/notarize/staple, then package zip+dmg")
+	}
 	for _, want := range []string{
 		"native macOS runner",
 		"GOOS=darwin",
 		"GOARCH=\"$ARCH\"",
 		"wails build -platform darwin/$ARCH",
-		"codesign --force --deep --sign -",
-		"codesign --verify --deep --strict",
 		"desktop-gui/wails-output/darwin-$ARCH",
 		"fse-desktop.app/Contents/MacOS/fse-desktop",
 		"Contents/Resources/engine",
 		"Contents/Resources/docs-snapshot/README.md",
+		"scripts/sign-and-notarize-macos-desktop.sh",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("native macOS Wails script missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Dockerfile.darwin-osxcross", "osxcross", "FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey"} {
-		if strings.Contains(workflow, forbidden) || strings.Contains(script, forbidden) {
+	for _, forbidden := range []string{"codesign --force --deep --sign -", "codesign --sign -"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("native macOS Wails script must not ad-hoc sign with %q", forbidden)
+		}
+	}
+	for _, want := range []string{
+		"APPLE_CERTIFICATE_BASE64",
+		"APPLE_CERTIFICATE_PASSWORD",
+		"APPLE_ID",
+		"APPLE_APP_SPECIFIC_PASSWORD",
+		"APPLE_TEAM_ID",
+		"Developer ID Application: BRANDON BROWNING STONE (K6N4J68LTY)",
+		"--options runtime",
+		"--timestamp",
+		"--entitlements",
+		"xcrun notarytool submit",
+		"xcrun stapler staple",
+		"hdiutil create",
+		"ditto -c -k --keepParent",
+		"codesign --verify --deep --strict",
+	} {
+		if !strings.Contains(signScript, want) {
+			t.Fatalf("macOS sign/notarize script missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"codesign --force --deep --sign -", "Dockerfile.darwin-osxcross", "osxcross", "FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey"} {
+		if strings.Contains(workflow, forbidden) || strings.Contains(script, forbidden) || strings.Contains(signScript, forbidden) {
 			t.Fatalf("macOS native artifact path must not depend on forbidden text %q", forbidden)
 		}
 	}
