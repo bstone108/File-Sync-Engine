@@ -95,7 +95,6 @@ func TestRootReadmeDockerExamplesKeepTheCoreHeadless(t *testing.T) {
 	}
 }
 
-
 func TestWorkflowsUseNode24ReadyGitHubActions(t *testing.T) {
 	workflows := map[string]string{
 		"ci.yml":      readWorkflow(t, "ci.yml"),
@@ -331,34 +330,65 @@ func TestReleaseWorkflowBuildsMacOSDaemonBeforeDesktopGoSetup(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowUsesManualDateReleaseVersions(t *testing.T) {
+func TestReleaseWorkflowUsesAutomaticChicagoDateBuildVersions(t *testing.T) {
 	workflow := readWorkflow(t, "release.yml")
 	script := readRequiredFile(t, filepath.Join("..", "..", "scripts", "resolve-release-version.sh"))
+	ciWorkflow := readWorkflow(t, "ci.yml")
 
+	// Published releases (Release artifacts, git tags, GitHub Releases, GHCR)
+	// use America/Chicago date.build YYYY.M.D.N. Humans do not invent N.
 	for _, want := range []string{
-		"version:",
-		"required: true",
+		"required: false",
+		"YYYY.M.D.N",
 		"scripts/resolve-release-version.sh \"${{ inputs.version }}\"",
-		"YYYY.MM.DD.NN",
-		"manual release version",
+		"GH_TOKEN: ${{ github.token }}",
+		"fetch-tags: true",
+		"TZ=America/Chicago",
+		"TZ=America/Chicago date +%Y-%m-%d",
+		"git tag --list",
+		"git ls-remote --tags origin",
+		"gh release list",
 		"GITHUB_REF_TYPE",
 		"GITHUB_REF_NAME#v",
 	} {
 		if !strings.Contains(workflow, want) && !strings.Contains(script, want) {
-			t.Fatalf("manual release versioning contract missing %q", want)
+			t.Fatalf("automatic Chicago date.build release versioning contract missing %q", want)
 		}
 	}
+	if strings.Contains(workflow, "required: true") {
+		t.Fatal("workflow_dispatch version must be optional so a click-to-run release auto-stamps the next Chicago date.build")
+	}
+	if !strings.Contains(script, "N = 1 + max existing N") {
+		t.Fatal("resolver must auto-increment N from existing tags/releases for the Chicago calendar day")
+	}
+
+	// Date.build is not a CI/test stamp. PR CI keeps dummy/dev versions.
+	if strings.Contains(ciWorkflow, "resolve-release-version.sh") {
+		t.Fatal("PR CI must not call the published-release version resolver")
+	}
+	if strings.Contains(ciWorkflow, "TZ=America/Chicago") {
+		t.Fatal("PR CI must not generate America/Chicago date.build versions")
+	}
+	if !strings.Contains(ciWorkflow, `scripts/build-all.sh "ci-${GITHUB_SHA::12}"`) {
+		t.Fatal("PR CI must keep its dummy ci-<sha> version for smoke builds")
+	}
+	if !strings.Contains(ciWorkflow, `-X main.version=${GITHUB_SHA}`) {
+		t.Fatal("PR CI daemon builds must keep the SHA version stamp, not date.build")
+	}
+
 	for _, forbidden := range []string{
 		`version="0.0.0-ci.${GITHUB_RUN_NUMBER}"`,
 		`version="ci-${GITHUB_SHA::12}"`,
 		"TZ=America/Chicago date +%Y.%m.%d",
-		"git tag --list",
+		"manual release version",
+		"required: true",
+		"^[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}\\.[0-9]{2}$",
 		"printf -v version '%s." + "t" + "%02d'",
 		"YYYY.MM.DD." + "t" + "NN",
 		"\\." + "t" + "[0-9]",
 	} {
 		if strings.Contains(workflow, forbidden) || strings.Contains(script, forbidden) {
-			t.Fatalf("release workflow must not auto-increment or use old CI version default %q", forbidden)
+			t.Fatalf("release versioning still encodes the old padded/manual policy or a CI default %q", forbidden)
 		}
 	}
 }
@@ -373,6 +403,7 @@ func TestReleaseWorkflowPreflightsAndRefusesDuplicateVersions(t *testing.T) {
 		"tag: ${{ steps.version.outputs.tag }}",
 		"gh release view \"$tag\"",
 		"git ls-remote --exit-code --tags origin \"refs/tags/$tag\"",
+		"padded_tag=",
 		"refusing to build duplicate release version",
 		"needs: version-preflight",
 		"${{ needs.version-preflight.outputs.version }}",
@@ -492,8 +523,8 @@ func TestDesktopWailsBuildScriptsStageOnlyTargetEngineResource(t *testing.T) {
 	nativeMacScript := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails-native-macos.sh"))
 
 	for name, script := range map[string]string{
-		"container Wails script":     containerScript,
-		"native macOS Wails script":  nativeMacScript,
+		"container Wails script":    containerScript,
+		"native macOS Wails script": nativeMacScript,
 	} {
 		for _, want := range []string{
 			"stage_target_engine_resource_subset()",

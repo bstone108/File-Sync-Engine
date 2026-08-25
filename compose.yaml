@@ -1,8 +1,8 @@
 # Headless File Sync Engine server/NAS baseline.
-# Set FSE_IMAGE_TAG to an intentionally published YYYY.MM.DD.NN release version.
+# Set FSE_IMAGE_TAG to an intentionally published YYYY.M.D.N release version.
 services:
   fse:
-    image: ghcr.io/bstone108/file-sync-engine:${FSE_IMAGE_TAG:?Set FSE_IMAGE_TAG to a published YYYY.MM.DD.NN release tag}
+    image: ghcr.io/bstone108/file-sync-engine:${FSE_IMAGE_TAG:?Set FSE_IMAGE_TAG to a published YYYY.M.D.N release tag}
     restart: unless-stopped
     environment:
       PUID: "99"
