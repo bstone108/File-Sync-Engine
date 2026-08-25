@@ -205,7 +205,7 @@ func TestRootDockerExamplesUsePublishedImmutableReleaseTags(t *testing.T) {
 	}
 	for _, want := range []string{
 		"ghcr.io/bstone108/file-sync-engine:<version>",
-		"Replace `<version>` with a published `YYYY.MM.DD.NN` release tag",
+		"Replace `<version>` with a published `YYYY.M.D.N` release tag",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("Docker examples must guide users to a published immutable release tag, missing %q", want)
@@ -220,7 +220,7 @@ func TestDockerComposeHeadlessDaemonUsesPersistentConfigAndExplicitReleaseTag(t 
 	for _, want := range []string{
 		"services:",
 		"fse:",
-		"ghcr.io/bstone108/file-sync-engine:${FSE_IMAGE_TAG:?Set FSE_IMAGE_TAG to a published YYYY.MM.DD.NN release tag}",
+		"ghcr.io/bstone108/file-sync-engine:${FSE_IMAGE_TAG:?Set FSE_IMAGE_TAG to a published YYYY.M.D.N release tag}",
 		"FSE_WEB_GUI_ENABLED: \"false\"",
 		"fse-config:/config",
 		"${FSE_API_HOST_PORT:-22420}:22420/tcp",
