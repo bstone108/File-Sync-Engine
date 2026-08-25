@@ -433,7 +433,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          FSE_MACOS_SIGN_IDENTITY: Developer ID Application: BRANDON BROWNING STONE (K6N4J68LTY)
+          FSE_MACOS_SIGN_IDENTITY: "Developer ID Application: BRANDON BROWNING STONE (K6N4J68LTY)"
         run: scripts/sign-and-notarize-macos-desktop.sh "desktop-gui/wails-output/darwin-${{ matrix.arch }}/fse-desktop.app" "${{ steps.version.outputs.version }}" "${{ matrix.arch }}"
 
       - name: Package macOS desktop installer
