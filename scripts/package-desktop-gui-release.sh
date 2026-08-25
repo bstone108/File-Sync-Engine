@@ -7,6 +7,8 @@ Usage: scripts/package-desktop-gui-release.sh <version> [wails-output-root] [eng
 
 Packages already-built Wails desktop outputs plus verified bundled engine resources.
 Windows targets produce both a zip package and an actual NSIS installer .exe.
+macOS targets produce a zip of fse-desktop.app and, when the preceding Developer ID
+sign/notarize step wrote fse-desktop.dmg beside the app, copy that notarized DMG.
 Other desktop targets produce one reviewable zip per target under build/<version>/desktop-gui/.
 This script does not run Wails, npm, Go builds, or install toolchains. Produce the
 Wails outputs separately in an isolated build environment, then point this script
@@ -271,11 +273,17 @@ copy_target() {
   mkdir -p "$staging/app"
   cp -a "$wails_dir"/. "$staging/app/"
   if is_darwin_target "$target"; then
-    # macOS payload is already code-signed inside fse-desktop.app/Contents/Resources.
+    # macOS payload is already Developer ID-signed and notarized inside
+    # fse-desktop.app. Zip the .app at archive root so the artifact matches the
+    # notarytool submission layout. Copy a stapled DMG when the macOS signing
+    # step wrote one beside the bundle.
     (
-      cd "$staging"
-      zip -qr "$OUT_DIR/$zip_name" app
+      cd "$wails_dir"
+      zip -qr "$OUT_DIR/$zip_name" fse-desktop.app
     )
+    if [[ -s "$wails_dir/fse-desktop.dmg" ]]; then
+      cp "$wails_dir/fse-desktop.dmg" "$OUT_DIR/fse-desktop-${VERSION}-${target}.dmg"
+    fi
   else
     mkdir -p "$staging/engine" "$staging/docs-snapshot"
     stage_target_engine_resources "$target" "$engine_rel" "$staging/engine"
@@ -299,7 +307,7 @@ rm -rf "$OUT_DIR/.staging" "$OUT_DIR/.nsis"
 (
   cd "$OUT_DIR"
   shopt -s nullglob
-  artifacts=(fse-desktop-${VERSION}-*.zip fse-desktop-${VERSION}-*-installer.exe)
+  artifacts=(fse-desktop-${VERSION}-*.zip fse-desktop-${VERSION}-*.dmg fse-desktop-${VERSION}-*-installer.exe)
   if [[ "${#artifacts[@]}" -eq 0 ]]; then
     printf 'no desktop GUI release artifacts were produced.\n' >&2
     exit 1

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Developer ID / Hardened Runtime entitlements for fse-desktop.
+
+  This app is distributed outside the Mac App Store, so App Sandbox is not
+  enabled. The GUI launches a bundled daemon and talks to user-selected sync
+  folders; sandboxing that would require a different packaging model.
+
+  Hardened Runtime (--options runtime) is required for notarization. These
+  keys are hardened-runtime exceptions, checked against this app:
+
+  - com.apple.security.cs.allow-jit
+    Wails hosts the UI in WKWebView / JavaScriptCore, which JIT-compiles
+    JavaScript. Apple documents this entitlement for that case.
+    See desktop-gui/main.go AssetServer + Wails WKWebView runtime.
+
+  - com.apple.security.cs.allow-unsigned-executable-memory
+    The Go runtime (and typical CGO/Wails Darwin builds) create RWX heaps.
+    Without this exception, Developer ID + hardened runtime commonly crashes
+    Go binaries at startup.
+
+  - com.apple.security.cs.disable-library-validation
+    Wails loads system WebKit plus CGO-linked native code that is not signed
+    by Team K6N4J68LTY. Library validation would block those loads. This
+    matches Wails' Darwin codesigning guidance.
+
+  Not included, on purpose:
+  - com.apple.security.app-sandbox: would break bundled-daemon launch and
+    arbitrary-folder sync.
+  - com.apple.security.network.client / com.apple.security.network.server:
+    those are App Sandbox entitlements. Without the sandbox, Hardened Runtime
+    does not restrict TCP client or server use. The GUI is an HTTPS client to
+    the local daemon (desktop-gui/app.go, desktop-gui/app_control.go) and only
+    binds 127.0.0.1 to allocate a free port; those do not need sandbox network
+    keys.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
