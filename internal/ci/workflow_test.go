@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+const macosDeveloperIDIdentity = "Developer ID Application: BRANDON BROWNING STONE (K6N4J68LTY)"
+
 func TestCrossPlatformWorkflowCoversTestHarnessAndSixTargets(t *testing.T) {
 	workflow := readWorkflow(t, "ci.yml")
 
@@ -647,7 +649,7 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"secrets.APPLE_ID",
 		"secrets.APPLE_APP_SPECIFIC_PASSWORD",
 		"secrets.APPLE_TEAM_ID",
-		"Developer ID Application: BRANDON BROWNING STONE (K6N4J68LTY)",
+		"FSE_MACOS_SIGN_IDENTITY:",
 		"FSE_DESKTOP_GUI_RELEASE_TARGETS: darwin-${{ matrix.arch }}",
 		"fse-desktop-${{ matrix.target }}-installer",
 		"build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.zip",
@@ -658,6 +660,7 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 			t.Fatalf("release workflow missing macOS artifact contract %q", want)
 		}
 	}
+	requireQuotedYAMLMacOSSignIdentity(t, workflow)
 	if strings.Contains(workflow, "macos-13") {
 		t.Fatalf("release workflow must not use retired/absent macos-13 runner labels")
 	}
@@ -696,7 +699,7 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"APPLE_ID",
 		"APPLE_APP_SPECIFIC_PASSWORD",
 		"APPLE_TEAM_ID",
-		"Developer ID Application: BRANDON BROWNING STONE (K6N4J68LTY)",
+		macosDeveloperIDIdentity,
 		"--options runtime",
 		"--timestamp",
 		"--entitlements",
@@ -760,6 +763,22 @@ func TestReleaseWorkflowPublishesSynchronizedContainerImage(t *testing.T) {
 		if !strings.Contains(docs, want) {
 			t.Fatalf("Docker docs missing %q", want)
 		}
+	}
+}
+
+func requireQuotedYAMLMacOSSignIdentity(t *testing.T, workflow string) {
+	t.Helper()
+	if !strings.Contains(workflow, macosDeveloperIDIdentity) {
+		t.Fatalf("release workflow missing Developer ID identity %q", macosDeveloperIDIdentity)
+	}
+	unquoted := "FSE_MACOS_SIGN_IDENTITY: " + macosDeveloperIDIdentity
+	doubleQuoted := `FSE_MACOS_SIGN_IDENTITY: "` + macosDeveloperIDIdentity + `"`
+	singleQuoted := "FSE_MACOS_SIGN_IDENTITY: '" + macosDeveloperIDIdentity + "'"
+	if strings.Contains(workflow, unquoted) {
+		t.Fatal("FSE_MACOS_SIGN_IDENTITY must be a quoted YAML scalar; an unquoted colon makes GitHub Actions reject the workflow file")
+	}
+	if !strings.Contains(workflow, doubleQuoted) && !strings.Contains(workflow, singleQuoted) {
+		t.Fatal("release workflow must set FSE_MACOS_SIGN_IDENTITY to the Developer ID identity as a quoted YAML scalar")
 	}
 }
 
