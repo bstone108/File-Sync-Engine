@@ -591,17 +591,31 @@ func TestMacOSInfoPlistAllowsLocalNetworkingForWailsAssetServer(t *testing.T) {
 
 func TestMacOSDesktopEntitlementsEnableHardenedRuntimeWithoutSandbox(t *testing.T) {
 	entitlements := readRequiredFile(t, filepath.Join("..", "..", "desktop-gui", "build", "darwin", "entitlements.plist"))
+	signScript := readRequiredFile(t, filepath.Join("..", "..", "scripts", "sign-and-notarize-macos-desktop.sh"))
+	// Apple's codesign / AMFI entitlements parser rejects XML comments
+	// (AMFIUnserializeXML). Keep the plist comment-free; rationale lives in the
+	// sign script header.
+	if strings.Contains(entitlements, "<!--") || strings.Contains(entitlements, "-->") {
+		t.Fatal("macOS entitlements.plist must not contain XML comments; codesign AMFIUnserializeXML rejects them")
+	}
 	for _, want := range []string{
 		"com.apple.security.cs.allow-jit",
 		"com.apple.security.cs.allow-unsigned-executable-memory",
 		"com.apple.security.cs.disable-library-validation",
+	} {
+		if !strings.Contains(entitlements, want) {
+			t.Fatalf("macOS entitlements missing hardened-runtime key %q", want)
+		}
+	}
+	for _, want := range []string{
 		"WKWebView",
 		"Go runtime",
 		"App Sandbox entitlements",
 		"network.client",
+		"AMFIUnserializeXML",
 	} {
-		if !strings.Contains(entitlements, want) {
-			t.Fatalf("macOS entitlements missing hardened-runtime justification %q", want)
+		if !strings.Contains(signScript, want) {
+			t.Fatalf("macOS sign script missing hardened-runtime justification %q", want)
 		}
 	}
 	if strings.Contains(entitlements, "<key>com.apple.security.app-sandbox</key>") {

@@ -1,4 +1,31 @@
 #!/usr/bin/env bash
+# Signs a native macOS fse-desktop.app with Developer ID, notarizes, and staples.
+#
+# Entitlements (desktop-gui/build/darwin/entitlements.plist) MUST stay
+# comment-free. Apple's codesign / AMFI parser rejects XML comments
+# (AMFIUnserializeXML: syntax error). Keep rationale here, not in the plist.
+#
+# Hardened Runtime (--options runtime) is required for notarization. The three
+# plist keys are hardened-runtime exceptions:
+#   - com.apple.security.cs.allow-jit
+#     Wails hosts the UI in WKWebView / JavaScriptCore, which JIT-compiles
+#     JavaScript. Apple documents this entitlement for that case.
+#     See desktop-gui/main.go AssetServer + Wails WKWebView runtime.
+#   - com.apple.security.cs.allow-unsigned-executable-memory
+#     The Go runtime (and typical CGO/Wails Darwin builds) create RWX heaps.
+#     Without this exception, Developer ID + hardened runtime commonly crashes
+#     Go binaries at startup.
+#   - com.apple.security.cs.disable-library-validation
+#     Wails loads system WebKit plus CGO-linked native code that is not signed
+#     by Team K6N4J68LTY. Library validation would block those loads. This
+#     matches Wails' Darwin codesigning guidance.
+#
+# Not included, on purpose:
+#   - com.apple.security.app-sandbox: would break bundled-daemon launch and
+#     arbitrary-folder sync.
+#   - com.apple.security.network.client / com.apple.security.network.server:
+#     those are App Sandbox entitlements. Without the sandbox, Hardened Runtime
+#     does not restrict TCP client or server use.
 set -euo pipefail
 
 usage() {
