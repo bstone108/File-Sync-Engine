@@ -366,7 +366,7 @@ jobs:
             runner: macos-15-intel
           - arch: arm64
             target: darwin-arm64
-            runner: macos-14
+            runner: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v6

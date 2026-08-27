@@ -638,7 +638,7 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"macOS desktop installer artifacts",
 		"runs-on: ${{ matrix.runner }}",
 		"macos-15-intel",
-		"macos-14",
+		"runner: macos-15\n",
 		"darwin-amd64",
 		"darwin-arm64",
 		"FSE_DESKTOP_MACOS_ARCH: ${{ matrix.arch }}",
@@ -661,8 +661,15 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		}
 	}
 	requireQuotedYAMLMacOSSignIdentity(t, workflow)
-	if strings.Contains(workflow, "macos-13") {
-		t.Fatalf("release workflow must not use retired/absent macos-13 runner labels")
+	requireHostedMacOSRunnerLabels(t, workflow, "release workflow")
+	if !strings.Contains(workflow, `          - arch: amd64
+            target: darwin-amd64
+            runner: macos-15-intel
+          - arch: arm64
+            target: darwin-arm64
+            runner: macos-15
+`) {
+		t.Fatal("release workflow must keep separate macos-15-intel (amd64) and macos-15 (arm64) jobs; Wails cannot lipo a universal app here")
 	}
 	buildIndex := strings.Index(workflow, "scripts/build-desktop-gui-wails-native-macos.sh")
 	signIndex := strings.Index(workflow, `scripts/sign-and-notarize-macos-desktop.sh "desktop-gui/wails-output/darwin-${{ matrix.arch }}/fse-desktop.app"`)
@@ -713,10 +720,138 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 			t.Fatalf("macOS sign/notarize script missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"codesign --force --deep --sign -", "Dockerfile.darwin-osxcross", "osxcross", "FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey"} {
+	for _, forbidden := range []string{"codesign --force --deep --sign -", "Dockerfile.darwin-osxcross", "osxcross", "FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey", "lipo"} {
 		if strings.Contains(workflow, forbidden) || strings.Contains(script, forbidden) || strings.Contains(signScript, forbidden) {
 			t.Fatalf("macOS native artifact path must not depend on forbidden text %q", forbidden)
 		}
+	}
+}
+
+func TestPRCICompilesUnsignedNativeMacOSDesktopOnHostedRunners(t *testing.T) {
+	ci := readWorkflow(t, "ci.yml")
+	release := readWorkflow(t, "release.yml")
+	signScript := readRequiredFile(t, filepath.Join("..", "..", "scripts", "sign-and-notarize-macos-desktop.sh"))
+	packager := readRequiredFile(t, filepath.Join("..", "..", "scripts", "package-desktop-gui-release.sh"))
+	harness := readRequiredFile(t, filepath.Join("..", "..", "scripts", "run-serious-harness.sh"))
+
+	start := strings.Index(ci, "macos-desktop-wails-build:")
+	end := strings.Index(ci, "windows-desktop-wails-build:")
+	if start == -1 || end == -1 || end <= start {
+		t.Fatal("PR CI missing unsigned macOS native Wails desktop compile job")
+	}
+	macJob := ci[start:end]
+
+	for _, want := range []string{
+		"python3 scripts/test_macos_wails_ci_contract.py",
+		"macos-desktop-wails-build:",
+	} {
+		if !strings.Contains(ci, want) {
+			t.Fatalf("PR CI missing unsigned macOS Wails compile contract %q", want)
+		}
+	}
+	for _, want := range []string{
+		"macos-desktop-wails-build:",
+		"runs-on: ${{ matrix.runner }}",
+		"go-version-file: desktop-gui/go.mod",
+		"node-version: 22",
+		"github.com/wailsapp/wails/v2/cmd/wails@v2.10.2",
+		"wails generate module",
+		"npm ci",
+		"npm run typecheck",
+		"npm run build",
+		`wails build -clean -platform "${{ matrix.platform }}" -o fse-desktop`,
+		`FSE_DESKTOP_VERSION="ci-${GITHUB_SHA::12}"`,
+		"Build unsigned native macOS desktop application",
+	} {
+		if !strings.Contains(macJob, want) {
+			t.Fatalf("unsigned macOS Wails compile job missing %q", want)
+		}
+	}
+	if !strings.Contains(macJob, `          - arch: amd64
+            platform: darwin/amd64
+            runner: macos-15-intel
+          - arch: arm64
+            platform: darwin/arm64
+            runner: macos-15
+`) {
+		t.Fatal("PR CI must compile darwin/amd64 on macos-15-intel and darwin/arm64 on macos-15 as separate unsigned jobs")
+	}
+	if !strings.Contains(harness, "python3 scripts/test_macos_wails_ci_contract.py") {
+		t.Fatal("serious harness must run the unsigned macOS Wails CI contract")
+	}
+
+	for _, forbidden := range []string{
+		"macos-14",
+		"macos-latest",
+		"notarytool",
+		"stapler",
+		"codesign",
+		"APPLE_CERTIFICATE",
+		"APPLE_ID",
+		"FSE_MACOS_SIGN_IDENTITY",
+		"sign-and-notarize-macos-desktop.sh",
+		"resolve-release-version.sh",
+		"lipo",
+	} {
+		if strings.Contains(macJob, forbidden) {
+			t.Fatalf("unsigned macOS PR compile job must not include %q", forbidden)
+		}
+	}
+	for _, forbidden := range []string{
+		"macos-14",
+		"macos-latest",
+		"notarytool",
+		"stapler",
+		"APPLE_CERTIFICATE_BASE64",
+		"FSE_MACOS_SIGN_IDENTITY",
+		"sign-and-notarize-macos-desktop.sh",
+	} {
+		if strings.Contains(ci, forbidden) {
+			t.Fatalf("PR CI must stay unsigned and must not contain %q", forbidden)
+		}
+	}
+	requireHostedMacOSRunnerLabels(t, ci, "PR CI")
+
+	// Sign, notarize, staple, and zip-after-staple remain Release artifacts only.
+	requireQuotedYAMLMacOSSignIdentity(t, release)
+	requireHostedMacOSRunnerLabels(t, release, "release workflow")
+	releaseMacStart := strings.Index(release, "macos-desktop-artifacts:")
+	if releaseMacStart == -1 {
+		t.Fatal("release workflow missing macOS desktop artifact job")
+	}
+	releaseMac := release[releaseMacStart:]
+	for _, want := range []string{
+		macosDeveloperIDIdentity,
+		"K6N4J68LTY",
+		"scripts/sign-and-notarize-macos-desktop.sh",
+		`scripts/sign-and-notarize-macos-desktop.sh "desktop-gui/wails-output/darwin-${{ matrix.arch }}/fse-desktop.app"`,
+		"secrets.APPLE_CERTIFICATE_BASE64",
+		"secrets.APPLE_TEAM_ID",
+	} {
+		if !strings.Contains(releaseMac, want) {
+			t.Fatalf("release workflow must keep Developer ID sign/notarize/staple, missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"--options runtime",
+		"--timestamp",
+		"ditto -c -k --keepParent",
+		"xcrun notarytool submit",
+		"xcrun stapler staple",
+		"codesign --force --timestamp --sign",
+	} {
+		if !strings.Contains(signScript, want) {
+			t.Fatalf("macOS sign/notarize script missing %q", want)
+		}
+	}
+	if !strings.Contains(packager, "zip -qr \"$OUT_DIR/$zip_name\" fse-desktop.app") {
+		t.Fatal("release packager must zip the stapled .app after Developer ID sign/notarize/staple")
+	}
+	buildIndex := strings.Index(releaseMac, "scripts/build-desktop-gui-wails-native-macos.sh")
+	signIndex := strings.Index(releaseMac, `scripts/sign-and-notarize-macos-desktop.sh "desktop-gui/wails-output/darwin-${{ matrix.arch }}/fse-desktop.app"`)
+	packageIndex := strings.Index(releaseMac, "FSE_DESKTOP_GUI_RELEASE_TARGETS: darwin-${{ matrix.arch }}")
+	if buildIndex == -1 || signIndex == -1 || packageIndex == -1 || buildIndex > signIndex || signIndex > packageIndex {
+		t.Fatal("macOS release job must build, Developer ID-sign/notarize/staple, then zip the stapled .app")
 	}
 }
 
@@ -779,6 +914,18 @@ func requireQuotedYAMLMacOSSignIdentity(t *testing.T, workflow string) {
 	}
 	if !strings.Contains(workflow, doubleQuoted) && !strings.Contains(workflow, singleQuoted) {
 		t.Fatal("release workflow must set FSE_MACOS_SIGN_IDENTITY to the Developer ID identity as a quoted YAML scalar")
+	}
+}
+
+func requireHostedMacOSRunnerLabels(t *testing.T, workflow, label string) {
+	t.Helper()
+	for _, forbidden := range []string{"macos-latest", "macos-13", "macos-14"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Fatalf("%s must not use runner label %q; policy is GitHub-hosted macos-15 (arm64) and macos-15-intel (x86_64)", label, forbidden)
+		}
+	}
+	if !strings.Contains(workflow, "macos-15-intel") || !strings.Contains(workflow, "runner: macos-15\n") {
+		t.Fatalf("%s must use GitHub-hosted macos-15 (arm64) and macos-15-intel (x86_64)", label)
 	}
 }
 

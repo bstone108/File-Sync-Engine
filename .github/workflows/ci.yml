@@ -23,6 +23,8 @@ jobs:
           cache: true
       - name: Verify Windows Wails build-gate contract
         run: python3 scripts/test_windows_wails_ci_contract.py
+      - name: Verify unsigned macOS Wails build-gate contract
+        run: python3 scripts/test_macos_wails_ci_contract.py
       - name: Run Go tests
         run: go test ./...
       - name: Run serious harness
@@ -83,6 +85,54 @@ jobs:
           name: file-sync-engine-daemon-${{ matrix.target }}-${{ github.sha }}
           path: dist/${{ matrix.target }}/
           if-no-files-found: error
+
+  macos-desktop-wails-build:
+    name: macOS native Wails desktop build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: darwin/amd64
+            runner: macos-15-intel
+          - arch: arm64
+            platform: darwin/arm64
+            runner: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: desktop-gui/go.mod
+          cache: true
+          cache-dependency-path: desktop-gui/go.sum
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop-gui/package-lock.json
+      - name: Build unsigned native macOS desktop application
+        working-directory: desktop-gui
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          export FSE_DESKTOP_VERSION="ci-${GITHUB_SHA::12}"
+          wails generate module
+          npm ci
+          npm run typecheck
+          npm run build
+          wails build -clean -platform "${{ matrix.platform }}" -o fse-desktop
+          app_bundle="$(find build/bin -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$app_bundle" || ! -x "$app_bundle/Contents/MacOS/fse-desktop" ]]; then
+            printf 'Wails reported success but the macOS .app is missing\n' >&2
+            find build/bin -maxdepth 3 -print >&2 || true
+            exit 1
+          fi
 
   windows-desktop-wails-build:
     name: Windows native Wails desktop build
