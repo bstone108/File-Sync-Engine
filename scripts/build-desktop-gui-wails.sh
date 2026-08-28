@@ -298,6 +298,7 @@ for platform in $TARGETS; do
       }
       stage_target_engine_resource_subset "$FSE_DESKTOP_WAILS_PLATFORM" /tmp/work/resources/engine
       cd /tmp/work
+      /src/scripts/stamp-desktop-gui-version.sh "$FSE_DESKTOP_VERSION" /tmp/work
       if [ -f package-lock.json ]; then
         npm ci
       else

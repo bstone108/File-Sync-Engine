@@ -582,10 +582,19 @@ func TestMacOSInfoPlistAllowsLocalNetworkingForWailsAssetServer(t *testing.T) {
 		"NSAppTransportSecurity",
 		"NSAllowsLocalNetworking",
 		"<true/>",
+		"SUFeedURL",
+		"SUPublicEDKey",
+		"dV+k5IynR3jrGAA7dbDmr66A2rrOH3vPbc45CVcuGUE=",
+		"SUScheduledCheckInterval",
+		"172800",
+		"appcast-darwin-arm64.xml",
 	} {
 		if !strings.Contains(plist, want) {
-			t.Fatalf("macOS Info.plist missing Wails local asset-server requirement %q", want)
+			t.Fatalf("macOS Info.plist missing Wails/Sparkle requirement %q", want)
 		}
+	}
+	if strings.Contains(plist, "SPARKLE_EDDSA_PRIVATE_KEY") || strings.Contains(plist, "p12") {
+		t.Fatal("Info.plist must not contain Sparkle private key material or certificates")
 	}
 }
 
@@ -776,6 +785,8 @@ func TestPRCICompilesUnsignedNativeMacOSDesktopOnHostedRunners(t *testing.T) {
 		`wails build -clean -platform "${{ matrix.platform }}" -o fse-desktop`,
 		`FSE_DESKTOP_VERSION="ci-${GITHUB_SHA::12}"`,
 		"Build unsigned native macOS desktop application",
+		"scripts/fetch-sparkle-framework.sh",
+		"Sparkle.framework",
 	} {
 		if !strings.Contains(macJob, want) {
 			t.Fatalf("unsigned macOS Wails compile job missing %q", want)
@@ -806,6 +817,9 @@ func TestPRCICompilesUnsignedNativeMacOSDesktopOnHostedRunners(t *testing.T) {
 		"sign-and-notarize-macos-desktop.sh",
 		"resolve-release-version.sh",
 		"lipo",
+		"SPARKLE_EDDSA_PRIVATE_KEY",
+		"sign-sparkle-appcast.sh",
+		"notarytool",
 	} {
 		if strings.Contains(macJob, forbidden) {
 			t.Fatalf("unsigned macOS PR compile job must not include %q", forbidden)
@@ -819,6 +833,8 @@ func TestPRCICompilesUnsignedNativeMacOSDesktopOnHostedRunners(t *testing.T) {
 		"APPLE_CERTIFICATE_BASE64",
 		"FSE_MACOS_SIGN_IDENTITY",
 		"sign-and-notarize-macos-desktop.sh",
+		"SPARKLE_EDDSA_PRIVATE_KEY",
+		"sign-sparkle-appcast.sh",
 	} {
 		if strings.Contains(ci, forbidden) {
 			t.Fatalf("PR CI must stay unsigned and must not contain %q", forbidden)
@@ -864,8 +880,67 @@ func TestPRCICompilesUnsignedNativeMacOSDesktopOnHostedRunners(t *testing.T) {
 	buildIndex := strings.Index(releaseMac, "scripts/build-desktop-gui-wails-native-macos.sh")
 	signIndex := strings.Index(releaseMac, `scripts/sign-and-notarize-macos-desktop.sh "desktop-gui/wails-output/darwin-${{ matrix.arch }}/fse-desktop.app"`)
 	packageIndex := strings.Index(releaseMac, "FSE_DESKTOP_GUI_RELEASE_TARGETS: darwin-${{ matrix.arch }}")
+	appcastIndex := strings.Index(releaseMac, "scripts/sign-sparkle-appcast.sh")
 	if buildIndex == -1 || signIndex == -1 || packageIndex == -1 || buildIndex > signIndex || signIndex > packageIndex {
 		t.Fatal("macOS release job must build, Developer ID-sign/notarize/staple, then zip the stapled .app")
+	}
+	if appcastIndex == -1 || appcastIndex < packageIndex {
+		t.Fatal("Sparkle appcast signing must run after the notarized zip is packaged")
+	}
+}
+
+func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
+	release := readWorkflow(t, "release.yml")
+	appcast := readRequiredFile(t, filepath.Join("..", "..", "scripts", "sign-sparkle-appcast.sh"))
+	fetch := readRequiredFile(t, filepath.Join("..", "..", "scripts", "fetch-sparkle-framework.sh"))
+	native := readRequiredFile(t, filepath.Join("..", "..", "scripts", "build-desktop-gui-wails-native-macos.sh"))
+	signScript := readRequiredFile(t, filepath.Join("..", "..", "scripts", "sign-and-notarize-macos-desktop.sh"))
+	ci := readWorkflow(t, "ci.yml")
+
+	for _, want := range []string{
+		"secrets.SPARKLE_EDDSA_PRIVATE_KEY",
+		"scripts/sign-sparkle-appcast.sh",
+		"appcast-darwin-${{ matrix.arch }}.xml",
+		"name: appcast-darwin-${{ matrix.arch }}-${{ github.sha }}",
+	} {
+		if !strings.Contains(release, want) {
+			t.Fatalf("release workflow missing Sparkle appcast contract %q", want)
+		}
+	}
+	for _, want := range []string{
+		"SPARKLE_EDDSA_PRIVATE_KEY is required to sign the Sparkle appcast; refusing to skip signing.",
+		"sign_update",
+		"--ed-key-file",
+		"fse-desktop-darwin-${ARCH}-installer-${VERSION}.zip",
+		"SUPublicEDKey",
+		"dV+k5IynR3jrGAA7dbDmr66A2rrOH3vPbc45CVcuGUE=",
+	} {
+		if !strings.Contains(appcast, want) {
+			t.Fatalf("Sparkle appcast signer missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"echo \"$SPARKLE_EDDSA_PRIVATE_KEY\"",
+		"echo $SPARKLE_EDDSA_PRIVATE_KEY",
+		"APPLE_CERTIFICATE_BASE64",
+	} {
+		if strings.Contains(appcast, forbidden) {
+			t.Fatalf("Sparkle appcast signer must not print or reuse forbidden material %q", forbidden)
+		}
+	}
+	if !strings.Contains(fetch, "Sparkle.framework") || strings.Contains(fetch, "notarytool") || strings.Contains(fetch, "codesign") || strings.Contains(fetch, "stapler") {
+		t.Fatal("Sparkle fetch script must download Sparkle.framework without signing or notarizing")
+	}
+	for _, want := range []string{"fetch-sparkle-framework.sh", "Sparkle.framework", "stamp-desktop-gui-version.sh"} {
+		if !strings.Contains(native, want) {
+			t.Fatalf("native macOS Wails build missing Sparkle embed %q", want)
+		}
+	}
+	if !strings.Contains(signScript, "Sparkle.framework") {
+		t.Fatal("Developer ID sign script must sign Sparkle.framework inside the .app")
+	}
+	if strings.Contains(ci, "SPARKLE_EDDSA_PRIVATE_KEY") || strings.Contains(ci, "sign-sparkle-appcast.sh") {
+		t.Fatal("PR CI must not sign Sparkle appcasts or receive the EdDSA private key")
 	}
 }
 

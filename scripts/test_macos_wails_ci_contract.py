@@ -57,6 +57,7 @@ def main() -> None:
         'wails build -clean -platform "${{ matrix.platform }}" -o fse-desktop',
         'FSE_DESKTOP_VERSION="ci-${GITHUB_SHA::12}"',
         "Build unsigned native macOS desktop application",
+        "scripts/fetch-sparkle-framework.sh",
     ):
         require(mac_job, fragment, "unsigned macOS Wails CI contract")
 

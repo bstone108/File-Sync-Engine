@@ -9,3 +9,7 @@ development/*
 # `wails generate module`; produced fresh in CI and during environment setup).
 /desktop-gui/node_modules/
 /desktop-gui/wailsjs/
+/desktop-gui/third_party/sparkle/Sparkle.framework/
+/desktop-gui/third_party/sparkle/bin/
+/desktop-gui/third_party/sparkle/*.tar.xz
+/desktop-gui/third_party/sparkle/*.tar.gz

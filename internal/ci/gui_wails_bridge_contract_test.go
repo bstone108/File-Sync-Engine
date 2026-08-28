@@ -106,6 +106,8 @@ func TestDesktopGUIInstallsWailsNativeShellBridgeBeforeSvelteStarts(t *testing.T
 		"DiscoverLocalDaemon",
 		"ControlLocalDaemon",
 		"DaemonAPIRequest",
+		"CheckDesktopAppUpdate",
+		"RestartDesktopAppUpdate",
 		"X-FSE-API-Key",
 		"onMount(() =>",
 		"ensureLocalDaemonConnection",
@@ -266,6 +268,9 @@ func TestDesktopGUISettingsExposeOnlyImplementedNativeLifecycleControls(t *testi
 		"Stop through daemon API",
 		"requestGUIOwnedNonServiceDaemonLaunch",
 		"ControlLocalDaemon",
+		"CheckDesktopAppUpdate",
+		"Restart now",
+		"Later",
 	} {
 		if !strings.Contains(appSvelte+bridge, want) {
 			t.Fatalf("desktop GUI must retain implemented native lifecycle control %q", want)

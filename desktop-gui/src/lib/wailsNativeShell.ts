@@ -1,17 +1,21 @@
 import {
   AdoptGUIOwnedNonServiceDaemon,
+  CheckDesktopAppUpdate,
   ControlLocalDaemon,
   DaemonAPIRequest,
   DeleteRemoteInstanceCredential,
   DiscoverLocalDaemon,
+  GetDesktopAppUpdateStatus,
   GetDesktopPreferences,
   GetGUIOwnedNonServiceDaemonSession,
   GetGUIOwnedNonServiceDaemonState,
   GetRemoteInstanceRegistry,
   InspectBundledEngineResources,
   OnboardRemoteInstance,
+  PostponeDesktopAppUpdate,
   RemoveRemoteInstance,
   RequestGUIOwnedNonServiceDaemonLaunch,
+  RestartDesktopAppUpdate,
   SaveDesktopPreferences,
   SelectRemoteInstance,
   StopGUIOwnedNonServiceDaemonThroughAPI,
@@ -58,7 +62,11 @@ export function installWailsNativeShellBridge(): boolean {
     openGuiFromDaemonTray: () => unsupported('Daemon tray integration'),
     showMainWindowFromDaemonTray: () => unsupported('Daemon tray integration'),
     storeRemoteInstanceCredential: (record, secret) => StoreRemoteInstanceCredential(record, secret) as ReturnType<NativeDesktopShell['storeRemoteInstanceCredential']>,
-    deleteRemoteInstanceCredential: (credentialRef) => DeleteRemoteInstanceCredential(credentialRef)
+    deleteRemoteInstanceCredential: (credentialRef) => DeleteRemoteInstanceCredential(credentialRef),
+    getDesktopAppUpdateStatus: () => GetDesktopAppUpdateStatus() as ReturnType<NativeDesktopShell['getDesktopAppUpdateStatus']>,
+    checkDesktopAppUpdate: () => CheckDesktopAppUpdate() as ReturnType<NativeDesktopShell['checkDesktopAppUpdate']>,
+    restartDesktopAppUpdate: () => RestartDesktopAppUpdate() as ReturnType<NativeDesktopShell['restartDesktopAppUpdate']>,
+    postponeDesktopAppUpdate: () => PostponeDesktopAppUpdate() as ReturnType<NativeDesktopShell['postponeDesktopAppUpdate']>
   };
   return true;
 }

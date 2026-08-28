@@ -239,6 +239,9 @@ OutFile "$OUT_DIR/$installer_name"
 InstallDir "\$PROGRAMFILES64\\File Sync Engine Desktop"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
+!include "FileFunc.nsh"
+!insertmacro GetParameters
+!insertmacro GetOptions
 
 Section "Install"
   SetOutPath "\$INSTDIR"
@@ -250,6 +253,14 @@ Section "Install"
   CreateShortCut "\$DESKTOP\\File Sync Engine Desktop.lnk" "\$INSTDIR\\app\\fse-desktop.exe"
   WriteUninstaller "\$INSTDIR\\Uninstall.exe"
 SectionEnd
+
+Function .onInstSuccess
+  \${GetParameters} \$R0
+  \${GetOptions} \$R0 "/RELAUNCH" \$R1
+  IfErrors skip_relaunch
+  Exec '"\$INSTDIR\\app\\fse-desktop.exe"'
+skip_relaunch:
+FunctionEnd
 
 Section "Uninstall"
   Delete "\$SMPROGRAMS\\File Sync Engine\\File Sync Engine Desktop.lnk"

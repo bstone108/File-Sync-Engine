@@ -441,6 +441,16 @@ jobs:
           FSE_DESKTOP_GUI_RELEASE_TARGETS: darwin-${{ matrix.arch }}
         run: scripts/package-desktop-gui-release.sh "${{ steps.version.outputs.version }}"
 
+      - name: Sign Sparkle appcast with sign_update
+        env:
+          SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
+        run: |
+          scripts/sign-sparkle-appcast.sh \
+            "build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.zip" \
+            "${{ steps.version.outputs.version }}" \
+            "${{ matrix.arch }}" \
+            "appcast-darwin-${{ matrix.arch }}.xml"
+
       - name: Verify macOS desktop installer checksum
         shell: bash
         run: |
@@ -455,6 +465,13 @@ jobs:
             build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.zip
             build/${{ steps.version.outputs.version }}/desktop-gui/fse-desktop-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }}.dmg
             build/${{ steps.version.outputs.version }}/desktop-gui/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload Sparkle appcast
+        uses: actions/upload-artifact@v7
+        with:
+          name: appcast-darwin-${{ matrix.arch }}-${{ github.sha }}
+          path: appcast-darwin-${{ matrix.arch }}.xml
           if-no-files-found: error
 
   publish-container:

@@ -51,7 +51,8 @@
     requestGUIOwnedNonServiceDaemonLaunch,
     stopGUIOwnedNonServiceDaemonThroughAPI,
     type BundledEngineInspection,
-    type DesktopPreferences
+    type DesktopPreferences,
+    type DesktopAppUpdateStatus
   } from './lib/nativeShell';
   import { type GUIManagedNonServiceDaemonSession } from './lib/firstLaunch';
   import {
@@ -106,6 +107,8 @@
   let bundledEngineInspectionMessage = 'Bundled engine manifest has not been inspected.';
   let desktopPreferences: DesktopPreferences = { theme: 'system', density: 'comfortable', minimizeToTray: false, notificationsEnabled: true };
   let desktopPreferencesMessage = 'Loading persisted desktop preferences…';
+  let desktopAppUpdate: DesktopAppUpdateStatus | null = null;
+  let desktopAppUpdateBusy = false;
   let daemonFolders: DaemonFolder[] = [];
   let daemonPeers: DaemonPeer[] = [];
   let daemonEvents: DaemonEvent[] = [];
@@ -1032,13 +1035,85 @@
     }
   }
 
-  onMount(() => {
-    void (async () => {
-      await loadRemoteRegistry();
-      await ensureLocalDaemonConnection();
-      await loadDesktopPreferences();
-    })();
-  });
+  async function refreshDesktopAppUpdateStatus() {
+    try {
+      desktopAppUpdate = await getNativeDesktopShell().getDesktopAppUpdateStatus();
+    } catch (error) {
+      desktopAppUpdate = {
+        platform: 'unsupported',
+        phase: 'error',
+        currentVersion: '',
+        message: error instanceof Error ? error.message : String(error),
+        allowDownloadLink: false,
+        canRestartNow: false,
+        canRetry: true
+      };
+    }
+  }
+
+  async function checkDesktopAppUpdate() {
+    desktopAppUpdateBusy = true;
+    try {
+      desktopAppUpdate = await getNativeDesktopShell().checkDesktopAppUpdate();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      desktopAppUpdate = {
+        platform: desktopAppUpdate?.platform ?? 'unsupported',
+        phase: 'error',
+        currentVersion: desktopAppUpdate?.currentVersion ?? '',
+        availableVersion: desktopAppUpdate?.availableVersion,
+        message,
+        allowDownloadLink: false,
+        canRestartNow: false,
+        canRetry: true
+      };
+    } finally {
+      desktopAppUpdateBusy = false;
+    }
+  }
+
+  async function restartDesktopAppUpdate() {
+    desktopAppUpdateBusy = true;
+    try {
+      desktopAppUpdate = await getNativeDesktopShell().restartDesktopAppUpdate();
+    } catch (error) {
+      desktopAppUpdate = {
+        platform: desktopAppUpdate?.platform ?? 'unsupported',
+        phase: 'error',
+        currentVersion: desktopAppUpdate?.currentVersion ?? '',
+        message: error instanceof Error ? error.message : String(error),
+        allowDownloadLink: false,
+        canRestartNow: false,
+        canRetry: true
+      };
+    } finally {
+      desktopAppUpdateBusy = false;
+    }
+  }
+
+  async function postponeDesktopAppUpdate() {
+    desktopAppUpdateBusy = true;
+    try {
+      desktopAppUpdate = await getNativeDesktopShell().postponeDesktopAppUpdate();
+    } catch (error) {
+      desktopAppUpdate = {
+        platform: desktopAppUpdate?.platform ?? 'unsupported',
+        phase: 'error',
+        currentVersion: desktopAppUpdate?.currentVersion ?? '',
+        message: error instanceof Error ? error.message : String(error),
+        allowDownloadLink: false,
+        canRestartNow: false,
+        canRetry: true
+      };
+    } finally {
+      desktopAppUpdateBusy = false;
+    }
+  }
+
+  $: showDesktopUpdateBanner =
+    desktopAppUpdate != null &&
+    desktopAppUpdate.phase !== 'idle' &&
+    desktopAppUpdate.phase !== '';
 
   async function adoptGUIOwnedNonServiceDaemonSession() {
     lifecycleLoading = true;
@@ -1136,6 +1211,19 @@
       lifecycleLoading = false;
     }
   }
+
+  onMount(() => {
+    void (async () => {
+      await loadRemoteRegistry();
+      await ensureLocalDaemonConnection();
+      await loadDesktopPreferences();
+      await checkDesktopAppUpdate();
+    })();
+    const statusTimer = setInterval(() => {
+      void refreshDesktopAppUpdateStatus();
+    }, 15000);
+    return () => clearInterval(statusTimer);
+  });
 </script>
 
 <main class="host-scoped-shell">
@@ -1210,6 +1298,26 @@
   </aside>
 
   <section class="host-content" aria-live="polite">
+    {#if showDesktopUpdateBanner && desktopAppUpdate}
+      <section class="update-banner" data-phase={desktopAppUpdate.phase} data-platform={desktopAppUpdate.platform} aria-label="Desktop application update">
+        <span class="eyebrow">Desktop app update</span>
+        <h2>Version {desktopAppUpdate.availableVersion || desktopAppUpdate.currentVersion}</h2>
+        <p>{desktopAppUpdate.message}</p>
+        <div class="lifecycle-actions">
+          {#if desktopAppUpdate.canRestartNow}
+            <button type="button" on:click={restartDesktopAppUpdate} disabled={desktopAppUpdateBusy}>Restart now</button>
+            <button type="button" on:click={postponeDesktopAppUpdate} disabled={desktopAppUpdateBusy}>Later</button>
+          {/if}
+          {#if desktopAppUpdate.canRetry}
+            <button type="button" on:click={checkDesktopAppUpdate} disabled={desktopAppUpdateBusy}>Retry</button>
+          {/if}
+        </div>
+        <!-- Windows auto-update never uses a download-link CTA; allowDownloadLink is AppImage-only. -->
+        {#if desktopAppUpdate.allowDownloadLink && desktopAppUpdate.downloadURL && desktopAppUpdate.platform !== 'windows' && desktopAppUpdate.platform !== 'sparkle'}
+          <p><a class="download-link" href={desktopAppUpdate.downloadURL}>Download {desktopAppUpdate.availableVersion}</a></p>
+        {/if}
+      </section>
+    {/if}
     <section class="host-scope-banner" aria-label="Selected host scope">
       <span class="eyebrow">Selected host scope</span>
       <h2>{selectedHostContext.label}</h2>
@@ -2055,6 +2163,23 @@
     border: 1px solid #405177;
     border-radius: 1rem;
     background: #172033;
+  }
+  .update-banner {
+    width: min(44rem, calc(100vw - 2rem));
+    display: grid;
+    gap: 0.75rem;
+    padding: 1.25rem;
+    border: 1px solid #6de08c;
+    border-radius: 1rem;
+    background: #13251c;
+  }
+  .update-banner[data-phase='error'] {
+    border-color: #ff8a8a;
+    background: #2a1518;
+  }
+  .update-banner h2,
+  .update-banner p {
+    margin: 0;
   }
   .host-scope-banner h2,
   .host-scope-banner p,
