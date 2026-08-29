@@ -4,9 +4,11 @@ package main
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc -F${SRCDIR}/third_party/sparkle
-#cgo LDFLAGS: -F${SRCDIR}/third_party/sparkle -framework Sparkle -framework Foundation -framework AppKit
-// Go rejects an @executable_path rpath in package #cgo LDFLAGS.
-// Native macOS builds set CGO_LDFLAGS and scripts/add-macos-sparkle-rpath.sh.
+#cgo LDFLAGS: -F${SRCDIR}/third_party/sparkle -framework Sparkle -framework Foundation -framework AppKit -Wl,-rpath,${SRCDIR}/third_party/sparkle
+// Go rejects an @executable_path rpath in package #cgo LDFLAGS. The SRCDIR
+// rpath lets Wails' temporary wailsbindings helper load Sparkle.framework.
+// Native macOS builds also set DYLD_FRAMEWORK_PATH, CGO_LDFLAGS, and
+// scripts/add-macos-sparkle-rpath.sh for the packaged .app.
 #include "app_update_sparkle_darwin.h"
 #include <stdlib.h>
 */

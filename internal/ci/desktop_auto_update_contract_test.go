@@ -74,6 +74,9 @@ func TestDesktopGUIInAppAutoUpdateCoversWindowsAppImageAndSparkle(t *testing.T) 
 		if strings.Contains(line, "-Wl,-rpath,@executable_path") {
 			t.Fatal("Sparkle #cgo LDFLAGS must not use -Wl,-rpath,@executable_path; Go rejects that flag")
 		}
+		if !strings.Contains(line, "-Wl,-rpath,${SRCDIR}/third_party/sparkle") {
+			t.Fatal("Sparkle #cgo LDFLAGS must rpath the fetched Sparkle.framework so Wails wailsbindings can load it")
+		}
 	}
 	if strings.Contains(sparkleDarwin, "selectWindowsInstallerAsset") || strings.Contains(sparkleObjC, "browser_download_url") {
 		t.Fatal("Sparkle path must not download installers itself")

@@ -125,6 +125,7 @@ jobs:
           export PATH="$(go env GOPATH)/bin:$PATH"
           export FSE_DESKTOP_VERSION="ci-${GITHUB_SHA::12}"
           ../scripts/stamp-desktop-gui-version.sh "$FSE_DESKTOP_VERSION" .
+          export DYLD_FRAMEWORK_PATH="$(cd third_party/sparkle && pwd)${DYLD_FRAMEWORK_PATH:+:$DYLD_FRAMEWORK_PATH}"
           wails generate module
           npm ci
           npm run typecheck

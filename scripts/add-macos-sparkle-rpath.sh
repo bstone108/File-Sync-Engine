@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Ensures the macOS GUI binary can load Sparkle.framework from Contents/Frameworks.
 #
-# Go #cgo LDFLAGS cannot include -Wl,-rpath,@executable_path/... (invalid flag),
-# so native builds export CGO_LDFLAGS at link time and this script confirms the
-# rpath after `wails build`.
+# Go #cgo LDFLAGS cannot include -Wl,-rpath,@executable_path/... (invalid flag).
+# Package #cgo rpaths the fetched Sparkle dir so Wails' wailsbindings helper
+# can load Sparkle.framework. Native builds also export DYLD_FRAMEWORK_PATH
+# and CGO_LDFLAGS; this script confirms the packaged .app rpath.
 set -euo pipefail
 
 if [[ "${1:-}" == "" || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then

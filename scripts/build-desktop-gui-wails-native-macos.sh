@@ -115,6 +115,7 @@ stage_target_engine_resource_subset "darwin/$ARCH" "$WORK_DIR/resources/engine"
   else
     npm install
   fi
+  export DYLD_FRAMEWORK_PATH="$WORK_DIR/third_party/sparkle${DYLD_FRAMEWORK_PATH:+:$DYLD_FRAMEWORK_PATH}"
   wails generate module
   npm run build
   export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-rpath,@executable_path/../Frameworks"
