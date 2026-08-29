@@ -913,7 +913,10 @@ func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
 	for _, want := range []string{
 		"SPARKLE_EDDSA_PRIVATE_KEY is required to sign the Sparkle appcast; refusing to skip signing.",
 		"sign_update",
-		"--ed-key-file",
+		"--ed-key-file -",
+		"SPARKLE_EDDSA_PRIVATE_KEY has unexpected length",
+		"\"$SIGN_UPDATE\" --help",
+		"xattr -l",
 		"fse-desktop-darwin-${ARCH}-installer-${VERSION}.zip",
 		"SUPublicEDKey",
 		"dV+k5IynR3jrGAA7dbDmr66A2rrOH3vPbc45CVcuGUE=",
@@ -926,12 +929,28 @@ func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
 		"echo \"$SPARKLE_EDDSA_PRIVATE_KEY\"",
 		"echo $SPARKLE_EDDSA_PRIVATE_KEY",
 		"APPLE_CERTIFICATE_BASE64",
+		"signature_line=\"$(",
+		"$(\"$SIGN_UPDATE\"",
+		"$( \"$SIGN_UPDATE\"",
+		"`$SIGN_UPDATE",
+		"`\"$SIGN_UPDATE\"",
+		"xcrun notarytool",
 	} {
 		if strings.Contains(appcast, forbidden) {
 			t.Fatalf("Sparkle appcast signer must not print or reuse forbidden material %q", forbidden)
 		}
 	}
-	if !strings.Contains(fetch, "Sparkle.framework") || strings.Contains(fetch, "notarytool") || strings.Contains(fetch, "codesign") || strings.Contains(fetch, "stapler") {
+	for _, want := range []string{
+		"Sparkle.framework",
+		"xattr -dr com.apple.quarantine",
+		"Sparkle sign_update is missing or not executable",
+		"! -path '*/old_dsa_scripts/*'",
+	} {
+		if !strings.Contains(fetch, want) {
+			t.Fatalf("Sparkle fetch script missing %q", want)
+		}
+	}
+	if strings.Contains(fetch, "notarytool") || strings.Contains(fetch, "codesign") || strings.Contains(fetch, "stapler") {
 		t.Fatal("Sparkle fetch script must download Sparkle.framework without signing or notarizing")
 	}
 	for _, want := range []string{"fetch-sparkle-framework.sh", "Sparkle.framework", "stamp-desktop-gui-version.sh", "CGO_LDFLAGS", "DYLD_FRAMEWORK_PATH", "add-macos-sparkle-rpath.sh"} {
@@ -944,6 +963,10 @@ func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
 	}
 	if strings.Contains(ci, "SPARKLE_EDDSA_PRIVATE_KEY") || strings.Contains(ci, "sign-sparkle-appcast.sh") {
 		t.Fatal("PR CI must not sign Sparkle appcasts or receive the EdDSA private key")
+	}
+	harness := readRequiredFile(t, filepath.Join("..", "..", "scripts", "run-serious-harness.sh"))
+	if !strings.Contains(harness, "SignSparkleAppcast") || !strings.Contains(harness, "FetchSparkleFramework") {
+		t.Fatal("serious harness must run Sparkle appcast signing and fetch contract tests")
 	}
 }
 

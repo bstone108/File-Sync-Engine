@@ -27,6 +27,7 @@ run_in() {
 run python3 scripts/test_windows_wails_ci_contract.py
 run python3 scripts/test_macos_wails_ci_contract.py
 run python3 scripts/test_windows_desktop_smoke_contract.py
+run go test ./internal/ci -run 'Test(ReleaseWorkflowSignsSparkleAppcastWithSignUpdate|DesktopGUIInAppAutoUpdateCoversWindowsAppImageAndSparkle|SignSparkleAppcast|FetchSparkleFramework)'
 
 # Serious pitfall contracts only: safety, auth/path boundaries, block verification,
 # lazy verification baseline safety, provisional API visibility, write-before-delete
