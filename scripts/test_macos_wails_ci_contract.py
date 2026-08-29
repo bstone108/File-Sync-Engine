@@ -76,6 +76,8 @@ def main() -> None:
         "sign-and-notarize-macos-desktop.sh",
         "resolve-release-version.sh",
         "lipo",
+        "SPARKLE_EDDSA_PRIVATE_KEY",
+        "sign-sparkle-appcast.sh",
     ):
         forbid(mac_job, fragment, "unsigned macOS Wails CI job")
 
@@ -87,6 +89,8 @@ def main() -> None:
         "APPLE_CERTIFICATE_BASE64",
         "FSE_MACOS_SIGN_IDENTITY",
         "sign-and-notarize-macos-desktop.sh",
+        "SPARKLE_EDDSA_PRIVATE_KEY",
+        "sign-sparkle-appcast.sh",
     ):
         forbid(ci, fragment, "PR CI")
 

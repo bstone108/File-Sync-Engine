@@ -113,13 +113,23 @@ func TestDesktopGUIInAppAutoUpdateCoversWindowsAppImageAndSparkle(t *testing.T) 
 		}
 	}
 	appcastScript := readRequiredFile(t, filepath.Join(root, "scripts", "sign-sparkle-appcast.sh"))
+	fetchScript := readRequiredFile(t, filepath.Join(root, "scripts", "fetch-sparkle-framework.sh"))
 	if !strings.Contains(release, "secrets.SPARKLE_EDDSA_PRIVATE_KEY") {
 		t.Fatal("release workflow must pass SPARKLE_EDDSA_PRIVATE_KEY into Sparkle appcast signing")
 	}
 	if !strings.Contains(appcastScript, "sign_update") {
 		t.Fatal("release appcast signing must call Sparkle sign_update")
 	}
-	if strings.Contains(ci, "SPARKLE_EDDSA_PRIVATE_KEY") || strings.Contains(ci, "notarytool") {
+	if !strings.Contains(appcastScript, "--ed-key-file -") {
+		t.Fatal("appcast signing must prefer sign_update --ed-key-file - stdin")
+	}
+	if strings.Contains(appcastScript, "signature_line=\"$(") || strings.Contains(appcastScript, "$(\"$SIGN_UPDATE\"") {
+		t.Fatal("appcast signing must not capture sign_update via command substitution")
+	}
+	if !strings.Contains(fetchScript, "Sparkle sign_update is missing or not executable") {
+		t.Fatal("Sparkle fetch must refuse to succeed without an executable sign_update")
+	}
+	if strings.Contains(ci, "SPARKLE_EDDSA_PRIVATE_KEY") || strings.Contains(ci, "notarytool") || strings.Contains(ci, "sign-sparkle-appcast.sh") {
 		t.Fatal("PR CI must stay unsigned and must not receive the Sparkle private key")
 	}
 
