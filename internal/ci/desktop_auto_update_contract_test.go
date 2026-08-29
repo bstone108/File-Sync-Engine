@@ -129,6 +129,14 @@ func TestDesktopGUIInAppAutoUpdateCoversWindowsAppImageAndSparkle(t *testing.T) 
 	if !strings.Contains(fetchScript, "Sparkle sign_update is missing or not executable") {
 		t.Fatal("Sparkle fetch must refuse to succeed without an executable sign_update")
 	}
+	if strings.Contains(appcastScript, "awk '/^[A-Za-z0-9+/=]") {
+		t.Fatal("appcast signing must not use BSD-awk-incompatible /[A-Za-z0-9+/=]/ patterns")
+	}
+	attrs := readRequiredFile(t, filepath.Join(root, ".gitattributes"))
+	if !strings.Contains(attrs, "app_update_sparkle_darwin.h linguist-language=Objective-C") ||
+		!strings.Contains(attrs, "app_update_sparkle_darwin.m linguist-language=Objective-C") {
+		t.Fatal("Sparkle ObjC glue must be classified as Objective-C so default CodeQL does not run c-cpp autobuild")
+	}
 	if strings.Contains(ci, "SPARKLE_EDDSA_PRIVATE_KEY") || strings.Contains(ci, "notarytool") || strings.Contains(ci, "sign-sparkle-appcast.sh") {
 		t.Fatal("PR CI must stay unsigned and must not receive the Sparkle private key")
 	}

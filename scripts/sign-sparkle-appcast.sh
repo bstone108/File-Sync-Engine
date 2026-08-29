@@ -120,10 +120,14 @@ parse_signature_line() {
   local raw="$1"
   ed_signature=""
   length=""
-  ed_signature="$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' "$raw" | tail -n 1)"
-  length="$(sed -n 's/.*length="\([^"]*\)".*/\1/p' "$raw" | tail -n 1)"
-  if [[ -z "$ed_signature" ]]; then
-    ed_signature="$(awk '/^[A-Za-z0-9+/=]{80,}$/ { print $1 }' "$raw" | tail -n 1)"
+  # Avoid awk slash-delimited character classes that include "/": BSD awk
+  # treats that slash as the pattern terminator and aborts under pipefail.
+  if [[ -s "$raw" ]]; then
+    ed_signature="$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' "$raw" | tail -n 1 || true)"
+    length="$(sed -n 's/.*length="\([^"]*\)".*/\1/p' "$raw" | tail -n 1 || true)"
+  fi
+  if [[ -z "$ed_signature" && -s "$raw" ]]; then
+    ed_signature="$(grep -E '^[A-Za-z0-9+=/]{80,}$' "$raw" | tail -n 1 || true)"
   fi
 }
 

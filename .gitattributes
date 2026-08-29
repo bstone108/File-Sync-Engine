@@ -1,0 +1,5 @@
+# Sparkle glue is Objective-C. Without this, Linguist counts the header as C
+# and GitHub default CodeQL runs Analyze (c-cpp), which then fails because
+# there are no C/C++ translation units to autobuild.
+desktop-gui/app_update_sparkle_darwin.h linguist-language=Objective-C
+desktop-gui/app_update_sparkle_darwin.m linguist-language=Objective-C
