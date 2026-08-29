@@ -120,11 +120,22 @@ parse_signature_line() {
   local raw="$1"
   ed_signature=""
   length=""
+  # Helper failures must not abort the signer: diagnostics and the temp-file
+  # fallback still need to run after a failed sign_update. BSD /usr/bin/awk
+  # treats "/" inside a /regex/ character class as the end of the literal
+  # ("nonterminated character class"), so never parse signatures with awk
+  # '/...[.../...].../' (interval quantifiers {80,} are also unportable).
+  if [[ ! -f "$raw" ]]; then
+    return 0
+  fi
+  set +e
   ed_signature="$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' "$raw" | tail -n 1)"
   length="$(sed -n 's/.*length="\([^"]*\)".*/\1/p' "$raw" | tail -n 1)"
   if [[ -z "$ed_signature" ]]; then
-    ed_signature="$(awk '/^[A-Za-z0-9+/=]{80,}$/ { print $1 }' "$raw" | tail -n 1)"
+    ed_signature="$(grep -E '^[A-Za-z0-9+/=]{80,}$' "$raw" | tail -n 1)"
   fi
+  set -euo pipefail
+  return 0
 }
 
 dump_sign_update_diagnostics() {
@@ -177,7 +188,7 @@ invoke_sign_update() {
 
 sign_rc=0
 invoke_sign_update stdin || sign_rc=$?
-parse_signature_line "$SIGN_LOG"
+parse_signature_line "$SIGN_LOG" || true
 
 if [[ -z "$ed_signature" || "$sign_rc" -ne 0 ]]; then
   if stdin_rejected "$SIGN_LOG" || [[ "$sign_rc" -ne 0 && -z "$ed_signature" ]]; then
@@ -188,7 +199,7 @@ if [[ -z "$ed_signature" || "$sign_rc" -ne 0 ]]; then
     printf '%s' "$sparkle_ed_key" >"$KEY_FILE"
     sign_rc=0
     invoke_sign_update file || sign_rc=$?
-    parse_signature_line "$SIGN_LOG"
+    parse_signature_line "$SIGN_LOG" || true
     rm -f "$KEY_FILE"
     KEY_FILE=""
   fi

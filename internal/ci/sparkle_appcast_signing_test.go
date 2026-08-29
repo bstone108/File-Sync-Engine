@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,47 @@ fi
 printf 'sparkle:edSignature="dGVzdHNpZ25hdHVyZVZhbHVlQmFzZTY0UGFkZGluZw==" length="12"\n'
 `
 
+// 82-character base64 line with no sparkle:edSignature= wrapper, so the grep -E
+// fallback (not awk) has to extract it. "/" is included so a slash-in-class
+// regex would be required if someone brought awk back.
+const stubSignUpdateBareSignature = `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  printf 'usage: sign_update [--ed-key-file FILE] ARCHIVE\n'
+  exit 0
+fi
+printf 'stub method=stdin key_len=44\n' >&2
+printf 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/AAAAAAAAAAAAAA==\n'
+`
+
+// Emulate macOS /usr/bin/awk: "/" inside a /regex/ character class ends the
+// literal ("nonterminated character class") and exits 1. Existing stub tests
+// must keep passing when this awk is first on PATH (Linux CI uses GNU/mawk).
+const bsdLikeAwkStub = `#!/usr/bin/env bash
+set -euo pipefail
+# "/" then later "[" then later "/" — the BSD /regex/ class trap.
+pat='/.*\[.*/'
+for arg in "$@"; do
+  if printf '%s' "$arg" | grep -Eq "$pat"; then
+    printf 'awk: nonterminated character class ^[A-Za-z0-9+\n' >&2
+    printf ' source line number 1\n' >&2
+    printf ' context is\n' >&2
+    printf '\t >>> /^[A-Za-z0-9+/ <<<\n' >&2
+    exit 1
+  fi
+done
+exec /usr/bin/awk "$@"
+`
+
+func withBSDLikeAwkPath(t *testing.T, extraEnv ...string) []string {
+	t.Helper()
+	dir := t.TempDir()
+	mustWriteExecutable(t, filepath.Join(dir, "awk"), bsdLikeAwkStub)
+	path := dir + string(os.PathListSeparator) + os.Getenv("PATH")
+	env := append(os.Environ(), "PATH="+path)
+	return append(env, extraEnv...)
+}
+
 func TestSignSparkleAppcastUsesStdinAndSurfacesSignUpdateOutput(t *testing.T) {
 	root := filepath.Join("..", "..")
 	tmp := t.TempDir()
@@ -52,7 +94,7 @@ func TestSignSparkleAppcastUsesStdinAndSurfacesSignUpdateOutput(t *testing.T) {
 
 	cmd := exec.Command("bash", "scripts/sign-sparkle-appcast.sh", zipPath, "2026.8.28.1", "arm64", outXML)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = withBSDLikeAwkPath(t,
 		"FSE_SPARKLE_DIR="+sparkleDir,
 		"SPARKLE_EDDSA_PRIVATE_KEY="+sparkleEdDSATestKey,
 	)
@@ -95,7 +137,7 @@ func TestSignSparkleAppcastSurfacesSignUpdateStdoutOnFailure(t *testing.T) {
 
 	cmd := exec.Command("bash", "scripts/sign-sparkle-appcast.sh", zipPath, "2026.8.28.1", "amd64", outXML)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = withBSDLikeAwkPath(t,
 		"FSE_SPARKLE_DIR="+sparkleDir,
 		"SPARKLE_EDDSA_PRIVATE_KEY="+sparkleEdDSATestKey,
 		"STUB_SIGN_UPDATE_FAIL=1",
@@ -131,7 +173,7 @@ func TestSignSparkleAppcastFallsBackToKeyFileWhenStdinRejected(t *testing.T) {
 
 	cmd := exec.Command("bash", "scripts/sign-sparkle-appcast.sh", zipPath, "2026.8.28.1", "arm64", outXML)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = withBSDLikeAwkPath(t,
 		"FSE_SPARKLE_DIR="+sparkleDir,
 		"SPARKLE_EDDSA_PRIVATE_KEY="+sparkleEdDSATestKey,
 		"STUB_SIGN_UPDATE_REJECT_STDIN=1",
@@ -149,6 +191,68 @@ func TestSignSparkleAppcastFallsBackToKeyFileWhenStdinRejected(t *testing.T) {
 	}
 	if strings.Contains(got, sparkleEdDSATestKey) {
 		t.Fatal("appcast signer leaked the EdDSA private key into logs")
+	}
+}
+
+func TestSignSparkleAppcastParseSignatureAvoidsBSDAwkSlashClass(t *testing.T) {
+	root := filepath.Join("..", "..")
+	body := readRequiredFile(t, filepath.Join(root, "scripts", "sign-sparkle-appcast.sh"))
+	start := strings.Index(body, "parse_signature_line()")
+	if start < 0 {
+		t.Fatal("sign-sparkle-appcast.sh must define parse_signature_line")
+	}
+	end := strings.Index(body[start:], "\ndump_sign_update_diagnostics")
+	if end < 0 {
+		t.Fatal("could not isolate parse_signature_line")
+	}
+	fn := body[start : start+end]
+	// BSD awk treats "/" inside [] of a /regex/ as the terminator. Do not
+	// allow that construct anywhere in the appcast signer, and keep parse
+	// helpers from aborting the script under set -euo pipefail.
+	awkSlashClass := regexp.MustCompile(`awk[^\n]*'/[^']*\[[^'\]]*\/`)
+	if awkSlashClass.MatchString(body) {
+		t.Fatalf("appcast signer must not use an awk /regex/ with / inside []: %s", awkSlashClass.FindString(body))
+	}
+	if strings.Contains(fn, "awk '/") || strings.Contains(fn, `awk "/`) {
+		t.Fatal("parse_signature_line must not use awk /regex/ delimiters")
+	}
+	if !strings.Contains(fn, "set +e") {
+		t.Fatal("parse_signature_line must disable set -e around helpers so diagnostics still run")
+	}
+}
+
+func TestSignSparkleAppcastParsesBareBase64SignatureLine(t *testing.T) {
+	root := filepath.Join("..", "..")
+	tmp := t.TempDir()
+	sparkleDir := filepath.Join(tmp, "sparkle")
+	zipPath := filepath.Join(tmp, "payload.zip")
+	outXML := filepath.Join(tmp, "appcast.xml")
+	mustWriteFile(t, zipPath, "hello sparkle")
+	mustMkdir(t, filepath.Join(sparkleDir, "Sparkle.framework"))
+	mustWriteExecutable(t, filepath.Join(sparkleDir, "bin", "sign_update"), stubSignUpdateBareSignature)
+
+	cmd := exec.Command("bash", "scripts/sign-sparkle-appcast.sh", zipPath, "2026.8.28.1", "arm64", outXML)
+	cmd.Dir = root
+	cmd.Env = withBSDLikeAwkPath(t,
+		"FSE_SPARKLE_DIR="+sparkleDir,
+		"SPARKLE_EDDSA_PRIVATE_KEY="+sparkleEdDSATestKey,
+	)
+	output, err := cmd.CombinedOutput()
+	got := string(output)
+	if err != nil {
+		t.Fatalf("bare signature line should parse without awk: %v\n%s", err, got)
+	}
+	if strings.Contains(got, "nonterminated character class") {
+		t.Fatalf("BSD-like awk must not run on signature parse; output:\n%s", got)
+	}
+	body, err := os.ReadFile(outXML)
+	if err != nil {
+		t.Fatalf("read appcast: %v", err)
+	}
+	xml := string(body)
+	wantSig := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/AAAAAAAAAAAAAA=="
+	if !strings.Contains(xml, `sparkle:edSignature="`+wantSig+`"`) {
+		t.Fatalf("appcast missing bare-line edSignature:\n%s", xml)
 	}
 }
 
