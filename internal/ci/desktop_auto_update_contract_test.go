@@ -123,6 +123,9 @@ func TestDesktopGUIInAppAutoUpdateCoversWindowsAppImageAndSparkle(t *testing.T) 
 	if !strings.Contains(appcastScript, "--ed-key-file -") {
 		t.Fatal("appcast signing must prefer sign_update --ed-key-file - stdin")
 	}
+	if !strings.Contains(appcastScript, "normalize-sparkle-ed-key.py") {
+		t.Fatal("appcast signing must reshape 64-byte Sparkle secrets before sign_update")
+	}
 	if strings.Contains(appcastScript, "signature_line=\"$(") || strings.Contains(appcastScript, "$(\"$SIGN_UPDATE\"") {
 		t.Fatal("appcast signing must not capture sign_update via command substitution")
 	}

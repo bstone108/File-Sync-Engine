@@ -1,12 +1,16 @@
 package ci
 
 import (
+	"bytes"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+const sparklePublicEDKey = "dV+k5IynR3jrGAA7dbDmr66A2rrOH3vPbc45CVcuGUE="
 
 const sparkleEdDSATestKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
@@ -182,14 +186,147 @@ func TestSignSparkleAppcastAcceptsExpandedEd25519PrivateKeyLength88(t *testing.T
 	if strings.Contains(got, "unexpected length") {
 		t.Fatalf("length 88 must not be rejected: output:\n%s", got)
 	}
-	if !strings.Contains(got, "stub method=stdin key_len=88") {
-		t.Fatalf("expected stdin sign_update with 88-char key; output:\n%s", got)
+	if !strings.Contains(got, "normalized Sparkle EdDSA secret: decoded 64 bytes -> old-96 (96 bytes)") {
+		t.Fatalf("64-byte expanded key must be rewritten to Sparkle old-96; output:\n%s", got)
+	}
+	if !strings.Contains(got, "stub method=stdin key_len=128") {
+		t.Fatalf("expected stdin sign_update with 96-byte old-format key; output:\n%s", got)
 	}
 	if strings.Contains(got, sparkleEdDSATestKey88) {
 		t.Fatal("appcast signer leaked the EdDSA private key into logs")
 	}
 	if _, err := os.Stat(outXML); err != nil {
 		t.Fatalf("expected appcast XML: %v", err)
+	}
+}
+
+func TestSignSparkleAppcastNormalizesLibsodiumSecretToSeed(t *testing.T) {
+	root := filepath.Join("..", "..")
+	tmp := t.TempDir()
+	sparkleDir := filepath.Join(tmp, "sparkle")
+	zipPath := filepath.Join(tmp, "payload.zip")
+	outXML := filepath.Join(tmp, "appcast.xml")
+	mustWriteFile(t, zipPath, "hello sparkle")
+	mustMkdir(t, filepath.Join(sparkleDir, "Sparkle.framework"))
+	mustWriteExecutable(t, filepath.Join(sparkleDir, "bin", "sign_update"), stubSignUpdate)
+
+	pub, err := base64.StdEncoding.DecodeString(sparklePublicEDKey)
+	if err != nil || len(pub) != 32 {
+		t.Fatalf("SUPublicEDKey fixture: %v len=%d", err, len(pub))
+	}
+	secret := append(bytes.Repeat([]byte{0x11}, 32), pub...)
+	key := base64.StdEncoding.EncodeToString(secret)
+	if len(key) != 88 {
+		t.Fatalf("libsodium-style fixture must be 88 chars, got %d", len(key))
+	}
+
+	cmd := exec.Command("bash", "scripts/sign-sparkle-appcast.sh", zipPath, "2026.8.28.5", "amd64", outXML)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"FSE_SPARKLE_DIR="+sparkleDir,
+		"SPARKLE_EDDSA_PRIVATE_KEY="+key,
+	)
+	output, err := cmd.CombinedOutput()
+	got := string(output)
+	if err != nil {
+		t.Fatalf("libsodium-style Sparkle key must reach sign_update: %v\n%s", err, got)
+	}
+	if !strings.Contains(got, "normalized Sparkle EdDSA secret: decoded 64 bytes -> seed (32 bytes)") {
+		t.Fatalf("seed||public must become 32-byte Sparkle seed; output:\n%s", got)
+	}
+	if !strings.Contains(got, "stub method=stdin key_len=44") {
+		t.Fatalf("expected stdin sign_update with 32-byte seed; output:\n%s", got)
+	}
+	if strings.Contains(got, key) {
+		t.Fatal("appcast signer leaked the EdDSA private key into logs")
+	}
+}
+
+func TestSignSparkleAppcastNormalizeRewritesExpandedAndSeedSecrets(t *testing.T) {
+	root := filepath.Join("..", "..")
+	pub, err := base64.StdEncoding.DecodeString(sparklePublicEDKey)
+	if err != nil {
+		t.Fatalf("decode public: %v", err)
+	}
+
+	run := func(input string) (stdout, stderr string, rc int) {
+		cmd := exec.Command("python3", "scripts/normalize-sparkle-ed-key.py", sparklePublicEDKey)
+		cmd.Dir = root
+		cmd.Stdin = strings.NewReader(input)
+		var outBuf, errBuf bytes.Buffer
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &errBuf
+		runErr := cmd.Run()
+		rc = 0
+		if runErr != nil {
+			if ee, ok := runErr.(*exec.ExitError); ok {
+				rc = ee.ExitCode()
+			} else {
+				t.Fatalf("normalize: %v", runErr)
+			}
+		}
+		return outBuf.String(), errBuf.String(), rc
+	}
+
+	expanded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 64))
+	out, errLog, rc := run(expanded)
+	if rc != 0 {
+		t.Fatalf("expanded 64-byte key failed: rc=%d stderr=%s", rc, errLog)
+	}
+	got, err := base64.StdEncoding.DecodeString(out)
+	if err != nil {
+		t.Fatalf("expanded output not base64: %v", err)
+	}
+	if len(got) != 96 || !bytes.Equal(got[:64], bytes.Repeat([]byte{0x42}, 64)) || !bytes.Equal(got[64:], pub) {
+		t.Fatalf("expanded key must become orlp-private||SUPublicEDKey, len=%d", len(got))
+	}
+	if !strings.Contains(errLog, "decoded 64 bytes -> old-96 (96 bytes)") {
+		t.Fatalf("missing old-96 log: %s", errLog)
+	}
+	if strings.Contains(errLog, expanded) || strings.Contains(errLog, out) {
+		t.Fatal("normalizer leaked the EdDSA secret on stderr")
+	}
+
+	libsodium := base64.StdEncoding.EncodeToString(append(bytes.Repeat([]byte{0x11}, 32), pub...))
+	out, errLog, rc = run(libsodium)
+	if rc != 0 {
+		t.Fatalf("libsodium-style key failed: rc=%d stderr=%s", rc, errLog)
+	}
+	got, err = base64.StdEncoding.DecodeString(out)
+	if err != nil {
+		t.Fatalf("seed output not base64: %v", err)
+	}
+	if !bytes.Equal(got, bytes.Repeat([]byte{0x11}, 32)) {
+		t.Fatalf("seed||public must collapse to 32-byte seed, len=%d", len(got))
+	}
+	if !strings.Contains(errLog, "decoded 64 bytes -> seed (32 bytes)") {
+		t.Fatalf("missing seed log: %s", errLog)
+	}
+
+	seed := sparkleEdDSATestKey
+	out, errLog, rc = run(seed)
+	if rc != 0 {
+		t.Fatalf("32-byte seed failed: rc=%d stderr=%s", rc, errLog)
+	}
+	got, err = base64.StdEncoding.DecodeString(out)
+	if err != nil || len(got) != 32 {
+		t.Fatalf("seed passthrough: %v len=%d", err, len(got))
+	}
+	if !strings.Contains(errLog, "decoded 32 bytes -> seed (32 bytes)") {
+		t.Fatalf("missing 32-byte passthrough log: %s", errLog)
+	}
+
+	old := base64.StdEncoding.EncodeToString(append(bytes.Repeat([]byte{0x42}, 64), pub...))
+	out, errLog, rc = run(old)
+	if rc != 0 {
+		t.Fatalf("old-96 failed: rc=%d stderr=%s", rc, errLog)
+	}
+	got, err = base64.StdEncoding.DecodeString(out)
+	if err != nil || len(got) != 96 {
+		t.Fatalf("old-96 passthrough: %v len=%d", err, len(got))
+	}
+	if !strings.Contains(errLog, "decoded 96 bytes -> old-96 (96 bytes)") {
+		t.Fatalf("missing 96-byte passthrough log: %s", errLog)
 	}
 }
 

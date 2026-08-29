@@ -34,6 +34,7 @@ SPARKLE_DIR="${FSE_SPARKLE_DIR:-$ROOT/desktop-gui/third_party/sparkle}"
 PUBLIC_KEY="dV+k5IynR3jrGAA7dbDmr66A2rrOH3vPbc45CVcuGUE="
 KEY_FILE=""
 SIGN_LOG=""
+original_sparkle_ed_key=""
 
 cleanup() {
   if [[ -n "$KEY_FILE" && -f "$KEY_FILE" ]]; then
@@ -87,6 +88,23 @@ if [[ ! "$sparkle_ed_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
   printf 'SPARKLE_EDDSA_PRIVATE_KEY has unexpected length %s\n' "$key_len" >&2
   exit 1
 fi
+# Sparkle 2.7.1 sign_update rejects 64-byte decoded secrets:
+# "Imported key must be 64 bytes or 96 bytes ... Instead it is 64 bytes decoded."
+# That error is wrong; decodePrivateAndPublicKeys only accepts 32 or 96 bytes.
+# Reshape 64-byte secrets (never print them) before invoking sign_update.
+if ! command -v python3 >/dev/null 2>&1; then
+  printf 'python3 is required to normalize Sparkle EdDSA secrets for sign_update\n' >&2
+  exit 1
+fi
+original_sparkle_ed_key="$sparkle_ed_key"
+set +e
+sparkle_ed_key="$(printf '%s' "$original_sparkle_ed_key" | python3 "$ROOT/scripts/normalize-sparkle-ed-key.py" "$PUBLIC_KEY")"
+norm_rc=$?
+set -euo pipefail
+if [[ "$norm_rc" -ne 0 || -z "$sparkle_ed_key" ]]; then
+  printf 'failed to normalize Sparkle EdDSA secret for sign_update\n' >&2
+  exit 1
+fi
 set -euo pipefail
 
 "$ROOT/scripts/fetch-sparkle-framework.sh" "$SPARKLE_DIR"
@@ -107,6 +125,9 @@ redact_and_print() {
     contents="$(cat "$raw")"
   fi
   set +x
+  if [[ -n "${original_sparkle_ed_key:-}" && -n "$contents" ]]; then
+    contents="${contents//$original_sparkle_ed_key/[redacted]}"
+  fi
   if [[ -n "$sparkle_ed_key" && -n "$contents" ]]; then
     contents="${contents//$sparkle_ed_key/[redacted]}"
   fi

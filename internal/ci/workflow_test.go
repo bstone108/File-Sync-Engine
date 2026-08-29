@@ -915,6 +915,7 @@ func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
 		"sign_update",
 		"--ed-key-file -",
 		"SPARKLE_EDDSA_PRIVATE_KEY has unexpected length",
+		"normalize-sparkle-ed-key.py",
 		"\"$SIGN_UPDATE\" --help",
 		"xattr -l",
 		"fse-desktop-darwin-${ARCH}-installer-${VERSION}.zip",
