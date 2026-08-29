@@ -10,13 +10,15 @@ It rejects 64-byte decoded secrets even though the CLI error says
 88-char base64 of 64 decoded bytes. This helper never prints the secret.
 
 Reads trimmed base64 from stdin. Public EdDSA key is argv[1] (already
-embedded in the app as SUPublicEDKey). Writes normalized base64 to stdout.
-Logs only decoded/output byte counts to stderr.
+embedded in the app as SUPublicEDKey). Writes normalized base64 to the
+0600 output file given as argv[2]. Logs only decoded/output byte counts
+to stderr.
 """
 
 from __future__ import annotations
 
 import base64
+import os
 import sys
 
 
@@ -28,9 +30,21 @@ def _b64decode(label: str, text: str) -> bytes:
         sys.exit(1)
 
 
+def _write_secret_file(path: str, data: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: normalize-sparkle-ed-key.py <public-ed-key-base64>", file=sys.stderr)
+    if len(sys.argv) != 3:
+        print(
+            "usage: normalize-sparkle-ed-key.py <public-ed-key-base64> <output-file>",
+            file=sys.stderr,
+        )
         return 1
 
     secret_b64 = sys.stdin.read().strip()
@@ -73,7 +87,7 @@ def main() -> int:
         f"normalized Sparkle EdDSA secret: decoded {decoded_len} bytes -> {kind} ({len(out)} bytes)",
         file=sys.stderr,
     )
-    sys.stdout.write(base64.b64encode(out).decode("ascii"))
+    _write_secret_file(sys.argv[2], base64.b64encode(out))
     return 0
 
 

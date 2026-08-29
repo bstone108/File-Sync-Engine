@@ -249,8 +249,9 @@ func TestSignSparkleAppcastNormalizeRewritesExpandedAndSeedSecrets(t *testing.T)
 		t.Fatalf("decode public: %v", err)
 	}
 
-	run := func(input string) (stdout, stderr string, rc int) {
-		cmd := exec.Command("python3", "scripts/normalize-sparkle-ed-key.py", sparklePublicEDKey)
+	run := func(input string) (normalized, stdout, stderr string, rc int) {
+		outFile := filepath.Join(t.TempDir(), "normalized.b64")
+		cmd := exec.Command("python3", "scripts/normalize-sparkle-ed-key.py", sparklePublicEDKey, outFile)
 		cmd.Dir = root
 		cmd.Stdin = strings.NewReader(input)
 		var outBuf, errBuf bytes.Buffer
@@ -265,13 +266,20 @@ func TestSignSparkleAppcastNormalizeRewritesExpandedAndSeedSecrets(t *testing.T)
 				t.Fatalf("normalize: %v", runErr)
 			}
 		}
-		return outBuf.String(), errBuf.String(), rc
+		body, readErr := os.ReadFile(outFile)
+		if readErr != nil && rc == 0 {
+			t.Fatalf("read normalized secret file: %v", readErr)
+		}
+		return string(body), outBuf.String(), errBuf.String(), rc
 	}
 
 	expanded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 64))
-	out, errLog, rc := run(expanded)
+	out, stdout, errLog, rc := run(expanded)
 	if rc != 0 {
 		t.Fatalf("expanded 64-byte key failed: rc=%d stderr=%s", rc, errLog)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatal("normalizer must not write the secret to stdout")
 	}
 	got, err := base64.StdEncoding.DecodeString(out)
 	if err != nil {
@@ -288,9 +296,12 @@ func TestSignSparkleAppcastNormalizeRewritesExpandedAndSeedSecrets(t *testing.T)
 	}
 
 	libsodium := base64.StdEncoding.EncodeToString(append(bytes.Repeat([]byte{0x11}, 32), pub...))
-	out, errLog, rc = run(libsodium)
+	out, stdout, errLog, rc = run(libsodium)
 	if rc != 0 {
 		t.Fatalf("libsodium-style key failed: rc=%d stderr=%s", rc, errLog)
+	}
+	if strings.TrimSpace(stdout) != "" {
+		t.Fatal("normalizer must not write the secret to stdout")
 	}
 	got, err = base64.StdEncoding.DecodeString(out)
 	if err != nil {
@@ -304,7 +315,7 @@ func TestSignSparkleAppcastNormalizeRewritesExpandedAndSeedSecrets(t *testing.T)
 	}
 
 	seed := sparkleEdDSATestKey
-	out, errLog, rc = run(seed)
+	out, stdout, errLog, rc = run(seed)
 	if rc != 0 {
 		t.Fatalf("32-byte seed failed: rc=%d stderr=%s", rc, errLog)
 	}
@@ -317,7 +328,7 @@ func TestSignSparkleAppcastNormalizeRewritesExpandedAndSeedSecrets(t *testing.T)
 	}
 
 	old := base64.StdEncoding.EncodeToString(append(bytes.Repeat([]byte{0x42}, 64), pub...))
-	out, errLog, rc = run(old)
+	out, stdout, errLog, rc = run(old)
 	if rc != 0 {
 		t.Fatalf("old-96 failed: rc=%d stderr=%s", rc, errLog)
 	}

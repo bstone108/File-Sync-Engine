@@ -34,6 +34,7 @@ SPARKLE_DIR="${FSE_SPARKLE_DIR:-$ROOT/desktop-gui/third_party/sparkle}"
 PUBLIC_KEY="dV+k5IynR3jrGAA7dbDmr66A2rrOH3vPbc45CVcuGUE="
 KEY_FILE=""
 SIGN_LOG=""
+NORM_FILE=""
 original_sparkle_ed_key=""
 
 cleanup() {
@@ -42,6 +43,9 @@ cleanup() {
   fi
   if [[ -n "$SIGN_LOG" && -f "$SIGN_LOG" ]]; then
     rm -f "$SIGN_LOG"
+  fi
+  if [[ -n "$NORM_FILE" && -f "$NORM_FILE" ]]; then
+    rm -f "$NORM_FILE"
   fi
 }
 trap cleanup EXIT
@@ -97,11 +101,20 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 original_sparkle_ed_key="$sparkle_ed_key"
+NORM_FILE="$(mktemp "${TMPDIR:-/tmp}/fse-sparkle-norm.XXXXXX")"
+chmod 600 "$NORM_FILE"
 set +e
-sparkle_ed_key="$(printf '%s' "$original_sparkle_ed_key" | python3 "$ROOT/scripts/normalize-sparkle-ed-key.py" "$PUBLIC_KEY")"
+printf '%s' "$original_sparkle_ed_key" | python3 "$ROOT/scripts/normalize-sparkle-ed-key.py" "$PUBLIC_KEY" "$NORM_FILE"
 norm_rc=$?
 set -euo pipefail
-if [[ "$norm_rc" -ne 0 || -z "$sparkle_ed_key" ]]; then
+if [[ "$norm_rc" -ne 0 || ! -s "$NORM_FILE" ]]; then
+  printf 'failed to normalize Sparkle EdDSA secret for sign_update\n' >&2
+  exit 1
+fi
+sparkle_ed_key="$(cat "$NORM_FILE")"
+rm -f "$NORM_FILE"
+NORM_FILE=""
+if [[ -z "$sparkle_ed_key" ]]; then
   printf 'failed to normalize Sparkle EdDSA secret for sign_update\n' >&2
   exit 1
 fi
