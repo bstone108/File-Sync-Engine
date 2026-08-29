@@ -220,11 +220,34 @@ sign_path() {
 # Sign nested Mach-O first (bundled daemon, helper binaries, then the GUI
 # executable). Do not use codesign --deep: Apple's distribution guidance is
 # inside-out signing of nested code, then the bundle.
+# Skip Sparkle.framework here: its XPC/Updater helpers must not inherit the
+# GUI entitlements plist.
 while IFS= read -r -d '' path; do
+  case "$path" in
+    */Frameworks/Sparkle.framework/*) continue ;;
+  esac
   if is_macho "$path"; then
     sign_path "$path"
   fi
 done < <(find "$APP_BUNDLE/Contents" -type f -print0)
+
+if [[ -d "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework" ]]; then
+  # Sign Sparkle nested XPC/Updater/Autoupdate inside-out, then the framework,
+  # without the GUI entitlements. Do not use codesign --deep.
+  sparkle_fw="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+  sign_sparkle_item() {
+    codesign \
+      --force \
+      --options runtime \
+      --timestamp \
+      --sign "$SIGN_IDENTITY" \
+      "$1"
+  }
+  while IFS= read -r -d '' item; do
+    sign_sparkle_item "$item"
+  done < <(find "$sparkle_fw" -depth \( -name '*.xpc' -type d -o -name '*.app' -type d -o -name Autoupdate -type f \) -print0)
+  sign_sparkle_item "$sparkle_fw"
+fi
 
 sign_path "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"

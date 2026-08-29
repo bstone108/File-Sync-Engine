@@ -115,6 +115,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop-gui/package-lock.json
+      - name: Fetch Sparkle.framework
+        run: scripts/fetch-sparkle-framework.sh
       - name: Build unsigned native macOS desktop application
         working-directory: desktop-gui
         shell: bash
@@ -122,10 +124,13 @@ jobs:
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
           export PATH="$(go env GOPATH)/bin:$PATH"
           export FSE_DESKTOP_VERSION="ci-${GITHUB_SHA::12}"
+          ../scripts/stamp-desktop-gui-version.sh "$FSE_DESKTOP_VERSION" .
+          export DYLD_FRAMEWORK_PATH="$(cd third_party/sparkle && pwd)${DYLD_FRAMEWORK_PATH:+:$DYLD_FRAMEWORK_PATH}"
           wails generate module
           npm ci
           npm run typecheck
           npm run build
+          export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-rpath,@executable_path/../Frameworks"
           wails build -clean -platform "${{ matrix.platform }}" -o fse-desktop
           app_bundle="$(find build/bin -maxdepth 1 -type d -name '*.app' -print -quit)"
           if [[ -z "$app_bundle" || ! -x "$app_bundle/Contents/MacOS/fse-desktop" ]]; then
@@ -133,6 +138,9 @@ jobs:
             find build/bin -maxdepth 3 -print >&2 || true
             exit 1
           fi
+          mkdir -p "$app_bundle/Contents/Frameworks"
+          cp -R third_party/sparkle/Sparkle.framework "$app_bundle/Contents/Frameworks/Sparkle.framework"
+          ../scripts/add-macos-sparkle-rpath.sh "$app_bundle"
 
   windows-desktop-wails-build:
     name: Windows native Wails desktop build

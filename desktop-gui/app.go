@@ -95,6 +95,7 @@ type desktopNativeRuntime struct {
 	readinessAttempts       int
 	serviceStopPollAttempts int
 	serviceStopPollInterval time.Duration
+	update                  *desktopAppUpdateRuntime
 }
 
 func NewApp() *App {
@@ -106,6 +107,29 @@ func (a *App) startup(ctx context.Context) {
 	// Best-effort startup reconciliation. Failures remain durable and can be
 	// retried through ReconcileRemoteInstanceCredentialCleanup.
 	_, _ = a.ReconcileRemoteInstanceCredentialCleanup()
+	if ctx != nil {
+		a.startDesktopAppUpdater(ctx)
+	}
+}
+
+func (a *App) startDesktopAppUpdater(ctx context.Context) {
+	if runtime.GOOS == "darwin" {
+		_ = startSparkleUpdater()
+		checkSparkleUpdates()
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(desktopUpdateCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, _ = a.CheckDesktopAppUpdate()
+			}
+		}
+	}()
 }
 
 func (a *App) RuntimeInfo() DesktopRuntimeInfo {

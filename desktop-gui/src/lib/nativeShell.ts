@@ -102,6 +102,23 @@ export type NativeDesktopShell = {
 
   storeRemoteInstanceCredential(record: RemoteInstanceCredentialRecord, secret: RemoteInstanceCredentialSecret): Promise<RemoteInstanceCredentialRecord>;
   deleteRemoteInstanceCredential(credentialRef: string): Promise<void>;
+
+  getDesktopAppUpdateStatus(): Promise<DesktopAppUpdateStatus>;
+  checkDesktopAppUpdate(): Promise<DesktopAppUpdateStatus>;
+  restartDesktopAppUpdate(): Promise<DesktopAppUpdateStatus>;
+  postponeDesktopAppUpdate(): Promise<DesktopAppUpdateStatus>;
+};
+
+export type DesktopAppUpdateStatus = {
+  platform: 'windows' | 'appimage' | 'sparkle' | 'unsupported' | string;
+  phase: string;
+  currentVersion: string;
+  availableVersion?: string;
+  message: string;
+  downloadURL?: string;
+  allowDownloadLink: boolean;
+  canRestartNow: boolean;
+  canRetry: boolean;
 };
 
 declare global {

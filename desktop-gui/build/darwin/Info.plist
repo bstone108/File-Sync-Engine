@@ -29,6 +29,18 @@
         </dict>
         <key>NSHumanReadableCopyright</key>
         <string>{{.Info.Copyright}}</string>
+        <key>SUFeedURL</key>
+        <string>https://github.com/bstone108/File-Sync-Engine/releases/latest/download/appcast-darwin-arm64.xml</string>
+        <key>SUPublicEDKey</key>
+        <string>dV+k5IynR3jrGAA7dbDmr66A2rrOH3vPbc45CVcuGUE=</string>
+        <key>SUEnableAutomaticChecks</key>
+        <true/>
+        <key>SUScheduledCheckInterval</key>
+        <integer>172800</integer>
+        <key>SUAutomaticallyUpdate</key>
+        <false/>
+        <key>SUAllowsAutomaticUpdates</key>
+        <false/>
         {{if .Info.FileAssociations}}
         <key>CFBundleDocumentTypes</key>
         <array>

@@ -105,6 +105,8 @@ rm -rf "$WORK_DIR" "$TARGET_OUT"
 mkdir -p "$WORK_DIR" "$TARGET_OUT"
 cp -R "$ROOT/desktop-gui/." "$WORK_DIR/"
 stage_target_engine_resource_subset "darwin/$ARCH" "$WORK_DIR/resources/engine"
+"$ROOT/scripts/fetch-sparkle-framework.sh" "$WORK_DIR/third_party/sparkle"
+"$ROOT/scripts/stamp-desktop-gui-version.sh" "$VERSION" "$WORK_DIR"
 
 (
   cd "$WORK_DIR"
@@ -113,8 +115,10 @@ stage_target_engine_resource_subset "darwin/$ARCH" "$WORK_DIR/resources/engine"
   else
     npm install
   fi
+  export DYLD_FRAMEWORK_PATH="$WORK_DIR/third_party/sparkle${DYLD_FRAMEWORK_PATH:+:$DYLD_FRAMEWORK_PATH}"
   wails generate module
   npm run build
+  export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-rpath,@executable_path/../Frameworks"
   FSE_DESKTOP_VERSION="$VERSION" GOOS=darwin GOARCH="$ARCH" wails build -platform darwin/$ARCH -clean
   APP_BUNDLE="$(find build/bin -maxdepth 1 -type d -name '*.app' -print -quit)"
   if [[ -z "$APP_BUNDLE" ]]; then
@@ -130,6 +134,10 @@ stage_target_engine_resource_subset "darwin/$ARCH" "$WORK_DIR/resources/engine"
   cp "$ROOT/README.md" "$APP_BUNDLE/Contents/Resources/docs-snapshot/README.md"
   test -s "$APP_BUNDLE/Contents/Resources/engine/darwin/$ARCH/fse"
   test -s "$APP_BUNDLE/Contents/Resources/docs-snapshot/README.md"
+  mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+  cp -R "$WORK_DIR/third_party/sparkle/Sparkle.framework" "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+  test -d "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+  "$ROOT/scripts/add-macos-sparkle-rpath.sh" "$APP_BUNDLE"
   # Do not ad-hoc sign here. Copying the bundled daemon into the .app invalidates
   # any signature Wails applied during `wails build`. GitHub Actions runs
   # scripts/sign-and-notarize-macos-desktop.sh next to Developer ID-sign,
