@@ -915,6 +915,7 @@ func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
 		"sign_update",
 		"--ed-key-file -",
 		"SPARKLE_EDDSA_PRIVATE_KEY has unexpected length",
+		"normalize-sparkle-ed-key.py",
 		"\"$SIGN_UPDATE\" --help",
 		"xattr -l",
 		"fse-desktop-darwin-${ARCH}-installer-${VERSION}.zip",
@@ -967,6 +968,17 @@ func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
 	}
 	if !strings.Contains(appcast, "key_len > 128") {
 		t.Fatal("Sparkle key length gate must be a coarse range that includes 88-char expanded Ed25519 secrets")
+	}
+	norm := readRequiredFile(t, filepath.Join("..", "..", "scripts", "normalize-sparkle-ed-key.py"))
+	for _, want := range []string{"os.open", "0o600", "os.write"} {
+		if !strings.Contains(norm, want) {
+			t.Fatalf("Sparkle key normalizer missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"sys.stdout.write", "sys.stdout.print", "print(base64"} {
+		if strings.Contains(norm, forbidden) {
+			t.Fatalf("Sparkle key normalizer must not print the secret (%q)", forbidden)
+		}
 	}
 	harness := readRequiredFile(t, filepath.Join("..", "..", "scripts", "run-serious-harness.sh"))
 	if !strings.Contains(harness, "SignSparkleAppcast") || !strings.Contains(harness, "FetchSparkleFramework") {
