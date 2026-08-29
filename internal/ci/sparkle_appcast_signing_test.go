@@ -10,6 +10,9 @@ import (
 
 const sparkleEdDSATestKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
+// Dummy 88-char base64 (64-byte expanded Ed25519 private key). Not a real secret.
+const sparkleEdDSATestKey88 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+
 const stubSignUpdate = `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -149,6 +152,44 @@ func TestSignSparkleAppcastFallsBackToKeyFileWhenStdinRejected(t *testing.T) {
 	}
 	if strings.Contains(got, sparkleEdDSATestKey) {
 		t.Fatal("appcast signer leaked the EdDSA private key into logs")
+	}
+}
+
+func TestSignSparkleAppcastAcceptsExpandedEd25519PrivateKeyLength88(t *testing.T) {
+	root := filepath.Join("..", "..")
+	tmp := t.TempDir()
+	sparkleDir := filepath.Join(tmp, "sparkle")
+	zipPath := filepath.Join(tmp, "payload.zip")
+	outXML := filepath.Join(tmp, "appcast.xml")
+	mustWriteFile(t, zipPath, "hello sparkle")
+	mustMkdir(t, filepath.Join(sparkleDir, "Sparkle.framework"))
+	mustWriteExecutable(t, filepath.Join(sparkleDir, "bin", "sign_update"), stubSignUpdate)
+
+	if len(sparkleEdDSATestKey88) != 88 {
+		t.Fatalf("test fixture must be 88 chars, got %d", len(sparkleEdDSATestKey88))
+	}
+	cmd := exec.Command("bash", "scripts/sign-sparkle-appcast.sh", zipPath, "2026.8.28.4", "arm64", outXML)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"FSE_SPARKLE_DIR="+sparkleDir,
+		"SPARKLE_EDDSA_PRIVATE_KEY="+sparkleEdDSATestKey88,
+	)
+	output, err := cmd.CombinedOutput()
+	got := string(output)
+	if err != nil {
+		t.Fatalf("88-char Sparkle key must reach sign_update: %v\n%s", err, got)
+	}
+	if strings.Contains(got, "unexpected length") {
+		t.Fatalf("length 88 must not be rejected: output:\n%s", got)
+	}
+	if !strings.Contains(got, "stub method=stdin key_len=88") {
+		t.Fatalf("expected stdin sign_update with 88-char key; output:\n%s", got)
+	}
+	if strings.Contains(got, sparkleEdDSATestKey88) {
+		t.Fatal("appcast signer leaked the EdDSA private key into logs")
+	}
+	if _, err := os.Stat(outXML); err != nil {
+		t.Fatalf("expected appcast XML: %v", err)
 	}
 }
 
