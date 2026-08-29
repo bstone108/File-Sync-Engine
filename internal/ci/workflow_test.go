@@ -965,6 +965,9 @@ func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
 	if strings.Contains(ci, "SPARKLE_EDDSA_PRIVATE_KEY") || strings.Contains(ci, "sign-sparkle-appcast.sh") {
 		t.Fatal("PR CI must not sign Sparkle appcasts or receive the EdDSA private key")
 	}
+	if !strings.Contains(appcast, "key_len > 128") {
+		t.Fatal("Sparkle key length gate must be a coarse range that includes 88-char expanded Ed25519 secrets")
+	}
 	harness := readRequiredFile(t, filepath.Join("..", "..", "scripts", "run-serious-harness.sh"))
 	if !strings.Contains(harness, "SignSparkleAppcast") || !strings.Contains(harness, "FetchSparkleFramework") {
 		t.Fatal("serious harness must run Sparkle appcast signing and fetch contract tests")

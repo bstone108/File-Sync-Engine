@@ -75,15 +75,14 @@ if [[ -z "$sparkle_ed_key" ]]; then
   printf 'SPARKLE_EDDSA_PRIVATE_KEY is empty after trim\n' >&2
   exit 1
 fi
-# Typical Sparkle EdDSA secrets: 32-byte seed (~44 chars), 96-byte old format
-# (~128 chars). 64-byte raw private keys (~88 chars) are not a Sparkle seed.
-case "$key_len" in
-  43|44|127|128) ;;
-  *)
-    printf 'SPARKLE_EDDSA_PRIVATE_KEY has unexpected length %s\n' "$key_len" >&2
-    exit 1
-    ;;
-esac
+# Coarse length gate only (never print the value). Sparkle EdDSA secrets are
+# typically 32-byte seed (~44 chars), 64-byte expanded private key (~88 chars),
+# or 96-byte old seed+pub (~128 chars). sign_update decides cryptographic
+# validity; do not invent a narrower allowlist.
+if (( key_len < 43 || key_len > 128 )); then
+  printf 'SPARKLE_EDDSA_PRIVATE_KEY has unexpected length %s\n' "$key_len" >&2
+  exit 1
+fi
 if [[ ! "$sparkle_ed_key" =~ ^[A-Za-z0-9+/=]+$ ]]; then
   printf 'SPARKLE_EDDSA_PRIVATE_KEY has unexpected length %s\n' "$key_len" >&2
   exit 1
