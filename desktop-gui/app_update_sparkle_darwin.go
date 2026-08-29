@@ -4,7 +4,9 @@ package main
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc -F${SRCDIR}/third_party/sparkle
-#cgo LDFLAGS: -F${SRCDIR}/third_party/sparkle -framework Sparkle -framework Foundation -framework AppKit -Wl,-rpath,@executable_path/../Frameworks
+#cgo LDFLAGS: -F${SRCDIR}/third_party/sparkle -framework Sparkle -framework Foundation -framework AppKit
+// Go rejects an @executable_path rpath in package #cgo LDFLAGS.
+// Native macOS builds set CGO_LDFLAGS and scripts/add-macos-sparkle-rpath.sh.
 #include "app_update_sparkle_darwin.h"
 #include <stdlib.h>
 */

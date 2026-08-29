@@ -129,6 +129,7 @@ jobs:
           npm ci
           npm run typecheck
           npm run build
+          export CGO_LDFLAGS="${CGO_LDFLAGS:+$CGO_LDFLAGS }-Wl,-rpath,@executable_path/../Frameworks"
           wails build -clean -platform "${{ matrix.platform }}" -o fse-desktop
           app_bundle="$(find build/bin -maxdepth 1 -type d -name '*.app' -print -quit)"
           if [[ -z "$app_bundle" || ! -x "$app_bundle/Contents/MacOS/fse-desktop" ]]; then
@@ -138,6 +139,7 @@ jobs:
           fi
           mkdir -p "$app_bundle/Contents/Frameworks"
           cp -R third_party/sparkle/Sparkle.framework "$app_bundle/Contents/Frameworks/Sparkle.framework"
+          ../scripts/add-macos-sparkle-rpath.sh "$app_bundle"
 
   windows-desktop-wails-build:
     name: Windows native Wails desktop build

@@ -787,6 +787,8 @@ func TestPRCICompilesUnsignedNativeMacOSDesktopOnHostedRunners(t *testing.T) {
 		"Build unsigned native macOS desktop application",
 		"scripts/fetch-sparkle-framework.sh",
 		"Sparkle.framework",
+		"CGO_LDFLAGS",
+		"scripts/add-macos-sparkle-rpath.sh",
 	} {
 		if !strings.Contains(macJob, want) {
 			t.Fatalf("unsigned macOS Wails compile job missing %q", want)
@@ -931,7 +933,7 @@ func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
 	if !strings.Contains(fetch, "Sparkle.framework") || strings.Contains(fetch, "notarytool") || strings.Contains(fetch, "codesign") || strings.Contains(fetch, "stapler") {
 		t.Fatal("Sparkle fetch script must download Sparkle.framework without signing or notarizing")
 	}
-	for _, want := range []string{"fetch-sparkle-framework.sh", "Sparkle.framework", "stamp-desktop-gui-version.sh"} {
+	for _, want := range []string{"fetch-sparkle-framework.sh", "Sparkle.framework", "stamp-desktop-gui-version.sh", "CGO_LDFLAGS", "add-macos-sparkle-rpath.sh"} {
 		if !strings.Contains(native, want) {
 			t.Fatalf("native macOS Wails build missing Sparkle embed %q", want)
 		}

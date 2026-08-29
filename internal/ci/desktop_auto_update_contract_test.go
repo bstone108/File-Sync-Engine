@@ -66,6 +66,15 @@ func TestDesktopGUIInAppAutoUpdateCoversWindowsAppImageAndSparkle(t *testing.T) 
 	if !strings.Contains(sparkleDarwin, "framework Sparkle") || !strings.Contains(sparkleObjC, "SPUUpdater") || !strings.Contains(sparkleObjC, "SPUUserDriver") {
 		t.Fatal("macOS updater must be Sparkle, not a generic GitHub downloader")
 	}
+	if idx := strings.Index(sparkleDarwin, "#cgo LDFLAGS:"); idx != -1 {
+		line := sparkleDarwin[idx:]
+		if nl := strings.IndexByte(line, '\n'); nl != -1 {
+			line = line[:nl]
+		}
+		if strings.Contains(line, "-Wl,-rpath,@executable_path") {
+			t.Fatal("Sparkle #cgo LDFLAGS must not use -Wl,-rpath,@executable_path; Go rejects that flag")
+		}
+	}
 	if strings.Contains(sparkleDarwin, "selectWindowsInstallerAsset") || strings.Contains(sparkleObjC, "browser_download_url") {
 		t.Fatal("Sparkle path must not download installers itself")
 	}
