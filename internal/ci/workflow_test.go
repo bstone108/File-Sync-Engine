@@ -935,6 +935,7 @@ func TestReleaseWorkflowSignsSparkleAppcastWithSignUpdate(t *testing.T) {
 		"`$SIGN_UPDATE",
 		"`\"$SIGN_UPDATE\"",
 		"xcrun notarytool",
+		"awk '/^[A-Za-z0-9+/=]",
 	} {
 		if strings.Contains(appcast, forbidden) {
 			t.Fatalf("Sparkle appcast signer must not print or reuse forbidden material %q", forbidden)
