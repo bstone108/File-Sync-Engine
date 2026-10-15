@@ -159,6 +159,19 @@ func TestNoteObservedIPDropsBridge(t *testing.T) {
 	}
 }
 
+func TestPortMappingRejectsPortsOutsideUint16(t *testing.T) {
+	for _, ports := range [][2]int{{0, 22420}, {22420, 70000}, {-1, 22420}, {22420, 0}} {
+		_, _, err := upnpMap(context.Background(), ports[0], ports[1])
+		if err == nil || !strings.Contains(err.Error(), "outside 1-65535") {
+			t.Fatalf("upnp %d->%d err = %v", ports[0], ports[1], err)
+		}
+		_, _, err = natPMPMap(context.Background(), ports[0], ports[1])
+		if err == nil || !strings.Contains(err.Error(), "outside 1-65535") {
+			t.Fatalf("natpmp %d->%d err = %v", ports[0], ports[1], err)
+		}
+	}
+}
+
 func TestGatewayFromProcNetRoute(t *testing.T) {
 	table := "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\neth0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
 	got := gatewayFromRouteTable(table)

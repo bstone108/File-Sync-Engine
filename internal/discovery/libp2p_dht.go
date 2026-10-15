@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,10 +71,47 @@ func (r *Libp2pDHTRouter) Bootstrap(ctx context.Context, peers []string) error {
 	if err != nil {
 		return err
 	}
+	infos = append(r.extraBootstrapInfos(peers), infos...)
 	if r.connectBootstrap(ctx, preferDialableTransports(infos)) > 0 {
 		r.waitForRoutingTable(ctx)
 	}
 	return r.dht.Bootstrap(ctx)
+}
+
+// extraBootstrapInfos adds the libp2p TCP bootstrap peer when the daemon is
+// using the built-in public list. It is not written to config. A test resolver
+// keeps the fixture-only dial list.
+func (r *Libp2pDHTRouter) extraBootstrapInfos(peers []string) []peer.AddrInfo {
+	if r == nil || !samePeers(peers, DefaultPublicDHTBootstrapPeers) {
+		return nil
+	}
+	r.mu.Lock()
+	customResolver := r.resolver != nil
+	r.mu.Unlock()
+	if customResolver {
+		return nil
+	}
+	addr, err := ma.NewMultiaddr("/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ")
+	if err != nil {
+		return nil
+	}
+	info, err := peer.AddrInfoFromP2pAddr(addr)
+	if err != nil || info == nil {
+		return nil
+	}
+	return []peer.AddrInfo{*info}
+}
+
+func samePeers(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // SetResolver replaces DNS multiaddr resolution. Tests use it to expand the
@@ -115,37 +153,43 @@ func (r *Libp2pDHTRouter) bootstrapPeerList() []string {
 }
 
 func (r *Libp2pDHTRouter) connectBootstrap(ctx context.Context, infos []peer.AddrInfo) int {
-	connected := 0
-	limit := len(infos)
+	attempts := singleTransportDials(infos)
+	limit := len(attempts)
 	if limit > maxBootstrapCandidates {
 		limit = maxBootstrapCandidates
 	}
-	for start := 0; start < limit && connected == 0; start += maxBootstrapDials {
-		end := start + maxBootstrapDials
-		if end > limit {
-			end = limit
+	// One address at a time. Concurrent dials of the public /dnsaddr peers
+	// fail together from some networks, while the same addresses connect
+	// when each dial finishes before the next one starts.
+	for _, info := range attempts[:limit] {
+		r.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
+		connectCtx, cancel := context.WithTimeout(ctx, bootstrapDialTimeout)
+		err := r.host.Connect(connectCtx, info)
+		cancel()
+		if err == nil {
+			return 1
 		}
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		for _, info := range infos[start:end] {
-			r.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
-			wg.Add(1)
-			go func(info peer.AddrInfo) {
-				defer wg.Done()
-				connectCtx, cancel := context.WithTimeout(ctx, bootstrapDialTimeout)
-				err := r.host.Connect(connectCtx, info)
-				cancel()
-				if err != nil {
-					return
-				}
-				mu.Lock()
-				connected++
-				mu.Unlock()
-			}(info)
-		}
-		wg.Wait()
 	}
-	return connected
+	return 0
+}
+
+// singleTransportDials separates each address. libp2p treats a combined TCP,
+// WebSocket, and QUIC list as one dial and all three fail together on the
+// public bootstrap, while the same /dnsaddr/p2p address connects alone.
+func singleTransportDials(infos []peer.AddrInfo) []peer.AddrInfo {
+	out := make([]peer.AddrInfo, 0, len(infos))
+	for _, info := range infos {
+		if info.ID == "" {
+			continue
+		}
+		for _, addr := range info.Addrs {
+			if addr == nil || strings.Contains(addr.String(), "/quic") {
+				continue
+			}
+			out = append(out, peer.AddrInfo{ID: info.ID, Addrs: []ma.Multiaddr{addr}})
+		}
+	}
+	return out
 }
 
 func (r *Libp2pDHTRouter) waitForRoutingTable(ctx context.Context) {

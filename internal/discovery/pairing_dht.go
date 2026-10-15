@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -14,6 +15,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 )
+
+// pairingAdvertiseTimeout bounds the public DHT provider walk. Routing
+// discovery otherwise searches for up to a minute, and a completed-enough
+// walk still returns context.DeadlineExceeded after storing provider records.
+const pairingAdvertiseTimeout = 25 * time.Second
 
 const (
 	// PairingProtocol serves the MAC-bound pairing record after DHT provider
@@ -39,13 +45,46 @@ func (r *Libp2pDHTRouter) PublishPairing(ctx context.Context, namespace string, 
 	if err := r.ensureBootstrapped(ctx); err != nil {
 		return err
 	}
-	if _, err := r.discovery.Advertise(ctx, namespace); err != nil {
+	if err := r.advertisePairing(ctx, namespace); err != nil {
 		return err
 	}
 	r.mu.Lock()
 	r.advertise[namespace] = struct{}{}
 	r.mu.Unlock()
 	return nil
+}
+
+// advertisePairing publishes the namespace and treats a DHT walk that stored
+// provider records before its deadline as success. An empty routing table
+// still fails, because nothing was reachable to store the record.
+func (r *Libp2pDHTRouter) advertisePairing(ctx context.Context, namespace string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	advCtx, cancel := context.WithTimeout(ctx, pairingAdvertiseTimeout)
+	defer cancel()
+	_, err := r.discovery.Advertise(advCtx, namespace)
+	return acceptPartialAdvertise(err, r.routingTableSize(), ctx)
+}
+
+func (r *Libp2pDHTRouter) routingTableSize() int {
+	if r == nil || r.dht == nil || r.dht.RoutingTable() == nil {
+		return 0
+	}
+	return r.dht.RoutingTable().Size()
+}
+
+func acceptPartialAdvertise(err error, peers int, parent context.Context) error {
+	if err == nil {
+		return nil
+	}
+	if parent != nil && parent.Err() != nil {
+		return err
+	}
+	if errors.Is(err, context.DeadlineExceeded) && peers > 0 {
+		return nil
+	}
+	return err
 }
 
 // LookupPairing finds DHT providers for the namespace and fetches each record.

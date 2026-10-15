@@ -3,6 +3,7 @@ package advertise
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"strconv"
@@ -279,6 +280,13 @@ func dialProbe(ctx context.Context, host string, port int) error {
 	return conn.Close()
 }
 
+func validMappingPorts(internalPort, externalPort int) error {
+	if internalPort < 1 || internalPort > 65535 || externalPort < 1 || externalPort > 65535 {
+		return fmt.Errorf("NAT port mapping %d->%d is outside 1-65535", internalPort, externalPort)
+	}
+	return nil
+}
+
 func discoverMappedPort(ctx context.Context, internalPort, externalPort int) (string, int, error) {
 	if ip, port, err := natPMPMap(ctx, internalPort, externalPort); err == nil {
 		return ip, port, nil
@@ -287,6 +295,9 @@ func discoverMappedPort(ctx context.Context, internalPort, externalPort int) (st
 }
 
 func natPMPMap(ctx context.Context, internalPort, externalPort int) (string, int, error) {
+	if err := validMappingPorts(internalPort, externalPort); err != nil {
+		return "", 0, err
+	}
 	gateway := defaultGateway()
 	if gateway == nil {
 		return "", 0, errNoGateway
@@ -331,6 +342,9 @@ func natPMPMap(ctx context.Context, internalPort, externalPort int) (string, int
 }
 
 func upnpMap(ctx context.Context, internalPort, externalPort int) (string, int, error) {
+	if err := validMappingPorts(internalPort, externalPort); err != nil {
+		return "", 0, err
+	}
 	clients, _, err := internetgateway2.NewWANIPConnection1ClientsCtx(ctx)
 	if err != nil && len(clients) == 0 {
 		return "", 0, err
@@ -349,7 +363,13 @@ func upnpMap(ctx context.Context, internalPort, externalPort int) (string, int, 
 		if internal == "" {
 			continue
 		}
-		if err := client.AddPortMappingCtx(ctx, "", uint16(externalPort), "TCP", uint16(internalPort), internal, true, "File Sync Engine", 3600); err != nil {
+		// Reject values outside the protocol field before narrowing to uint16.
+		if externalPort < 1 || externalPort > 65535 || internalPort < 1 || internalPort > 65535 {
+			return "", 0, fmt.Errorf("NAT port mapping %d->%d is outside 1-65535", internalPort, externalPort)
+		}
+		mappedExternal := uint16(externalPort)
+		mappedInternal := uint16(internalPort)
+		if err := client.AddPortMappingCtx(ctx, "", mappedExternal, "TCP", mappedInternal, internal, true, "File Sync Engine", 3600); err != nil {
 			last = err
 			continue
 		}

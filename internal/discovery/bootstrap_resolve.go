@@ -16,7 +16,7 @@ const (
 	maxDNSAddrDepth        = 6
 	maxBootstrapDials      = 6
 	maxBootstrapCandidates = 24
-	bootstrapDialTimeout   = 3 * time.Second
+	bootstrapDialTimeout   = 8 * time.Second
 	bootstrapResolveBudget = 8 * time.Second
 )
 
@@ -115,7 +115,11 @@ func expandBootstrapAddress(ctx context.Context, address string, resolver multia
 }
 
 func expandBootstrapMultiaddr(ctx context.Context, multiaddr ma.Multiaddr, resolver multiaddrResolver, depth int) ([]ma.Multiaddr, error) {
-	if multiaddr == nil || !multiaddrHasDNS(multiaddr) {
+	// Only a /dnsaddr with no peer ID is expanded here. A result that already
+	// names /p2p/<id> is dialed as written so libp2p resolves it. Expanding
+	// those records to /ip4, or handing TCP, WebSocket, and QUIC to one dial,
+	// fails the handshake. /dns4 and /dns6 stay as hostnames for the same reason.
+	if multiaddr == nil || !multiaddrHasDNSAddr(multiaddr) || multiaddrHasPeerID(multiaddr) {
 		return []ma.Multiaddr{multiaddr}, nil
 	}
 	if depth >= maxDNSAddrDepth {
@@ -133,7 +137,7 @@ func expandBootstrapMultiaddr(ctx context.Context, multiaddr ma.Multiaddr, resol
 		if item == nil {
 			continue
 		}
-		if multiaddrHasDNS(item) {
+		if multiaddrHasDNSAddr(item) {
 			nested, err := expandBootstrapMultiaddr(ctx, item, resolver, depth+1)
 			if err != nil {
 				return nil, err
@@ -147,6 +151,11 @@ func expandBootstrapMultiaddr(ctx context.Context, multiaddr ma.Multiaddr, resol
 }
 
 func addrInfosFromMultiaddrs(original string, addrs []ma.Multiaddr) ([]peer.AddrInfo, error) {
+	originalAddr, _ := ma.NewMultiaddr(original)
+	// Dial the name the user configured. Regional dnsaddr results name ports
+	// that often reset, while libp2p's own resolution of the parent dnsaddr
+	// still finds a reachable transport for that peer ID.
+	dialParent := originalAddr != nil && multiaddrHasDNSAddr(originalAddr) && !multiaddrHasPeerID(originalAddr)
 	infos := make([]peer.AddrInfo, 0, len(addrs))
 	var lastErr error
 	for _, addr := range addrs {
@@ -157,6 +166,9 @@ func addrInfosFromMultiaddrs(original string, addrs []ma.Multiaddr) ([]peer.Addr
 		if err != nil {
 			lastErr = err
 			continue
+		}
+		if dialParent {
+			info.Addrs = []ma.Multiaddr{originalAddr}
 		}
 		infos = append(infos, *info)
 	}
@@ -199,16 +211,25 @@ func mergeAddrInfos(infos []peer.AddrInfo) []peer.AddrInfo {
 	return out
 }
 
-func multiaddrHasDNS(multiaddr ma.Multiaddr) bool {
+func multiaddrHasDNSAddr(multiaddr ma.Multiaddr) bool {
+	return multiaddrHasProtocol(multiaddr, ma.P_DNSADDR)
+}
+
+func multiaddrHasPeerID(multiaddr ma.Multiaddr) bool {
+	return multiaddrHasProtocol(multiaddr, ma.P_P2P)
+}
+
+func multiaddrHasProtocol(multiaddr ma.Multiaddr, code int) bool {
+	if multiaddr == nil {
+		return false
+	}
 	found := false
 	ma.ForEach(multiaddr, func(component ma.Component) bool {
-		switch component.Protocol().Code {
-		case ma.P_DNSADDR, ma.P_DNS4, ma.P_DNS6, ma.P_DNS:
+		if component.Protocol().Code == code {
 			found = true
 			return false
-		default:
-			return true
 		}
+		return true
 	})
 	return found
 }
