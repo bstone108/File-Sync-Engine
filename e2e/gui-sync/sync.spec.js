@@ -62,7 +62,8 @@ async function editSharedFolder(page) {
   if (await close.isVisible().catch(() => false)) {
     await close.click();
   }
-  await page.getByTestId('folder-open').filter({ hasText: 'shared' }).click();
+  await page.getByTestId('folder-expand').filter({ hasText: 'shared' }).click();
+  await page.getByTestId('folder-open').click();
   await expect(page.getByTestId('folder-editor')).toBeVisible();
   await page.getByTestId('folder-edit-mode').selectOption('sendonly');
   await page.getByTestId('folder-edit-ignore').fill('*.tmp\ncache/');
@@ -167,6 +168,7 @@ async function showDefaultPairingCode(page, service) {
   if (await close.isVisible().catch(() => false)) {
     await close.click();
   }
+  await clickClearOfSidebar(page.getByTestId('add-peer-menu'));
   const posts = [];
   page.on('request', (request) => {
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/onboarding') {
@@ -189,11 +191,24 @@ async function showDefaultPairingCode(page, service) {
   return (await code.innerText()).match(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/)?.[0];
 }
 
-async function redeemPairingCode(page, code) {
+async function openLinkForm(page) {
   const close = page.getByTestId('node-options-close');
   if (await close.isVisible().catch(() => false)) {
     await close.click();
   }
+  const input = page.getByTestId('pairing-code-input');
+  if (!(await input.isVisible().catch(() => false))) {
+    const menu = page.getByTestId('add-peer-menu');
+    if ((await menu.getAttribute('aria-expanded')) !== 'true') {
+      await clickClearOfSidebar(menu);
+    }
+    await page.getByTestId('link-peer-form').click();
+  }
+  await expect(input).toBeVisible();
+}
+
+async function redeemPairingCode(page, code) {
+  await openLinkForm(page);
   await page.getByTestId('pairing-code-input').fill(code);
   const posts = [];
   page.on('request', (request) => {
@@ -204,7 +219,9 @@ async function redeemPairingCode(page, code) {
   await clickClearOfSidebar(page.getByTestId('redeem-pairing-code'));
   await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(0);
   await expect(page.getByTestId('pairing-message')).toContainText(/paired by code/i);
-  await page.getByTestId('redeem-pairing-code').click();
+  await openLinkForm(page);
+  await page.getByTestId('pairing-code-input').fill(code);
+  await clickClearOfSidebar(page.getByTestId('redeem-pairing-code'));
   await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(1);
   await expect(page.getByTestId('pairing-message')).toContainText(/already used|not found|was not found/i, { timeout: 30000 });
   await expect(page.getByTestId('pairing-message')).not.toContainText(/paired by code/i);

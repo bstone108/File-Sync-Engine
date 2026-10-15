@@ -165,6 +165,10 @@
   let folderEditPeerDraft = '';
   let folderEditorMessage = '';
   let folderEditorRemoveConfirm = false;
+  let folderRowMessage = '';
+  let expandedFolderIds: Record<string, boolean> = {};
+  let addPeerMenuOpen = false;
+  let linkPeerFormOpen = false;
   const dockerGUI = isDockerGUI();
   const guiPlatform = fsePlatform();
   let discoveryFormDisabled = false;
@@ -1118,9 +1122,84 @@
     selectedConfigInstanceId = instanceId;
     pairingCode = '';
     pairingMessage = '';
+    addPeerMenuOpen = false;
+    linkPeerFormOpen = false;
+    expandedFolderIds = {};
+    folderRowMessage = '';
     if (folderEditor) {
       folderEditor = null;
     }
+  }
+
+  function closeAddPeerMenu() {
+    addPeerMenuOpen = false;
+    linkPeerFormOpen = false;
+  }
+
+  function toggleAddPeerMenu() {
+    addPeerMenuOpen = !addPeerMenuOpen;
+    if (!addPeerMenuOpen) {
+      linkPeerFormOpen = false;
+    }
+  }
+
+  async function showPairingCodeFromMenu() {
+    closeAddPeerMenu();
+    await showPairingCode();
+  }
+
+  async function redeemPairingCodeFromMenu() {
+    closeAddPeerMenu();
+    await redeemRemotePairingCode();
+  }
+
+  function folderStatusText(folder: DaemonFolder): string {
+    if (folder.enabled === false) {
+      return 'paused';
+    }
+    return folder.status || 'configured';
+  }
+
+  function folderProgressText(folder: DaemonFolder): string {
+    if (typeof folder.progressLabel === 'string' && folder.progressLabel.length > 0) {
+      return folder.progressLabel;
+    }
+    if (folder.enabled === false) {
+      return 'Paused';
+    }
+    if (folder.status === 'syncing') {
+      return 'Syncing';
+    }
+    return folder.status || 'Unknown';
+  }
+
+  function folderSizeText(folder: DaemonFolder): string {
+    if (typeof folder.localBytes === 'number') {
+      return formatTransferByteSummary(folder.localBytes);
+    }
+    return '—';
+  }
+
+  function folderModeLabel(mode: string | undefined): string {
+    if (mode === 'sendonly') {
+      return 'send';
+    }
+    if (mode === 'recvonly') {
+      return 'recv';
+    }
+    return mode || 'sendrecv';
+  }
+
+  function folderShareText(folder: DaemonFolder): string {
+    const peers = folder.sharedWith ?? [];
+    if (peers.length === 0) {
+      return 'Every paired peer';
+    }
+    return peers.join(', ');
+  }
+
+  function toggleFolder(id: string) {
+    expandedFolderIds = { ...expandedFolderIds, [id]: !expandedFolderIds[id] };
   }
 
   function formatPeerRate(bytes: number | undefined): string {
@@ -1220,6 +1299,41 @@
       sharedWith: folderEditSharedPeers,
       ignore
     }));
+  }
+
+  async function runFolderRow(folder: DaemonFolder, command: string, action: () => Promise<CommandResponse>) {
+    loading = true;
+    folderRowMessage = `${command} is pending.`;
+    try {
+      const response = await action();
+      folderRowMessage = response.message ?? `${command} completed.`;
+      await refreshOperationalState();
+      const current = daemonFolders.find((item) => item.id === folder.id);
+      if (current && folderEditor?.id === current.id) {
+        folderEditor = current;
+      }
+    } catch (error) {
+      folderRowMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function pauseOrResumeFolderRow(folder: DaemonFolder) {
+    const action: 'pause' | 'resume' = folder.enabled === false ? 'resume' : 'pause';
+    await runFolderRow(folder, `folder ${action}`, async () => {
+      const updated = await sendFolderCommand(daemonConnectionSettings, { action, id: folder.id });
+      try {
+        await sendTransferCommand(daemonConnectionSettings, { action, folderID: folder.id });
+      } catch {
+        return { ...updated, message: `${updated.message ?? ''} In-progress transfers were not updated.`.trim() };
+      }
+      return updated;
+    });
+  }
+
+  async function rescanFolderRow(folder: DaemonFolder) {
+    await runFolderRow(folder, 'folder rescan', () => sendFolderCommand(daemonConnectionSettings, { action: 'rescan', id: folder.id }));
   }
 
   async function pauseOrResumeFolder(action: 'pause' | 'resume') {
@@ -1758,21 +1872,32 @@
     {/if}
     <div class="main-toolbar">
       <button type="button" data-testid="node-options" on:click={openNodeOptions}>Options</button>
+      <div class="actions-menu">
+        <button type="button" data-testid="add-peer-menu" aria-haspopup="menu" aria-expanded={addPeerMenuOpen ? 'true' : 'false'} on:click={toggleAddPeerMenu}>Add peer</button>
+        {#if addPeerMenuOpen}
+          <div class="actions-menu-panel" role="menu" aria-label="Add peer">
+            <button type="button" role="menuitem" data-testid="show-pairing-code" on:click={showPairingCodeFromMenu} disabled={pairingLoading}>Show pairing code</button>
+            <button type="button" role="menuitem" data-testid="link-peer-form" on:click={() => { linkPeerFormOpen = true; }}>Link with pairing code</button>
+            {#if linkPeerFormOpen}
+              <label>
+                Pairing code
+                <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
+              </label>
+              <button type="button" data-testid="redeem-pairing-code" on:click={redeemPairingCodeFromMenu} disabled={pairingLoading}>Link</button>
+            {/if}
+          </div>
+        {/if}
+      </div>
       <button type="button" class="theme-toggle" data-testid="theme-toggle" on:click={toggleTheme}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
     </div>
-    <section class="connection-card onboarding-panel" aria-label="Onboarding" data-testid="onboarding-panel">
-      <span class="eyebrow">Onboarding</span>
-      <h2>{selectedSidebarInstance?.label ?? 'This engine'}</h2>
+    {#if addPeerMenuOpen}
+      <button type="button" class="menu-backdrop" aria-label="Close add peer menu" on:click={closeAddPeerMenu}></button>
+    {/if}
+    <section class="onboarding-compact" aria-label="Onboarding" data-testid="onboarding-panel">
       <p data-testid="onboarding-state">{onboardingStateText(selectedSidebarInstance)}</p>
-      <button type="button" data-testid="show-pairing-code" on:click={showPairingCode} disabled={pairingLoading}>Show pairing code</button>
       {#if visiblePairingCode}
         <p data-testid="pairing-code">Pairing code {visiblePairingCode}. Enter this one code on the other engine. It works once and expires if unused. The other engine looks it up on the DHT.</p>
       {/if}
-      <label>
-        Remote pairing code
-        <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
-      </label>
-      <button type="button" data-testid="redeem-pairing-code" on:click={redeemRemotePairingCode} disabled={pairingLoading}>Link with pairing code</button>
       {#each onboardingCommands.filter((command) => command.targetInstanceId === selectedSidebarInstance?.instanceId && command.status === 'pending') as command (command.id)}
         <p data-testid="onboarding-pending">{command.action === 'accept' ? 'Accept' : 'Pairing code'} is relayed and waiting for {selectedSidebarInstance?.label} to run it online.</p>
       {/each}
@@ -1844,18 +1969,33 @@
         {:else if daemonFolders.length === 0}
           <p class="empty-state">No folders are configured.</p>
         {:else}
-          <ul class="folder-nav" aria-label="Configured folders">
-            {#each daemonFolders as folder}
-              <li>
-                <button type="button" class="peer-row" data-testid="folder-open" on:click={() => openFolderEditor(folder)}>
-                  <span class="peer-line">
-                    <span>{folder.id}</span>
-                    <small>{folder.enabled === false ? 'paused' : (folder.mode ?? 'sendrecv')}</small>
-                  </span>
+          <ul class="folder-list" aria-label="Configured folders">
+            {#each daemonFolders as folder (folder.id)}
+              <li class="folder-row">
+                <button type="button" class="folder-summary" data-testid="folder-expand" aria-expanded={expandedFolderIds[folder.id] ? 'true' : 'false'} on:click={() => toggleFolder(folder.id)}>
+                  <span class="folder-chevron" aria-hidden="true">{expandedFolderIds[folder.id] ? '▾' : '▸'}</span>
+                  <span class="folder-name">{folder.id}</span>
+                  <span class="folder-meta">{folderStatusText(folder)}</span>
+                  <span class="folder-meta" data-testid="folder-progress">{folderProgressText(folder)}</span>
+                  <span class="folder-meta" data-testid="folder-size">{folderSizeText(folder)}</span>
                 </button>
+                {#if expandedFolderIds[folder.id]}
+                  <div class="folder-details">
+                    <p>{folder.path || 'No path'}</p>
+                    <p>{folderModeLabel(folder.mode)} · {folderShareText(folder)}</p>
+                    <div class="lifecycle-actions">
+                      <button type="button" data-testid="folder-open" on:click={() => openFolderEditor(folder)}>Edit</button>
+                      <button type="button" data-testid="folder-row-pause" on:click={() => pauseOrResumeFolderRow(folder)} disabled={loading || !hasDaemonCredential}>{folder.enabled === false ? 'Resume' : 'Pause'}</button>
+                      <button type="button" data-testid="folder-rescan" on:click={() => rescanFolderRow(folder)} disabled={loading || !hasDaemonCredential}>Rescan</button>
+                    </div>
+                  </div>
+                {/if}
               </li>
             {/each}
           </ul>
+          {#if folderRowMessage}
+            <p class="operation-status" data-testid="folder-row-status">{folderRowMessage}</p>
+          {/if}
         {/if}
       </section>
     {/if}
@@ -2918,18 +3058,15 @@
   .connection-card, .host-scope-banner, .update-banner {
     width: min(52rem, 100%);
   }
-  .onboarding-panel {
+  .onboarding-compact {
     display: grid;
-    gap: 0.45rem;
-    padding: 0.75rem 0.9rem;
+    gap: 0.35rem;
+    width: min(52rem, 100%);
   }
-  .onboarding-panel h2 {
+  .onboarding-compact p {
     margin: 0;
-    font-size: 1.05rem;
-  }
-  .onboarding-panel p,
-  .onboarding-panel label {
-    margin: 0;
+    color: var(--muted);
+    font-size: 0.85rem;
   }
   .host-status-grid {
     display: grid;
@@ -2990,16 +3127,92 @@
     line-height: 1.2;
   }
   .main-toolbar {
+    position: relative;
+    z-index: 22;
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;
+    width: min(52rem, 100%);
   }
-  .folder-nav {
+  .actions-menu {
+    position: relative;
+  }
+  .menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    background: transparent;
+    border: 0;
+    padding: 0;
+  }
+  .actions-menu-panel {
+    position: absolute;
+    z-index: 21;
+    top: calc(100% + 0.25rem);
+    right: 0;
+    display: grid;
+    gap: 0.4rem;
+    min-width: 16rem;
+    padding: 0.55rem;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 0.45rem;
+  }
+  .actions-menu-panel label {
+    display: grid;
+    gap: 0.25rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .folder-list {
     list-style: none;
     margin: 0;
     padding: 0;
     display: grid;
-    gap: 0.35rem;
+    gap: 0.25rem;
+  }
+  .folder-row {
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    background: var(--surface);
+  }
+  .folder-summary {
+    display: grid;
+    grid-template-columns: 1rem minmax(0, 1.4fr) minmax(4.5rem, 0.7fr) minmax(5.5rem, 0.7fr) minmax(4rem, 0.6fr);
+    gap: 0.5rem;
+    align-items: baseline;
+    width: 100%;
+    padding: 0.35rem 0.55rem;
+    text-align: left;
+    background: transparent;
+    color: var(--text);
+    border: 0;
+  }
+  .folder-chevron,
+  .folder-meta {
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .folder-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .folder-meta {
+    white-space: nowrap;
+  }
+  .folder-details {
+    display: grid;
+    gap: 0.4rem;
+    padding: 0.35rem 0.55rem 0.55rem;
+    border-top: 1px solid var(--line);
+  }
+  .folder-details p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.85rem;
   }
   .folder-edit-view {
     width: min(52rem, 100%);

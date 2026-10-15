@@ -6,6 +6,7 @@ import (
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/configops"
+	"filesyncengine/internal/scancli"
 )
 
 // HandlePeerCommand applies an authenticated peer config command through the
@@ -73,6 +74,11 @@ func HandleFolderCommand(configPath string, req api.FolderCommandRequest) (api.F
 			return api.FolderCommandResponse{}, err
 		}
 		return api.FolderCommandResponse{Action: req.Action, ID: req.ID, Status: "accepted", Message: "folder resumed; daemon hot reload will adopt the config change"}, nil
+	case "rescan":
+		if _, err := scancli.RunConfigured(configPath, req.ID); err != nil {
+			return api.FolderCommandResponse{}, err
+		}
+		return api.FolderCommandResponse{Action: req.Action, ID: req.ID, Status: "accepted", Message: "folder rescan accepted"}, nil
 	default:
 		return api.FolderCommandResponse{}, fmt.Errorf("unsupported folder command action %q", req.Action)
 	}

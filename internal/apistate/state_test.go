@@ -67,8 +67,12 @@ func TestBuildStateProjectsConfigAndStoreDerivedStatus(t *testing.T) {
 	if apiState.Folders != 1 || len(apiState.FoldersState) != 1 {
 		t.Fatalf("folder counts not projected: %+v", apiState)
 	}
-	if apiState.FoldersState[0].ID != "docs" || apiState.FoldersState[0].Sync.DeferredDeletes != 1 || !apiState.FoldersState[0].Sync.MetadataCatchupPending {
-		t.Fatalf("folder state not projected: %+v", apiState.FoldersState[0])
+	folder := apiState.FoldersState[0]
+	if folder.ID != "docs" || folder.Sync.DeferredDeletes != 1 || !folder.Sync.MetadataCatchupPending {
+		t.Fatalf("folder state not projected: %+v", folder)
+	}
+	if folder.LocalBytes != 5 || folder.SyncPercent != 0 || folder.ProgressLabel != "0%" {
+		t.Fatalf("folder progress = %d %d %q", folder.LocalBytes, folder.SyncPercent, folder.ProgressLabel)
 	}
 	if apiState.Peers != 1 || len(apiState.PeersState) != 1 || apiState.PeersState[0].Endpoint != "manual:http://peer.local" || len(apiState.PeersState[0].Metadata.Folders) != 1 {
 		t.Fatalf("peer state not projected: %+v", apiState.PeersState)

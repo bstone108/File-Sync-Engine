@@ -596,16 +596,19 @@ type MeshSettingsCommandResponse struct {
 }
 
 type FolderState struct {
-	ID         string             `json:"id"`
-	Path       string             `json:"path"`
-	Mode       string             `json:"mode"`
-	Status     string             `json:"status"`
-	Enabled    bool               `json:"enabled"`
-	SharedWith []string           `json:"sharedWith,omitempty"`
-	Ignore     []string           `json:"ignore,omitempty"`
-	Index      FolderIndexState   `json:"index"`
-	Sync       FolderSyncState    `json:"sync"`
-	Warnings   FolderWarningState `json:"warnings"`
+	ID            string             `json:"id"`
+	Path          string             `json:"path"`
+	Mode          string             `json:"mode"`
+	Status        string             `json:"status"`
+	Enabled       bool               `json:"enabled"`
+	SharedWith    []string           `json:"sharedWith,omitempty"`
+	Ignore        []string           `json:"ignore,omitempty"`
+	LocalBytes    int64              `json:"localBytes"`
+	SyncPercent   int                `json:"syncPercent"`
+	ProgressLabel string             `json:"progressLabel"`
+	Index         FolderIndexState   `json:"index"`
+	Sync          FolderSyncState    `json:"sync"`
+	Warnings      FolderWarningState `json:"warnings"`
 }
 
 type FolderIndexState struct {

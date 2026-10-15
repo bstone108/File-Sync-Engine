@@ -26,6 +26,9 @@ export type DaemonFolder = {
   enabled?: boolean;
   sharedWith?: string[];
   ignore?: string[];
+  localBytes?: number;
+  syncPercent?: number;
+  progressLabel?: string;
   [key: string]: unknown;
 };
 export type DaemonPeer = {

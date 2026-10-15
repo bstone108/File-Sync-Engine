@@ -1,6 +1,7 @@
 package apistate
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -103,6 +104,14 @@ func BuildState(opts StateBuildOptions) api.State {
 		if warningState, err := FolderWarningState(opts.Store, folder.ID); err == nil {
 			folderState.Warnings = warningState
 		}
+		if manifests, err := opts.Store.ListManifests(folder.ID); err == nil {
+			for _, manifest := range manifests {
+				if manifest.Size > 0 {
+					folderState.LocalBytes += manifest.Size
+				}
+			}
+		}
+		folderState.SyncPercent, folderState.ProgressLabel = FolderProgress(enabled, folderState.Index, folderState.Sync, folderState.LocalBytes)
 		folders = append(folders, folderState)
 	}
 
@@ -136,6 +145,33 @@ func BuildState(opts StateBuildOptions) api.State {
 		FoldersState:        folders,
 		PeersState:          peers,
 	}
+}
+
+// FolderProgress summarizes a folder for a compact list row. Paused and
+// unscanned folders do not claim to be up to date. A percent is the share of
+// indexed files that are verified, not a fabricated byte-transfer gauge.
+func FolderProgress(enabled bool, index api.FolderIndexState, syncState api.FolderSyncState, localBytes int64) (int, string) {
+	if !enabled {
+		return 0, "Paused"
+	}
+	if index.TotalFiles == 0 && localBytes == 0 {
+		return 0, "Not scanned"
+	}
+	pending := index.UnknownFiles > 0 || index.UnverifiedSeedFiles > 0 || syncState.MetadataCatchupPending || syncState.DeferredDeletes > 0
+	if index.TotalFiles > 0 && index.VerifiedFiles == index.TotalFiles && !pending {
+		return 100, "Up to date"
+	}
+	if index.TotalFiles <= 0 {
+		return 0, "Syncing"
+	}
+	percent := index.VerifiedFiles * 100 / index.TotalFiles
+	if percent >= 100 {
+		percent = 99
+	}
+	if percent < 0 {
+		percent = 0
+	}
+	return percent, fmt.Sprintf("%d%%", percent)
 }
 
 // BuildPeerState projects one configured peer into the daemon API state.
