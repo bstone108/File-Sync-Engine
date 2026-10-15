@@ -244,6 +244,7 @@ func dockerProxyRoutes() []proxyRoute {
 		{BrowserPath: "/api/v1/config-sync", NativePath: "/v1/config-sync", Methods: get},
 		{BrowserPath: "/api/v1/config-sync/edit", NativePath: "/v1/config-sync/edit", Methods: post},
 		{BrowserPath: "/api/v1/config-sync/merge", NativePath: "/v1/config-sync/merge", Methods: post},
+		{BrowserPath: "/api/v1/onboarding", NativePath: "/v1/onboarding", Methods: post},
 		{BrowserPath: "/api/v1/snapshots", NativePath: "/v1/snapshots", Methods: post},
 		{BrowserPath: "/api/v1/restore-plans", NativePath: "/v1/restore-plans", Methods: post},
 		{BrowserPath: "/api/v1/restores", NativePath: "/v1/restores", Methods: post},

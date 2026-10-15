@@ -497,6 +497,9 @@ func registerStoreBackedAPIHandlers(server *api.Server, cfg config.Config, confi
 	server.SetConfigSyncMergeHandler(func(_ context.Context, raw json.RawMessage) (any, error) {
 		return apicontrol.HandleConfigSyncMerge(configPath, raw)
 	})
+	server.SetOnboardingHandler(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		return apicontrol.HandleOnboarding(ctx, configPath, raw)
+	})
 }
 
 type peerPull = peerpullplan.Pull

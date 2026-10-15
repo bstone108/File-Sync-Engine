@@ -163,15 +163,17 @@ async function showDefaultPairingCode(page, service) {
   expect(peers).toEqual(['/dnsaddr/bootstrap.libp2p.io']);
   expect(cfg.discovery && cfg.discovery.dht).toBe(true);
   expect(raw).not.toMatch(/"dht": false/);
-  await openNodeOptions(page);
-  await page.getByTestId('nav-peers').click();
+  const close = page.getByTestId('node-options-close');
+  if (await close.isVisible().catch(() => false)) {
+    await close.click();
+  }
   const posts = [];
   page.on('request', (request) => {
-    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/pair-code') {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/onboarding') {
       posts.push(request.url());
     }
   });
-  await page.getByTestId('show-pairing-code').click();
+  await clickClearOfSidebar(page.getByTestId('show-pairing-code'));
   await expect.poll(() => posts.length, { timeout: 15000 }).toBeGreaterThan(0);
   const code = page.getByTestId('pairing-code');
   await expect.poll(async () => {
@@ -188,15 +190,18 @@ async function showDefaultPairingCode(page, service) {
 }
 
 async function redeemPairingCode(page, code) {
-  await page.getByTestId('nav-peers').click();
+  const close = page.getByTestId('node-options-close');
+  if (await close.isVisible().catch(() => false)) {
+    await close.click();
+  }
   await page.getByTestId('pairing-code-input').fill(code);
   const posts = [];
   page.on('request', (request) => {
-    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/pair-code/redeem') {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/onboarding') {
       posts.push(request.url());
     }
   });
-  await page.getByTestId('redeem-pairing-code').click();
+  await clickClearOfSidebar(page.getByTestId('redeem-pairing-code'));
   await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(0);
   await expect(page.getByTestId('pairing-message')).toContainText(/paired by code/i);
   await page.getByTestId('redeem-pairing-code').click();

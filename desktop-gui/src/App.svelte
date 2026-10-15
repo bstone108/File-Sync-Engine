@@ -15,8 +15,7 @@
     fetchRemoteMeshSettings,
     generateIdentityPairingPackage,
     importIdentityPairingPackage,
-    issuePairingCode,
-    redeemPairingCode,
+    queueOnboarding,
     patchDaemonConfig,
     pinActiveAPICertificate,
     queueConfigSyncEdit,
@@ -199,6 +198,7 @@
   let pairingImportSummary = '';
   let pairingMessage = '';
   let pairingCode = '';
+  let onboardingCommands: Array<{ id: string; targetInstanceId: string; action: string; code?: string; expiresAt?: string; status: string; message?: string }> = [];
   let remotePairingCode = '';
   let animatedPairingScanState = createAnimatedPairingScanState();
   let animatedScanProgress: AnimatedPairingScanProgress = animatedPairingScanState.progress;
@@ -833,16 +833,53 @@
     }
   }
 
+  function applyOnboardingView(view: { instances?: typeof configInstances; onboarding?: typeof onboardingCommands }) {
+    if (view.instances) {
+      configInstances = view.instances;
+    }
+    if (view.onboarding) {
+      onboardingCommands = view.onboarding;
+    }
+  }
+
+  function onboardingStateText(instance: { label: string; local: boolean; online: boolean } | undefined): string {
+    if (!instance) {
+      return 'Select an instance. That peer issues and accepts the one-time pairing code.';
+    }
+    if (instance.local) {
+      return `${instance.label} performs onboarding on this engine. It generates the one-time pairing code and accepts a new device now.`;
+    }
+    if (instance.online) {
+      return `${instance.label} performs onboarding. This engine relays the pairing code and the accept over the mesh, and ${instance.label} runs them while it is online.`;
+    }
+    return `${instance.label} is offline. This engine relays onboarding over the mesh. ${instance.label} generates the pairing code and accepts the new device when it is online.`;
+  }
+
   async function showPairingCode() {
+    const target = selectedSidebarInstance;
     if (pairingLoading) {
+      return;
+    }
+    if (!target || target.instanceId === 'local') {
+      pairingMessage = 'Wait for the linked instances to load, then choose the peer that should issue the code.';
       return;
     }
     pairingLoading = true;
     pairingMessage = 'Requesting a pairing code from this engine…';
     try {
-      const issued = await issuePairingCode(daemonConnectionSettings);
-      pairingCode = issued.code;
-      pairingMessage = `Pairing code ${issued.code} is ready. It expires at ${issued.expiresAt} and can be used once.`;
+      const response = await queueOnboarding(daemonConnectionSettings, { targetInstanceId: target.instanceId, action: 'issue' });
+      applyOnboardingView(response);
+      const command = response.command;
+      if (command?.status === 'done' && command.code) {
+        pairingCode = command.code;
+        pairingMessage = `Pairing code ${command.code} is ready. It expires at ${command.expiresAt ?? 'the configured time'} and can be used once.`;
+      } else if (command?.status === 'pending') {
+        pairingCode = '';
+        pairingMessage = `Queued for ${target.label}. This engine relays it over the mesh. ${target.label} generates the pairing code when it is online.`;
+      } else {
+        pairingCode = '';
+        pairingMessage = command?.message || `Onboarding did not finish on ${target.label}.`;
+      }
     } catch (error) {
       pairingMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -851,15 +888,31 @@
   }
 
   async function redeemRemotePairingCode() {
+    const target = selectedSidebarInstance;
     if (pairingLoading) {
+      return;
+    }
+    if (!target || target.instanceId === 'local') {
+      pairingMessage = 'Wait for the linked instances to load, then choose the peer that should accept the new device.';
       return;
     }
     pairingLoading = true;
     pairingMessage = 'Linking with that pairing code…';
     try {
-      const response = await redeemPairingCode(daemonConnectionSettings, remotePairingCode);
-      const addresses = (response.addresses ?? []).map((address) => address.address).join(', ');
-      pairingMessage = `${response.message ?? 'Paired by code'}${addresses ? `. Reconnect addresses: ${addresses}` : ''}`;
+      const response = await queueOnboarding(daemonConnectionSettings, {
+        targetInstanceId: target.instanceId,
+        action: 'accept',
+        code: remotePairingCode
+      });
+      applyOnboardingView(response);
+      const command = response.command;
+      if (command?.status === 'done') {
+        pairingMessage = command.message || 'paired by code';
+      } else if (command?.status === 'pending') {
+        pairingMessage = `Queued for ${target.label}. This engine relays the accept over the mesh. ${target.label} links the new device when it is online.`;
+      } else {
+        pairingMessage = command?.message || `Onboarding did not finish on ${target.label}.`;
+      }
     } catch (error) {
       pairingMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -1048,6 +1101,7 @@
     try {
       const view = await fetchConfigSync(daemonConnectionSettings);
       configInstances = view.instances ?? [];
+      onboardingCommands = view.onboarding ?? [];
       if (!configInstanceTouched) {
         selectedConfigInstanceId = view.localInstanceId;
       }
@@ -1062,6 +1116,8 @@
     }
     configInstanceTouched = true;
     selectedConfigInstanceId = instanceId;
+    pairingCode = '';
+    pairingMessage = '';
     if (folderEditor) {
       folderEditor = null;
     }
@@ -1088,6 +1144,11 @@
     selected: selectedConfigInstanceId ? selectedConfigInstanceId === instance.instanceId : instance.local
   }));
   $: selectedSidebarInstance = sidebarInstances.find((instance) => instance.selected) ?? sidebarInstances[0];
+  $: visiblePairingCode = pairingCode || onboardingCommands.reduce((found, command) => (
+    command.targetInstanceId === selectedSidebarInstance?.instanceId && command.action === 'issue' && command.status === 'done' && command.code
+      ? command.code
+      : found
+  ), '');
 
   function toggleTheme() {
     theme = theme === 'dark' ? 'light' : 'dark';
@@ -1699,6 +1760,26 @@
       <button type="button" data-testid="node-options" on:click={openNodeOptions}>Options</button>
       <button type="button" class="theme-toggle" data-testid="theme-toggle" on:click={toggleTheme}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
     </div>
+    <section class="connection-card onboarding-panel" aria-label="Onboarding" data-testid="onboarding-panel">
+      <span class="eyebrow">Onboarding</span>
+      <h2>{selectedSidebarInstance?.label ?? 'This engine'}</h2>
+      <p data-testid="onboarding-state">{onboardingStateText(selectedSidebarInstance)}</p>
+      <button type="button" data-testid="show-pairing-code" on:click={showPairingCode} disabled={pairingLoading}>Show pairing code</button>
+      {#if visiblePairingCode}
+        <p data-testid="pairing-code">Pairing code {visiblePairingCode}. Enter this one code on the other engine. It works once and expires if unused. The other engine looks it up on the DHT.</p>
+      {/if}
+      <label>
+        Remote pairing code
+        <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
+      </label>
+      <button type="button" data-testid="redeem-pairing-code" on:click={redeemRemotePairingCode} disabled={pairingLoading}>Link with pairing code</button>
+      {#each onboardingCommands.filter((command) => command.targetInstanceId === selectedSidebarInstance?.instanceId && command.status === 'pending') as command (command.id)}
+        <p data-testid="onboarding-pending">{command.action === 'accept' ? 'Accept' : 'Pairing code'} is relayed and waiting for {selectedSidebarInstance?.label} to run it online.</p>
+      {/each}
+      {#if pairingMessage && !nodeOptionsOpen}
+        <p data-testid="pairing-message">{pairingMessage}</p>
+      {/if}
+    </section>
     {#if folderEditor}
       <form class="control-form folder-edit-view" data-testid="folder-editor" aria-label="Folder editor" on:submit|preventDefault={saveFolderEditor}>
         <span class="eyebrow">Folder</span>
@@ -2327,20 +2408,8 @@
       <section class="connection-card">
         <h2>Identity pairing export/import</h2>
         <p>
-          This GUI is connected to the local engine automatically. Link a remote engine with a short pairing code or by pasting its pairing package. After either method, the engines store every reachable address, DHT identity, relay, and certificate pin, and fail over if the first address dies.
+          This GUI is connected to the local engine automatically. The instance selected in the list issues and accepts the one-time pairing code from the main panel. A remote or offline selection is relayed over the mesh and runs when that instance is online. Identity packages below are imported and exported by this engine. After either method, the engines store every reachable address, DHT identity, relay, and certificate pin, and fail over if the first address dies.
         </p>
-        <button type="button" data-testid="show-pairing-code" disabled={pairingLoading}>Show pairing code</button>
-        {#if pairingCode}
-          <p data-testid="pairing-code">Pairing code {pairingCode}. Enter this one code on the other engine. It works once and expires if unused. The other engine looks it up on the DHT.</p>
-        {/if}
-        <label>
-          Remote pairing code
-          <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
-        </label>
-        <button type="button" data-testid="redeem-pairing-code" disabled={pairingLoading}>Link with pairing code</button>
-        {#if pairingMessage}
-          <p data-testid="pairing-message" class:pairing-error={pairingLooksFailed(pairingMessage)} role={pairingLooksFailed(pairingMessage) ? 'alert' : 'status'}>{pairingMessage}</p>
-        {/if}
         <p data-testid="pairing-advertise-url">
           This local engine advertises {status?.advertiseURL || 'its reachable API URL'}. Other engines use that address from the pairing package. You do not enter this engine's URL.
         </p>
@@ -2407,6 +2476,9 @@
         <p>Import uses daemon-owned import execution over the authenticated encrypted API and returns only redacted peer-pair identifiers.</p>
         {#if pairingImportSummary}
           <p class="success">{pairingImportSummary}</p>
+        {/if}
+        {#if pairingMessage && nodeOptionsOpen}
+          <p data-testid="pairing-message" class:pairing-error={pairingLooksFailed(pairingMessage)} role={pairingLooksFailed(pairingMessage) ? 'alert' : 'status'}>{pairingMessage}</p>
         {/if}
       </section>
     {/if}
@@ -2845,6 +2917,19 @@
   }
   .connection-card, .host-scope-banner, .update-banner {
     width: min(52rem, 100%);
+  }
+  .onboarding-panel {
+    display: grid;
+    gap: 0.45rem;
+    padding: 0.75rem 0.9rem;
+  }
+  .onboarding-panel h2 {
+    margin: 0;
+    font-size: 1.05rem;
+  }
+  .onboarding-panel p,
+  .onboarding-panel label {
+    margin: 0;
   }
   .host-status-grid {
     display: grid;
