@@ -252,6 +252,8 @@ jobs:
           checksum="$(sha256sum web-gui/dist/fse-web-container-default.zip | awk '{ print $1 }')"
           export FSE_WEB_GUI_CHECKSUM="$checksum"
           export FSE_WEB_GUI_PACKAGE_HOST_PATH="$PWD/web-gui/dist/fse-web-container-default.zip"
+          printf 'FSE_WEB_GUI_CHECKSUM=%s\n' "$checksum" >> "$GITHUB_ENV"
+          printf 'FSE_WEB_GUI_PACKAGE_HOST_PATH=%s\n' "$PWD/web-gui/dist/fse-web-container-default.zip" >> "$GITHUB_ENV"
           docker compose -f e2e/gui-sync/compose.yaml up -d
           (cd e2e/gui-sync && npm install && npx playwright install --with-deps chromium && npx playwright test)
       - name: Collect container logs

@@ -2028,6 +2028,21 @@ func (s *Server) findFolder(id string) (FolderState, bool) {
 			return folder, true
 		}
 	}
+	// GUI edits land in the config file immediately. The in-memory folder list
+	// waits out the hot-reload quiet period, so file and journal reads fall
+	// back to the saved config instead of reporting an unknown folder.
+	if state.ConfigPath == "" || strings.TrimSpace(id) == "" {
+		return FolderState{}, false
+	}
+	cfg, err := config.LoadFile(state.ConfigPath)
+	if err != nil {
+		return FolderState{}, false
+	}
+	for _, folder := range cfg.Folders {
+		if folder.ID == id && folder.Path != "" {
+			return FolderState{ID: folder.ID, Path: folder.Path, Mode: string(folder.Mode)}, true
+		}
+	}
 	return FolderState{}, false
 }
 
