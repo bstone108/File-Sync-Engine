@@ -13,6 +13,8 @@
     fetchRemoteMeshSettings,
     generateIdentityPairingPackage,
     importIdentityPairingPackage,
+    issuePairingCode,
+    redeemPairingCode,
     patchDaemonConfig,
     pinActiveAPICertificate,
     queueRemoteMeshSettingsCommand,
@@ -157,6 +159,9 @@
   const primaryIdentityPackageID = 'primary';
   const pairingGroupID = primaryIdentityPackageID;
   let advertiseOverride = '';
+  let advertiseFieldDirty = false;
+  let localEngineConnectionState: ManagedDaemonInstance['connectionState'] = 'offline';
+  let localEngineConnectionLabel = 'Offline';
   let pairingPackage: IdentityPairingPackage | null = null;
   let pairingExportText = '';
   let pairingDownloadFilename = '';
@@ -167,6 +172,8 @@
   let parsedPairingImport: IdentityPairingPackage | null = null;
   let pairingImportSummary = '';
   let pairingMessage = '';
+  let pairingCode = '';
+  let remotePairingCode = '';
   let animatedPairingScanState = createAnimatedPairingScanState();
   let animatedScanProgress: AnimatedPairingScanProgress = animatedPairingScanState.progress;
   let desktopAnimatedPairingScannerScreen: DesktopAnimatedPairingScannerScreenModel = buildDesktopAnimatedPairingScannerScreen(
@@ -561,6 +568,11 @@
         fetchDaemonPeers(daemonConnectionSettings)
       ]);
       const liveName = status?.nodeName || 'Local engine';
+      localEngineConnectionState = 'online';
+      localEngineConnectionLabel = 'Online';
+      if (!advertiseFieldDirty) {
+        advertiseOverride = status?.advertiseURL ?? '';
+      }
       managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
         ...instance,
         connectionState: 'online',
@@ -568,6 +580,8 @@
       } : instance);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      localEngineConnectionState = 'failed';
+      localEngineConnectionLabel = 'Failed';
       managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
         ...instance,
         connectionState: 'failed',
@@ -644,10 +658,11 @@
     if (!apiTrustStatus) {
       return 'API certificate trust status has not been fetched for the selected host.';
     }
-    const fingerprint = apiTrustStatus.certificateSha256 ?? 'none';
-    const trusted = apiTrustStatus.trustedCertificateConfigured ? 'trusted fingerprint configured' : 'no trusted fingerprint configured';
-    const match = apiTrustStatus.trustedCertificateMatches ? 'trustedCertificateMatches=true' : 'trustedCertificateMatches=false';
-    return `mode=${apiTrustStatus.mode}; tlsRequired=${apiTrustStatus.tlsRequired}; certificateSha256=${fingerprint}; ${trusted}; ${match}`;
+    const fingerprint = apiTrustStatus.certificateSha256 ?? 'not available';
+    const trusted = apiTrustStatus.trustedCertificateConfigured ? 'A trusted fingerprint is configured.' : 'No trusted fingerprint is configured.';
+    const match = apiTrustStatus.trustedCertificateMatches ? 'The trusted certificate matches.' : 'The trusted certificate does not match.';
+    const tls = apiTrustStatus.tlsRequired ? 'yes' : 'no';
+    return `Mode ${apiTrustStatus.mode}. TLS required: ${tls}. Certificate fingerprint: ${fingerprint}. ${trusted} ${match}`;
   }
 
   function requireNonEmpty(value: string, label: string): string {
@@ -704,6 +719,7 @@
     pairingLoading = true;
     pairingMessage = '';
     try {
+      await adoptBrowserReachableURL();
       pairingPackage = await generateIdentityPairingPackage(daemonConnectionSettings, pairingGroupID);
       pairingExportText = exportIdentityPackageAsCopyableText(pairingPackage);
       const download = buildIdentityPackageDownload(pairingPackage);
@@ -740,14 +756,45 @@
     }
   }
 
+  async function showPairingCode() {
+    pairingLoading = true;
+    try {
+      const issued = await issuePairingCode(daemonConnectionSettings);
+      pairingCode = issued.code;
+      pairingMessage = `Pairing code ${issued.code} is ready. It expires at ${issued.expiresAt} and can be used once.`;
+    } catch (error) {
+      pairingMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      pairingLoading = false;
+    }
+  }
+
+  async function redeemRemotePairingCode() {
+    pairingLoading = true;
+    try {
+      const response = await redeemPairingCode(daemonConnectionSettings, remotePairingCode);
+      const addresses = (response.addresses ?? []).map((address) => address.address).join(', ');
+      pairingMessage = `${response.message ?? 'Paired by code'}${addresses ? `. Reconnect addresses: ${addresses}` : ''}`;
+    } catch (error) {
+      pairingMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      pairingLoading = false;
+    }
+  }
+
   async function importParsedPairingPackage() {
     pairingLoading = true;
     try {
       const imported = parsedPairingImport ?? parseImportedIdentityPackageText(pairingImportText);
       parsedPairingImport = imported;
       const response = await importIdentityPairingPackage(daemonConnectionSettings, imported);
-      pairingImportSummary = `Imported identity package for group ${response.groupId} from ${response.remoteDiscoveryId}; peer-pair key ${response.keyId ?? 'pending'} prepared at level ${response.peerPairEncryptionLevel}.`;
-      pairingMessage = response.message ?? 'Identity package import accepted by daemon-owned import execution.';
+      if ((response.message ?? '').includes('already paired with this engine')) {
+        pairingImportSummary = '';
+        pairingMessage = response.message ?? 'already paired with this engine';
+      } else {
+        pairingImportSummary = `Imported identity package for group ${response.groupId} from ${response.remoteDiscoveryId}; peer-pair key ${response.keyId ?? 'pending'} prepared at level ${response.peerPairEncryptionLevel}.`;
+        pairingMessage = response.message ?? 'Identity package import accepted by daemon-owned import execution.';
+      }
     } catch (error) {
       pairingMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -782,10 +829,57 @@
     publishOperationStatusText(area, state);
   }
 
+  function containerInternalHost(host: string): boolean {
+    const match = host.match(/^172\.(\d+)\./);
+    if (!match) {
+      return false;
+    }
+    const second = Number(match[1]);
+    return second >= 17 && second <= 31;
+  }
+
+  function browserHostAdvertiseURL(apiPort: string): string {
+    if (typeof location === 'undefined') {
+      return '';
+    }
+    const host = location.hostname;
+    if (!host || host === 'localhost' || host === '127.0.0.1' || host === '::1' || containerInternalHost(host)) {
+      return '';
+    }
+    const bracketed = host.includes(':') ? `[${host}]` : host;
+    return `https://${bracketed}:${apiPort}`;
+  }
+
+  function publishedAPIPort(): string {
+    if (status?.publishedAPIPort && status.publishedAPIPort > 0) {
+      return String(status.publishedAPIPort);
+    }
+    const listen = status?.apiListen ?? '';
+    const match = listen.match(/:(\d+)$/);
+    return match?.[1] || '22420';
+  }
+
+  async function adoptBrowserReachableURL() {
+    if (!dockerGUI) {
+      return;
+    }
+    const current = status?.advertiseURL ?? '';
+    if (current && !containerInternalHost(current.replace(/^https?:\/\//, '').replace(/:\d+$/, '').replace(/^\[|\]$/g, ''))) {
+      return;
+    }
+    const candidate = browserHostAdvertiseURL(publishedAPIPort());
+    if (!candidate || candidate === current) {
+      return;
+    }
+    await patchDaemonConfig(daemonConnectionSettings, { api: { advertiseURL: candidate } });
+    advertiseFieldDirty = false;
+    await refreshOperationalState();
+  }
+
   async function saveAdvertiseOverride() {
     const value = advertiseOverride.trim();
     await runControlCommand('config', 'advertise URL', async () => patchDaemonConfig(daemonConnectionSettings, { api: { advertiseURL: value } }));
-    advertiseOverride = '';
+    advertiseFieldDirty = false;
     await refreshOperationalState();
   }
 
@@ -1267,10 +1361,11 @@
   onMount(() => {
     if (dockerGUI) {
       localCredentialRef = 'same-origin';
+      const tick = () => refreshOperationalState().catch(() => undefined);
+      void tick().then(() => adoptBrowserReachableURL().catch(() => undefined));
       const timer = setInterval(() => {
-        void refreshOperationalState();
+        void tick();
       }, 3000);
-      void refreshOperationalState();
       return () => clearInterval(timer);
     }
     void (async () => {
@@ -1320,7 +1415,7 @@
                   on:click={() => selectManagedInstance(instance.id)}
                 >
                   <span>{instance.label}</span>
-                  <strong class="connection-state" data-state={instance.connectionState}>{formatConnectionStateLabel(instance.connectionState)}</strong>
+                  <strong class="connection-state" data-state={instance.kind === 'local' ? localEngineConnectionState : instance.connectionState} data-testid={instance.kind === 'local' ? 'local-engine-connection' : undefined}>{instance.kind === 'local' ? localEngineConnectionLabel : formatConnectionStateLabel(instance.connectionState)}</strong>
                   <small>{instance.apiBaseURL}</small>
                   <p class="peer-pairing-status" aria-label="Peer pairing/negotiation status">
                     <strong>Peer pairing/negotiation status</strong>: {buildPeerPairingStatusLine(instance)}
@@ -1394,7 +1489,7 @@
         </div>
         <div>
           <dt>Connection</dt>
-          <dd>{formatConnectionStateLabel(selectedHostContext.connectionState)}</dd>
+          <dd>{selectedManagedInstance.kind === 'local' ? localEngineConnectionLabel : formatConnectionStateLabel(selectedHostContext.connectionState)}</dd>
         </div>
       </dl>
     </section>
@@ -1653,9 +1748,9 @@
       <p>{apiTrustStatusSummary()}</p>
       {#if apiTrustStatus}
         <dl class="host-status-grid" aria-label="API certificate trust details">
-          <dt>certificateSha256</dt>
+          <dt>Certificate fingerprint</dt>
           <dd>{apiTrustStatus.certificateSha256 ?? 'not available'}</dd>
-          <dt>trustedCertificateMatches</dt>
+          <dt>Trusted certificate matches</dt>
           <dd>{apiTrustStatus.trustedCertificateMatches ? 'yes' : 'no'}</dd>
           <dt>TLS required</dt>
           <dd>{apiTrustStatus.tlsRequired ? 'yes' : 'no'}</dd>
@@ -1851,17 +1946,26 @@
       <section class="connection-card">
         <h2>Identity pairing export/import</h2>
         <p>
-          This GUI is connected to the local engine automatically. Paste only the remote engine's pairing package. The package still contains identity secret material, so it is never written to logs or generic status events.
+          This GUI is connected to the local engine automatically. Link a remote engine with a short pairing code or by pasting its pairing package. After either method, the engines store every reachable address, DHT identity, relay, and certificate pin, and fail over if the first address dies.
         </p>
+        <button type="button" data-testid="show-pairing-code" on:click={showPairingCode} disabled={pairingLoading}>Show pairing code</button>
+        {#if pairingCode}
+          <p data-testid="pairing-code">Pairing code {pairingCode}. It expires quickly and works once. The other engine looks it up on the DHT.</p>
+        {/if}
+        <label>
+          Remote pairing code
+          <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH" />
+        </label>
+        <button type="button" data-testid="redeem-pairing-code" on:click={redeemRemotePairingCode} disabled={pairingLoading}>Link with pairing code</button>
         <p data-testid="pairing-advertise-url">
           This local engine advertises {status?.advertiseURL || 'its reachable API URL'}. Other engines use that address from the pairing package. You do not enter this engine's URL.
         </p>
         <details data-testid="pairing-advertise-advanced">
           <summary>Advanced: override advertised API URL</summary>
-          <p>Use this only when auto-detection picked an address other engines cannot reach. FSE_ADVERTISE_URL at install does the same thing. Pairing does not ask for the local URL.</p>
+          <p>The field starts with the address this engine will advertise. Docker bridge addresses are never used. FSE_ADVERTISE_URL or FSE_ADVERTISE_URLS at install does the same thing. Pairing does not ask for the local URL.</p>
           <label>
-            Advertised API URL override
-            <input data-testid="pairing-advertise-override" bind:value={advertiseOverride} autocomplete="off" placeholder="https://lan-host:22420" />
+            Advertised API URL
+            <input data-testid="pairing-advertise-override" bind:value={advertiseOverride} on:input={() => { advertiseFieldDirty = true; }} autocomplete="off" placeholder="https://lan-host:22420" />
           </label>
           <button type="button" on:click={saveAdvertiseOverride} disabled={loading || !hasDaemonCredential}>Save advertised URL</button>
         </details>

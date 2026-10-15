@@ -7,6 +7,8 @@ export type DaemonStatus = {
   nodeName?: string;
   identityPublicKey?: string;
   advertiseURL?: string;
+  apiListen?: string;
+  publishedAPIPort?: number;
   engineSchemaVersion?: number;
   startedAt?: string;
   status?: string;
@@ -288,6 +290,34 @@ export async function generateIdentityPairingPackage(
   return await daemonAPIRequest<IdentityPairingPackage>(settings, '/v1/identity-package', {
     method: 'POST',
     body: jsonBody({ groupId: groupID, reachableAPIURL: reachableAPIURL || undefined })
+  });
+}
+
+export type PairingCodeResponse = { code: string; expiresAt: string };
+export type PairingCodeRedeemResponse = {
+  status: string;
+  message?: string;
+  remoteDiscoveryId?: string;
+  dhtPeerId?: string;
+  certificateSha256?: string;
+  addresses?: Array<{ kind: string; address: string; networkHint?: string }>;
+  relays?: string[];
+};
+
+export async function issuePairingCode(settings: DaemonConnectionSettings): Promise<PairingCodeResponse> {
+  return await daemonAPIRequest<PairingCodeResponse>(settings, '/v1/pair-code', {
+    method: 'POST',
+    body: jsonBody({})
+  });
+}
+
+export async function redeemPairingCode(
+  settings: DaemonConnectionSettings,
+  code: string
+): Promise<PairingCodeRedeemResponse> {
+  return await daemonAPIRequest<PairingCodeRedeemResponse>(settings, '/v1/pair-code/redeem', {
+    method: 'POST',
+    body: jsonBody({ code })
   });
 }
 

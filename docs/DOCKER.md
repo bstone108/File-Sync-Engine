@@ -86,7 +86,9 @@ Secrets are generated inside `/config/config.jsonc` and are not logged by the en
 | `FSE_DISCOVERY_LOCAL` | `true` | Initial local discovery switch. |
 | `FSE_DISCOVERY_DHT` | `false` | Initial public-DHT discovery switch. |
 | `FSE_NODE_NAME` | unset | Node name written on first config creation. |
-| `FSE_ADVERTISE_URL` | unset | Reachable API URL other engines use, such as `https://192.168.1.20:22420`. When unset, the engine detects a non-loopback address and stores it as `api.advertiseURL`. The GUI pairs with the local engine and does not ask for this URL. | 
+| `FSE_ADVERTISE_URL` | unset | Reachable API URL other engines use, such as `https://192.168.1.20:22420`. When unset, the engine detects a host-reachable address and stores it as `api.advertiseURL`. Docker bridge addresses are never used. The GUI prefills this URL and does not ask for it during pairing. |
+| `FSE_ADVERTISE_URLS` | unset | Extra reachable API URLs, comma-separated. The first usable URL is chosen when `FSE_ADVERTISE_URL` is empty. Bridge addresses in the list are ignored. |
+| `FSE_PUBLISHED_API_PORT` | unset | Host port published for the API, usually `22420`. The web GUI combines it with the host name used to open the console when the container cannot see a LAN or Tailscale address. | 
 | `FSE_WEB_GUI_ENABLED` | `false` | Opt in to the web GUI on every start. Unset or `false` disables the GUI listener. |
 | `FSE_WEB_GUI_VERSION` | unset | Explicit version of the separately delivered web-GUI package; required with every other web-GUI delivery field when opt-in is enabled. |
 | `FSE_WEB_GUI_PACKAGE` | unset | Absolute path of a separately mounted trusted GUI package; required with its version and checksum when the GUI is enabled. |
@@ -145,7 +147,7 @@ do not overwrite an existing `/config/config.jsonc`.
 
 ## Container networking diagnostics
 
-The daemon classifies Docker bridge/NAT ranges (`172.17.0.0/16` through `172.31.0.0/16`) as `container_bridge`, not true LAN, unless a deployment supplies precise hints. `/v1/status` reports `container_bridge_isolated` guidance for configured peers that are visible only through such endpoints. Use published ports, exact `discovery.networkHints.publishedPortMappings`, `localContainerGatewayIPs`, `localCIDRs`, or trusted sidecar/helper observations only when the topology is known.
+The daemon classifies Docker bridge/NAT ranges (`172.17.0.0/16` through `172.31.0.0/16`) as `container_bridge`, not true LAN, unless a deployment supplies precise hints. Those addresses are never stored as `api.advertiseURL` and are left out of pairing packages and reconnect profiles. `/v1/status` reports `container_bridge_isolated` guidance for configured peers that are visible only through such endpoints. Use `FSE_ADVERTISE_URL`, `FSE_ADVERTISE_URLS`, published ports, exact `discovery.networkHints.publishedPortMappings`, `localContainerGatewayIPs`, `localCIDRs`, or trusted sidecar/helper observations only when the topology is known. When the web GUI is opened on a host-reachable address, it adopts `https://that-host:$FSE_PUBLISHED_API_PORT` if the engine has not already chosen one.
 
 ## NAS/Unraid permissions
 

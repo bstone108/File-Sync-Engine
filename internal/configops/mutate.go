@@ -180,6 +180,12 @@ func UpsertPairedPeer(path string, peer config.PeerConfig) error {
 			cfg.Peers[i].APIKey = peer.APIKey
 			cfg.Peers[i].APICertificateSHA256 = peer.APICertificateSHA256
 			cfg.Peers[i].IdentityPublicKey = peer.IdentityPublicKey
+			if peer.DHTPeerID != "" {
+				cfg.Peers[i].DHTPeerID = peer.DHTPeerID
+			}
+			if len(peer.Relays) > 0 {
+				cfg.Peers[i].Relays = peer.Relays
+			}
 			if len(peer.Endpoints) > 0 {
 				cfg.Peers[i].Endpoints = peer.Endpoints
 			}
@@ -203,6 +209,60 @@ func UpsertPairedPeer(path string, peer config.PeerConfig) error {
 		return err
 	}
 	return save(path, cfg)
+}
+
+// MergePairedPeerLink adds newly observed addresses, relays, and the DHT
+// identity without removing addresses that still work.
+func MergePairedPeerLink(path, peerID string, peer config.PeerConfig) error {
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return err
+	}
+	for i := range cfg.Peers {
+		if cfg.Peers[i].ID != peerID && (peer.IdentityPublicKey == "" || cfg.Peers[i].IdentityPublicKey != peer.IdentityPublicKey) {
+			continue
+		}
+		if peer.DHTPeerID != "" {
+			cfg.Peers[i].DHTPeerID = peer.DHTPeerID
+		}
+		cfg.Peers[i].Relays = unionStrings(cfg.Peers[i].Relays, peer.Relays)
+		seen := map[string]struct{}{}
+		for _, endpoint := range cfg.Peers[i].Endpoints {
+			seen[endpoint.Address] = struct{}{}
+		}
+		for _, endpoint := range peer.Endpoints {
+			if endpoint.Address == "" {
+				continue
+			}
+			if _, ok := seen[endpoint.Address]; ok {
+				continue
+			}
+			seen[endpoint.Address] = struct{}{}
+			cfg.Peers[i].Endpoints = append(cfg.Peers[i].Endpoints, endpoint)
+		}
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		return save(path, cfg)
+	}
+	return fmt.Errorf("peer %q not found", peerID)
+}
+
+func unionStrings(left, right []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(left)+len(right))
+	for _, value := range append(append([]string{}, left...), right...) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func sanitizePeerID(id string) string {

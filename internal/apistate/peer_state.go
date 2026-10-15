@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/backup"
 	"filesyncengine/internal/config"
@@ -106,6 +107,8 @@ func BuildState(opts StateBuildOptions) api.State {
 		EngineSchemaVersion: schemaversion.Engine,
 		IdentityPublicKey:   opts.Config.Identity.PublicKey,
 		AdvertiseURL:        opts.Config.API.AdvertiseURL,
+		APIListen:           opts.Config.API.Listen,
+		PublishedAPIPort:    advertise.PublishedAPIPort(),
 		StartedAt:           startedAt,
 		ConfigPath:          opts.ConfigPath,
 		Folders:             len(opts.Config.Folders),

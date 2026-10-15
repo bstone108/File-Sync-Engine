@@ -13,6 +13,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	routingdiscovery "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	ma "github.com/multiformats/go-multiaddr"
 )
@@ -25,11 +26,13 @@ const dhtQueryLimit = 64
 // peers advertising the same namespace. Manual/configured peers remain wired as
 // separate static discovery sources by the daemon.
 type Libp2pDHTRouter struct {
-	host      host.Host
-	dht       *dht.IpfsDHT
-	discovery *routingdiscovery.RoutingDiscovery
-	mu        sync.Mutex
-	advertise map[string]struct{}
+	host         host.Host
+	dht          *dht.IpfsDHT
+	discovery    *routingdiscovery.RoutingDiscovery
+	mu           sync.Mutex
+	advertise    map[string]struct{}
+	payloads     map[string][]byte
+	bootstrapped bool
 }
 
 type Libp2pDHTRouterOptions struct {
@@ -46,12 +49,15 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		_ = h.Close()
 		return nil, err
 	}
-	return &Libp2pDHTRouter{
+	router := &Libp2pDHTRouter{
 		host:      h,
 		dht:       kad,
 		discovery: routingdiscovery.NewRoutingDiscovery(kad),
 		advertise: map[string]struct{}{},
-	}, nil
+		payloads:  map[string][]byte{},
+	}
+	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
+	return router, nil
 }
 
 func (r *Libp2pDHTRouter) Bootstrap(ctx context.Context, peers []string) error {

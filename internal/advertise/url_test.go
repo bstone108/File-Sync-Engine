@@ -49,6 +49,77 @@ func TestResolveWithHostRequiresAnAddress(t *testing.T) {
 	}
 }
 
+func TestResolveWithHostSkipsDockerBridgeAddress(t *testing.T) {
+	cfg := config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420", AdvertiseURL: "https://172.17.0.4:22420"}}
+	got, err := ResolveWithHost(cfg, "https://172.17.0.4:22420", "172.17.0.4")
+	if err == nil || !strings.Contains(err.Error(), "FSE_ADVERTISE_URL") {
+		t.Fatalf("bridge-only resolution = %q err=%v", got, err)
+	}
+	got, err = ResolveWithHost(cfg, "", "192.168.1.20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://192.168.1.20:22420" {
+		t.Fatalf("detected replacement = %q", got)
+	}
+	if ContainerInternalURL(got) || !ContainerInternalURL("https://172.17.0.4:22420") {
+		t.Fatalf("container classification failed for %q", got)
+	}
+}
+
+func TestResolveWithHostUsesAdvertiseURLListAndPublishedPort(t *testing.T) {
+	t.Setenv(EnvVarList, "https://172.18.0.3:22420, https://100.64.1.9:22420 https://files.example:22420")
+	cfg := config.Config{
+		API: config.APIConfig{Listen: "0.0.0.0:22420"},
+		Discovery: config.DiscoveryConfig{NetworkHints: config.NetworkHintsConfig{PublishedPortMappings: []config.PublishedPortMappingConfig{{
+			HostIP: "192.168.1.20", HostPort: 22420, ContainerPort: 22420,
+		}, {
+			HostIP: "172.17.0.1", HostPort: 22420, ContainerPort: 22420,
+		}}}},
+	}
+	got, err := ResolveWithHost(cfg, "", "172.17.0.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://100.64.1.9:22420" {
+		t.Fatalf("list candidate = %q", got)
+	}
+	t.Setenv(EnvVarList, "")
+	got, err = ResolveWithHost(cfg, "", "172.17.0.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://192.168.1.20:22420" {
+		t.Fatalf("published host port = %q", got)
+	}
+	if SelectDetected([]string{"172.17.0.4", "100.70.0.4", "10.1.1.5", "203.0.113.8"}) != "10.1.1.5" {
+		t.Fatal("LAN should win over Tailscale, public, and bridge addresses")
+	}
+	if SelectDetected([]string{"172.31.255.4", "100.64.0.8"}) != "100.64.0.8" {
+		t.Fatal("Tailscale should win when the only other address is a bridge IP")
+	}
+}
+
+func TestEnsureClearsStoredBridgeURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := []byte(`{"nodeName":"node-a","api":{"listen":"0.0.0.0:22420","key":"secret","advertiseURL":"https://172.17.0.4:22420"},"peers":[],"folders":[]}`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, "")
+	t.Setenv(EnvVarList, "https://files.example:22420")
+	cfg, err := Ensure(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.API.AdvertiseURL != "https://files.example:22420" {
+		t.Fatalf("persisted = %q", cfg.API.AdvertiseURL)
+	}
+	if strings.Contains(string(mustRead(t, path)), "172.17.0.4") {
+		t.Fatalf("bridge URL remained on disk:\n%s", mustRead(t, path))
+	}
+}
+
 func TestEnsurePersistsDetectedURLWithoutReplacingOverride(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	body := []byte(`{"nodeName":"node-a","api":{"listen":"0.0.0.0:22420","key":"secret"},"peers":[],"folders":[]}`)

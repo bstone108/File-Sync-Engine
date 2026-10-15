@@ -234,6 +234,31 @@ func isVPNOverlayIP(ip net.IP) bool {
 	return ip16[0] == 0xfd && ip16[1] == 0x7a && ip16[2] == 0x11 && ip16[3] == 0x5c && ip16[4] == 0xa1 && ip16[5] == 0xe0
 }
 
+// IsContainerBridgeIP reports Docker's default and user-defined bridge ranges,
+// 172.17.0.0/16 through 172.31.0.0/16. Those addresses are container-internal
+// and must not be advertised to peers.
+func IsContainerBridgeIP(ip net.IP) bool {
+	return isDockerBridgeIP(ip)
+}
+
+// ContainerInterface reports names that belong to a container bridge or virtual
+// ethernet device rather than a host LAN or Tailscale interface.
+func ContainerInterface(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case n == "docker0" || strings.HasPrefix(n, "docker"):
+		return true
+	case strings.HasPrefix(n, "br-"), strings.HasPrefix(n, "veth"):
+		return true
+	case strings.HasPrefix(n, "cni"), strings.HasPrefix(n, "flannel"), strings.HasPrefix(n, "cali"):
+		return true
+	case strings.HasPrefix(n, "lxc"), strings.HasPrefix(n, "virbr"):
+		return true
+	default:
+		return false
+	}
+}
+
 func isDockerBridgeIP(ip net.IP) bool {
 	ip4 := ip.To4()
 	if ip4 == nil {

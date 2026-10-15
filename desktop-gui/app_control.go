@@ -59,6 +59,7 @@ var nativeProxyPaths = map[string]map[string]bool{
 	"/v1/snapshots": {http.MethodPost: true}, "/v1/restore-plans": {http.MethodPost: true}, "/v1/restores": {http.MethodPost: true},
 	"/v1/snapshot-retention": {http.MethodPost: true}, "/v1/backup/scrub": {http.MethodPost: true}, "/v1/backup/jobs": {http.MethodGet: true},
 	"/v1/identity-package": {http.MethodPost: true}, "/v1/identity-import": {http.MethodPost: true},
+	"/v1/pair-code": {http.MethodPost: true}, "/v1/pair-code/redeem": {http.MethodPost: true},
 	"/v1/api/trust": {http.MethodGet: true}, "/v1/api/trust-command": {http.MethodPost: true},
 	"/v1/mesh/settings": {http.MethodGet: true}, "/v1/mesh/settings-command": {http.MethodPost: true},
 	"/v1/filesystem/browse": {http.MethodGet: true}, "/v1/stop": {http.MethodPost: true},
