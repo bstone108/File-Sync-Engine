@@ -42,6 +42,10 @@ async function importOn(page, packageText, expected) {
 }
 
 async function editSharedFolder(page) {
+  const close = page.getByTestId('node-options-close');
+  if (await close.isVisible().catch(() => false)) {
+    await close.click();
+  }
   await page.getByTestId('folder-open').filter({ hasText: 'shared' }).click();
   await expect(page.getByTestId('folder-editor')).toBeVisible();
   await page.getByTestId('folder-edit-mode').selectOption('sendonly');

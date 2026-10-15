@@ -1,11 +1,26 @@
 package apistate
 
 import (
+	"path/filepath"
 	"testing"
 
 	"filesyncengine/internal/backup"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/linkstats"
+	"filesyncengine/internal/state"
 )
+
+func TestBuildPeerStateCopiesLinkStats(t *testing.T) {
+	linkstats.Default.SetPending("stats-peer", 4096)
+	t.Cleanup(func() { linkstats.Default.SetPending("stats-peer", 0) })
+	store := state.NewJSONStore(filepath.Join(t.TempDir(), "state.json"))
+	defer store.Close()
+
+	got := BuildPeerState(config.Config{}, config.PeerConfig{ID: "stats-peer"}, store)
+	if got.PendingBytes != 4096 || got.AverageBytesPerSecond != 0 {
+		t.Fatalf("peer stats = %+v", got)
+	}
+}
 
 func TestPeerTransferStateReportsLocalConfiguredCauses(t *testing.T) {
 	state := PeerTransferState(

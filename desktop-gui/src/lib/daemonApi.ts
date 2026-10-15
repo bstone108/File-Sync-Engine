@@ -28,7 +28,14 @@ export type DaemonFolder = {
   ignore?: string[];
   [key: string]: unknown;
 };
-export type DaemonPeer = { id: string; endpoint?: string; status?: string; [key: string]: unknown };
+export type DaemonPeer = {
+  id: string;
+  endpoint?: string;
+  status?: string;
+  averageBytesPerSecond?: number;
+  pendingBytes?: number;
+  [key: string]: unknown;
+};
 
 export type DaemonConfig = Record<string, unknown>;
 export type DaemonConfigPatch = Record<string, unknown>;
@@ -276,6 +283,8 @@ export type ConfigSyncInstance = {
   lastSeen?: string;
   pendingChanges: number;
   local: boolean;
+  averageBytesPerSecond?: number;
+  pendingBytes?: number;
   settings?: Record<string, unknown>;
 };
 

@@ -9,6 +9,7 @@ import (
 	"filesyncengine/internal/backup"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/engine"
+	"filesyncengine/internal/linkstats"
 	"filesyncengine/internal/metadatastore"
 	"filesyncengine/internal/routing"
 	"filesyncengine/internal/schemaversion"
@@ -143,7 +144,8 @@ func BuildPeerState(cfg config.Config, peer config.PeerConfig, store state.JSONS
 	} else if len(peer.Addresses) > 0 {
 		endpoint = "manual:" + peer.Addresses[0]
 	}
-	peerState := api.PeerState{ID: peer.ID, Status: "configured", Endpoint: endpoint, Transfer: PeerTransferState(cfg.Transfer, peer), NetworkDiagnostics: PeerNetworkDiagnostics(peer, cfg)}
+	sample := linkstats.Default.Get(peer.ID)
+	peerState := api.PeerState{ID: peer.ID, Status: "configured", Endpoint: endpoint, AverageBytesPerSecond: sample.AverageBytesPerSecond, PendingBytes: sample.PendingBytes, Transfer: PeerTransferState(cfg.Transfer, peer), NetworkDiagnostics: PeerNetworkDiagnostics(peer, cfg)}
 	if statuses, err := store.PeerFolderStatuses(peer.ID); err == nil {
 		peerState.Metadata = PeerMetadataState(statuses)
 	}

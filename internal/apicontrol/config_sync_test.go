@@ -10,6 +10,7 @@ import (
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/configsync"
+	"filesyncengine/internal/linkstats"
 )
 
 func apiLogging(level config.LogLevel) api.ConfigUpdateRequest {
@@ -55,6 +56,30 @@ func loggingLevel(t *testing.T, configPath string) string {
 		t.Fatal(err)
 	}
 	return string(cfg.Logging.Level)
+}
+
+func TestConfigSyncViewIncludesPeerTransferStats(t *testing.T) {
+	path := writeSyncConfig(t, "engine-stats", "info")
+	linkstats.Default.SetPending("engine-stats", 2048)
+	t.Cleanup(func() { linkstats.Default.SetPending("engine-stats", 0) })
+
+	view, err := HandleConfigSync(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Instances) == 0 || !view.Instances[0].Local {
+		t.Fatalf("instances = %+v", view.Instances)
+	}
+	if view.Instances[0].PendingBytes != 2048 {
+		t.Fatalf("local pending bytes = %d", view.Instances[0].PendingBytes)
+	}
+	raw, err := json.Marshal(view.Instances[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"averageBytesPerSecond"`) || !strings.Contains(string(raw), `"pendingBytes"`) {
+		t.Fatalf("instance json = %s", raw)
+	}
 }
 
 func TestConfigSyncDoesNotAdoptAnotherInstancesSettings(t *testing.T) {

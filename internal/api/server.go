@@ -641,12 +641,14 @@ type FolderRepairWarning struct {
 }
 
 type PeerState struct {
-	ID                 string                  `json:"id"`
-	Status             string                  `json:"status"`
-	Endpoint           string                  `json:"endpoint,omitempty"`
-	Transfer           PeerTransferState       `json:"transfer,omitempty"`
-	Metadata           PeerMetadataState       `json:"metadata,omitempty"`
-	NetworkDiagnostics []PeerNetworkDiagnostic `json:"networkDiagnostics,omitempty"`
+	ID                    string                  `json:"id"`
+	Status                string                  `json:"status"`
+	Endpoint              string                  `json:"endpoint,omitempty"`
+	AverageBytesPerSecond int64                   `json:"averageBytesPerSecond"`
+	PendingBytes          int64                   `json:"pendingBytes"`
+	Transfer              PeerTransferState       `json:"transfer,omitempty"`
+	Metadata              PeerMetadataState       `json:"metadata,omitempty"`
+	NetworkDiagnostics    []PeerNetworkDiagnostic `json:"networkDiagnostics,omitempty"`
 }
 
 type PeerNetworkDiagnostic struct {
