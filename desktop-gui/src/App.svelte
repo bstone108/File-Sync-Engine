@@ -1822,6 +1822,13 @@
     <h2 class="section-label">Logging</h2>
     <form class="control-form" on:submit|preventDefault={submitConfigPatchForm} aria-label="Config patch form">
       <h3>Logging level</h3>
+      <p data-testid="instance-owned-setting">
+        {#if configInstances.find((instance) => instance.instanceId === selectedConfigInstanceId)?.local === false}
+          Stored logging level for {configInstances.find((instance) => instance.instanceId === selectedConfigInstanceId)?.label}: {configInstances.find((instance) => instance.instanceId === selectedConfigInstanceId)?.settings?.['logging.level'] ?? 'not in the replica yet'}. Submitting queues the change for that engine only and does not change this engine's logging level.
+        {:else}
+          This form changes this engine's own logging level. Linked engines can view that record, and it does not change their logging level.
+        {/if}
+      </p>
       <label>
         Logging level
         <select bind:value={configPatchLoggingLevel} name="configPatchLoggingLevel">

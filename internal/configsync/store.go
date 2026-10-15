@@ -15,17 +15,28 @@ type Store struct {
 }
 
 // Open loads an existing replica or creates one for instanceID.
+// An existing file keeps the UUID already stored in it.
 func Open(path, groupID, instanceID string) (*Store, error) {
-	if path == "" || instanceID == "" {
-		return nil, errors.New("config sync path and instance id are required")
+	if path == "" {
+		return nil, errors.New("config sync path is required")
 	}
 	store := &Store{path: path}
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := ValidateInstanceID(instanceID); err != nil {
+			return nil, err
+		}
 		if err := store.Save(NewReplica(groupID, instanceID)); err != nil {
 			return nil, err
 		}
 		return store, nil
 	} else if err != nil {
+		return nil, err
+	}
+	replica, err := store.Load()
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateInstanceID(replica.InstanceID); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -71,8 +82,8 @@ func (s *Store) load() (Replica, error) {
 	if err := json.Unmarshal(raw, &replica); err != nil {
 		return Replica{}, err
 	}
-	if replica.Fields == nil {
-		replica.Fields = map[string]Field{}
+	if replica.Records == nil {
+		replica.Records = map[string]InstanceRecord{}
 	}
 	if replica.Connections == nil {
 		replica.Connections = map[string]Connection{}

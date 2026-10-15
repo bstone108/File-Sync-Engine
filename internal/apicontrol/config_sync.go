@@ -3,7 +3,9 @@ package apicontrol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -63,8 +65,14 @@ func HandleConfigSyncEdit(configPath string, raw json.RawMessage) (ConfigSyncRes
 		return ConfigSyncResponse{}, err
 	}
 	replica, err := store.Update(func(replica *configsync.Replica) error {
-		_, err := replica.QueueEdit(req.TargetInstanceID, req.Path, req.Value, req.Deleted, time.Now().UnixMilli())
-		return err
+		edit, err := replica.QueueEdit(req.TargetInstanceID, req.Path, req.Value, req.Deleted, time.Now().UnixMilli())
+		if err != nil {
+			return err
+		}
+		if edit.Status == configsync.StatusApplied {
+			return applyOwnRecord(configPath, *replica)
+		}
+		return nil
 	})
 	if err != nil {
 		return ConfigSyncResponse{}, err
@@ -85,7 +93,12 @@ func HandleConfigSyncMerge(configPath string, raw json.RawMessage) (ConfigSyncMe
 	if req.Replica.GroupID != "" && local.GroupID != "" && req.Replica.GroupID != local.GroupID {
 		return ConfigSyncMergeResponse{}, fmt.Errorf("config sync group mismatch")
 	}
-	merged, _ := configsync.Merge(local, req.Replica)
+	merged, stats := configsync.Merge(local, req.Replica)
+	if stats.EditsApplied > 0 {
+		if err := applyOwnRecord(configPath, merged); err != nil {
+			return ConfigSyncMergeResponse{}, err
+		}
+	}
 	if err := store.Save(merged); err != nil {
 		return ConfigSyncMergeResponse{}, err
 	}
@@ -133,7 +146,17 @@ func openStore(configPath string) (*configsync.Store, error) {
 	if cfg.NodeName == "" {
 		return nil, fmt.Errorf("nodeName is required for config sync")
 	}
-	return configsync.Open(filepath.Join(filepath.Dir(configPath), "config-sync.json"), identityGroupID(cfg), cfg.NodeName)
+	path := filepath.Join(filepath.Dir(configPath), "config-sync.json")
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		id, err := configsync.NewInstanceID()
+		if err != nil {
+			return nil, err
+		}
+		return configsync.Open(path, identityGroupID(cfg), id)
+	} else if err != nil {
+		return nil, err
+	}
+	return configsync.Open(path, identityGroupID(cfg), "")
 }
 
 func loadPublishedReplica(configPath string) (*configsync.Store, configsync.Replica, error) {
@@ -150,7 +173,7 @@ func loadPublishedReplica(configPath string) (*configsync.Store, configsync.Repl
 		return nil, configsync.Replica{}, err
 	}
 	if _, err := replica.PublishConnection(configsync.Connection{
-		InstanceID: cfg.NodeName,
+		InstanceID: replica.InstanceID,
 		Label:      cfg.NodeName,
 		APIURL:     cfg.API.AdvertiseURL,
 		Online:     true,
@@ -159,6 +182,70 @@ func loadPublishedReplica(configPath string) (*configsync.Store, configsync.Repl
 		return nil, configsync.Replica{}, err
 	}
 	return store, replica, nil
+}
+
+// recordOwnSettings copies this engine's non-secret settings into its own
+// replica record so linked GUIs can view them. It does not write any other
+// instance's record.
+func recordOwnSettings(configPath string, cfg config.Config) error {
+	store, replica, err := loadPublishedReplica(configPath)
+	if err != nil {
+		return err
+	}
+	wall := time.Now().UnixMilli()
+	for key, value := range ownSettings(cfg) {
+		if _, err := replica.SetOwn(key, value, false, wall); err != nil {
+			return err
+		}
+	}
+	return store.Save(replica)
+}
+
+func ownSettings(cfg config.Config) map[string]any {
+	settings := map[string]any{}
+	if cfg.Logging.Level != "" {
+		settings["logging.level"] = string(cfg.Logging.Level)
+	}
+	if cfg.Logging.Output != "" {
+		settings["logging.output"] = cfg.Logging.Output
+	}
+	if cfg.Transfer.SendBytesPerSecond != 0 {
+		settings["transfer.sendBytesPerSecond"] = cfg.Transfer.SendBytesPerSecond
+	}
+	if cfg.Transfer.ReceiveBytesPerSecond != 0 {
+		settings["transfer.receiveBytesPerSecond"] = cfg.Transfer.ReceiveBytesPerSecond
+	}
+	return settings
+}
+
+// applyOwnRecord writes this engine's own record into the local config file.
+// Records stored for other instances are ignored.
+func applyOwnRecord(configPath string, replica configsync.Replica) error {
+	field, ok := replica.OwnRecord().Fields["logging.level"]
+	if !ok || field.Deleted {
+		return nil
+	}
+	level, ok := field.Value.(string)
+	if !ok || level == "" {
+		return nil
+	}
+	switch config.LogLevel(level) {
+	case config.LogLevelDebug, config.LogLevelInfo, config.LogLevelWarn, config.LogLevelError, config.LogLevelOff:
+	default:
+		return fmt.Errorf("logging.level %q is not a setting this engine applies", level)
+	}
+	cfg, err := config.LoadFile(configPath)
+	if err != nil {
+		return err
+	}
+	if string(cfg.Logging.Level) == level {
+		return nil
+	}
+	cfg.Logging.Level = config.LogLevel(level)
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return writePatchedConfig(configPath, cfg)
 }
 
 func identityGroupID(cfg config.Config) string {

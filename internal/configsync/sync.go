@@ -1,14 +1,21 @@
-// Package configsync replicates identity-linked engine configuration without
-// collisions. Each field carries a hybrid logical clock. Merge keeps the later
-// clock, so concurrent edits to different fields both survive and a later edit
-// to the same field wins. Instance-local rows live under instance/<id>/ so two
-// engines never write the same key. Shared rows live under shared/. Connection
-// records travel with the replica, and pending edits for an offline target stay
-// in the replica until any online peer delivers them.
+// Package configsync stores a replica of every identity-linked engine's
+// settings so a GUI on any of them can view and manage the others.
+//
+// Each instance owns its settings. Records are keyed by instance UUID. An
+// engine applies only its own record, plus queued edits whose target is that
+// same UUID. Another instance's record is stored for display and remote
+// management and is never copied into the local record. An edit made for
+// instance X stays a pending X-targeted edit until X itself applies it.
+//
+// Inside one instance's record, each field has a hybrid logical clock. Merge
+// keeps the later clock, so concurrent edits to different fields of that
+// record both survive.
 package configsync
 
 import (
+	"crypto/rand"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -40,13 +47,20 @@ func Compare(a, b Clock) int {
 	return strings.Compare(a.NodeID, b.NodeID)
 }
 
-// Field is one replicated config value.
+// Field is one setting inside a single instance's record.
 type Field struct {
-	Path    string `json:"path"`
+	Key     string `json:"key"`
 	Value   any    `json:"value,omitempty"`
 	Deleted bool   `json:"deleted,omitempty"`
 	Clock   Clock  `json:"clock"`
 	Writer  string `json:"writer"`
+}
+
+// InstanceRecord is the settings owned by one engine. Other engines store a
+// copy so their GUIs can show it. They do not apply it locally.
+type InstanceRecord struct {
+	InstanceID string           `json:"instanceId"`
+	Fields     map[string]Field `json:"fields,omitempty"`
 }
 
 // Connection is how identity-linked engines reach one instance.
@@ -60,8 +74,8 @@ type Connection struct {
 	Clock      Clock    `json:"clock"`
 }
 
-// Edit is a change queued for a specific instance. Any replica may carry it
-// until that instance merges and applies it.
+// Edit is a change queued for one instance UUID. Any replica may carry it.
+// Only the targeted instance applies it to its own record.
 type Edit struct {
 	ID               string `json:"id"`
 	TargetInstanceID string `json:"targetInstanceId"`
@@ -74,24 +88,28 @@ type Edit struct {
 }
 
 // Replica is one engine's copy of the identity-linked config database.
+// Records holds every known instance, keyed by that instance's UUID.
+// InstanceID is the UUID of the engine that owns this copy.
 type Replica struct {
-	GroupID     string                `json:"groupId"`
-	InstanceID  string                `json:"instanceId"`
-	Fields      map[string]Field      `json:"fields,omitempty"`
-	Connections map[string]Connection `json:"connections,omitempty"`
-	Pending     []Edit                `json:"pending,omitempty"`
-	LocalClock  Clock                 `json:"localClock"`
+	GroupID     string                    `json:"groupId"`
+	InstanceID  string                    `json:"instanceId"`
+	Records     map[string]InstanceRecord `json:"records,omitempty"`
+	Connections map[string]Connection     `json:"connections,omitempty"`
+	Pending     []Edit                    `json:"pending,omitempty"`
+	LocalClock  Clock                     `json:"localClock"`
 }
 
-// InstanceView is the GUI's row for one linked engine.
+// InstanceView is the GUI's row for one linked engine, including the stored
+// settings for that engine. Those settings belong to that engine.
 type InstanceView struct {
-	InstanceID     string `json:"instanceId"`
-	Label          string `json:"label"`
-	APIURL         string `json:"apiURL,omitempty"`
-	Online         bool   `json:"online"`
-	LastSeen       string `json:"lastSeen,omitempty"`
-	PendingChanges int    `json:"pendingChanges"`
-	Local          bool   `json:"local"`
+	InstanceID     string         `json:"instanceId"`
+	Label          string         `json:"label"`
+	APIURL         string         `json:"apiURL,omitempty"`
+	Online         bool           `json:"online"`
+	LastSeen       string         `json:"lastSeen,omitempty"`
+	PendingChanges int            `json:"pendingChanges"`
+	Local          bool           `json:"local"`
+	Settings       map[string]any `json:"settings,omitempty"`
 }
 
 // MergeStats reports what a merge changed.
@@ -108,27 +126,58 @@ const (
 	StatusSuperseded = "superseded"
 )
 
-// SharedPath is a row every identity-linked engine agrees on.
-func SharedPath(key string) string {
-	return "shared/" + strings.TrimPrefix(key, "shared/")
+var instanceIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+
+// NewInstanceID returns a random UUID version 4 for a new engine record.
+func NewInstanceID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	raw[6] = (raw[6] & 0x0f) | 0x40
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16]), nil
 }
 
-// InstancePath is a row owned by one engine. The instance id is part of the
-// key, so two engines can store the same setting without colliding.
-func InstancePath(instanceID, key string) string {
-	prefix := "instance/" + instanceID + "/"
-	return prefix + strings.TrimPrefix(key, prefix)
+// ValidateInstanceID requires the UUID that keys an instance record.
+func ValidateInstanceID(id string) error {
+	if !instanceIDPattern.MatchString(id) {
+		return fmt.Errorf("instance id must be a UUID")
+	}
+	return nil
+}
+
+// ValidateKey accepts a bare setting name. Shared paths and instance-prefixed
+// paths are rejected so a value cannot be addressed at more than one engine.
+func ValidateKey(key string) error {
+	if key == "" || strings.Contains(key, "..") || strings.ContainsAny(key, "/\\") {
+		return fmt.Errorf("config key %q belongs to one instance and cannot be a shared or cross-instance path", key)
+	}
+	return nil
 }
 
 // NewReplica returns an empty replica for one engine in an identity group.
 func NewReplica(groupID, instanceID string) Replica {
+	if err := ValidateInstanceID(instanceID); err != nil {
+		panic(err)
+	}
 	return Replica{
 		GroupID:     groupID,
 		InstanceID:  instanceID,
-		Fields:      map[string]Field{},
+		Records:     map[string]InstanceRecord{},
 		Connections: map[string]Connection{},
 		LocalClock:  Clock{NodeID: instanceID},
 	}
+}
+
+// OwnRecord returns the settings this engine applies to itself.
+func (r Replica) OwnRecord() InstanceRecord {
+	rec := r.Records[r.InstanceID]
+	rec.InstanceID = r.InstanceID
+	if rec.Fields == nil {
+		rec.Fields = map[string]Field{}
+	}
+	return rec
 }
 
 // Tick moves the local clock forward and returns the clock for a new write.
@@ -150,47 +199,58 @@ func (r *Replica) witness(remote Clock) {
 	}
 }
 
-// SetField writes a namespaced field at wall time. The path must already use
-// shared/ or instance/<id>/.
-func (r *Replica) SetField(path string, value any, deleted bool, wall int64) (Field, error) {
-	if err := ValidatePath(path); err != nil {
-		return Field{}, err
+func (r *Replica) putOwn(key string, value any, deleted bool, clock Clock) {
+	if r.Records == nil {
+		r.Records = map[string]InstanceRecord{}
 	}
-	if err := RejectSecrets(path, value); err != nil {
-		return Field{}, err
+	rec := r.Records[r.InstanceID]
+	rec.InstanceID = r.InstanceID
+	if rec.Fields == nil {
+		rec.Fields = map[string]Field{}
 	}
-	field := Field{Path: path, Value: value, Deleted: deleted, Clock: r.Tick(wall), Writer: r.InstanceID}
-	if r.Fields == nil {
-		r.Fields = map[string]Field{}
-	}
-	r.Fields[path] = field
-	return field, nil
+	rec.Fields[key] = Field{Key: key, Value: value, Deleted: deleted, Clock: clock, Writer: r.InstanceID}
+	r.Records[r.InstanceID] = rec
 }
 
-// QueueEdit records a change for target. The field is stored immediately so
-// other replicas can carry it, and the edit stays pending until target applies it.
-func (r *Replica) QueueEdit(target, path string, value any, deleted bool, wall int64) (Edit, error) {
-	if target == "" {
-		return Edit{}, fmt.Errorf("target instance is required")
+// SetOwn writes a setting into this engine's record only.
+func (r *Replica) SetOwn(key string, value any, deleted bool, wall int64) (Field, error) {
+	if err := ValidateKey(key); err != nil {
+		return Field{}, err
 	}
-	if !strings.HasPrefix(path, "shared/") && !strings.HasPrefix(path, "instance/") {
-		path = InstancePath(target, path)
+	if err := RejectSecrets(key, value); err != nil {
+		return Field{}, err
 	}
-	field, err := r.SetField(path, value, deleted, wall)
-	if err != nil {
+	clock := r.Tick(wall)
+	r.putOwn(key, value, deleted, clock)
+	return r.Records[r.InstanceID].Fields[key], nil
+}
+
+// QueueEdit records a change for target. The target's stored record is left
+// untouched unless target is this engine, in which case the edit is applied
+// to this engine's own record immediately.
+func (r *Replica) QueueEdit(target, key string, value any, deleted bool, wall int64) (Edit, error) {
+	if err := ValidateInstanceID(target); err != nil {
 		return Edit{}, err
 	}
+	if err := ValidateKey(key); err != nil {
+		return Edit{}, err
+	}
+	if err := RejectSecrets(key, value); err != nil {
+		return Edit{}, err
+	}
+	clock := r.Tick(wall)
 	edit := Edit{
-		ID:               fmt.Sprintf("%s|%s|%d|%d|%s", target, path, field.Clock.Wall, field.Clock.Counter, field.Clock.NodeID),
+		ID:               fmt.Sprintf("%s|%s|%d|%d|%s", target, key, clock.Wall, clock.Counter, clock.NodeID),
 		TargetInstanceID: target,
-		Path:             path,
+		Path:             key,
 		Value:            value,
 		Deleted:          deleted,
-		Clock:            field.Clock,
+		Clock:            clock,
 		OriginInstanceID: r.InstanceID,
 		Status:           StatusPending,
 	}
 	if target == r.InstanceID {
+		r.putOwn(key, value, deleted, clock)
 		edit.Status = StatusApplied
 	}
 	r.upsertEdit(edit)
@@ -199,8 +259,8 @@ func (r *Replica) QueueEdit(target, path string, value any, deleted bool, wall i
 
 // PublishConnection records how to reach instanceID. API keys are not accepted.
 func (r *Replica) PublishConnection(conn Connection, wall int64) (Connection, error) {
-	if conn.InstanceID == "" {
-		return Connection{}, fmt.Errorf("connection instance id is required")
+	if err := ValidateInstanceID(conn.InstanceID); err != nil {
+		return Connection{}, err
 	}
 	if err := RejectSecrets(conn.APIURL, conn.Label); err != nil {
 		return Connection{}, err
@@ -227,31 +287,51 @@ func (r *Replica) upsertEdit(edit Edit) {
 }
 
 // Merge folds remote into a copy of local. The result keeps local's instance
-// id. Pending edits for other instances stay queued so this engine can relay
-// them. Pending edits for this engine are applied when their clock wins.
+// id. Foreign records are stored field-by-field and never copied into the
+// local record. Pending edits for other instances stay queued so this engine
+// can relay them. Pending edits for this engine are applied to its own record
+// when their clock wins.
 func Merge(local, remote Replica) (Replica, MergeStats) {
 	out := cloneReplica(local)
 	var stats MergeStats
 	if out.GroupID == "" {
 		out.GroupID = remote.GroupID
 	}
-	if out.Fields == nil {
-		out.Fields = map[string]Field{}
+	if out.Records == nil {
+		out.Records = map[string]InstanceRecord{}
 	}
 	if out.Connections == nil {
 		out.Connections = map[string]Connection{}
 	}
-	for path, field := range remote.Fields {
-		out.witness(field.Clock)
-		current, ok := out.Fields[path]
-		if !ok || Compare(field.Clock, current.Clock) > 0 {
-			out.Fields[path] = field
-			stats.FieldsAccepted++
+	for id, remoteRec := range remote.Records {
+		if ValidateInstanceID(id) != nil || id == out.InstanceID {
 			continue
 		}
-		stats.FieldsKept++
+		localRec := out.Records[id]
+		localRec.InstanceID = id
+		if localRec.Fields == nil {
+			localRec.Fields = map[string]Field{}
+		}
+		for key, field := range remoteRec.Fields {
+			if ValidateKey(key) != nil || RejectSecrets(key, field.Value) != nil {
+				continue
+			}
+			out.witness(field.Clock)
+			current, ok := localRec.Fields[key]
+			if !ok || Compare(field.Clock, current.Clock) > 0 {
+				field.Key = key
+				localRec.Fields[key] = field
+				stats.FieldsAccepted++
+				continue
+			}
+			stats.FieldsKept++
+		}
+		out.Records[id] = localRec
 	}
 	for id, conn := range remote.Connections {
+		if ValidateInstanceID(id) != nil {
+			continue
+		}
 		out.witness(conn.Clock)
 		current, ok := out.Connections[id]
 		if !ok || Compare(conn.Clock, current.Clock) > 0 {
@@ -262,15 +342,15 @@ func Merge(local, remote Replica) (Replica, MergeStats) {
 		out.witness(edit.Clock)
 		merged := edit
 		if merged.TargetInstanceID == out.InstanceID && merged.Status == StatusPending {
-			current, ok := out.Fields[merged.Path]
-			if !ok || Compare(merged.Clock, current.Clock) >= 0 {
-				if err := RejectSecrets(merged.Path, merged.Value); err == nil && ValidatePath(merged.Path) == nil {
-					out.Fields[merged.Path] = Field{Path: merged.Path, Value: merged.Value, Deleted: merged.Deleted, Clock: merged.Clock, Writer: merged.OriginInstanceID}
+			if ValidateKey(merged.Path) == nil && RejectSecrets(merged.Path, merged.Value) == nil {
+				current, ok := out.OwnRecord().Fields[merged.Path]
+				if !ok || Compare(merged.Clock, current.Clock) > 0 {
+					out.putOwn(merged.Path, merged.Value, merged.Deleted, merged.Clock)
 					merged.Status = StatusApplied
 					stats.EditsApplied++
+				} else {
+					merged.Status = StatusSuperseded
 				}
-			} else {
-				merged.Status = StatusSuperseded
 			}
 		} else if merged.Status == StatusPending {
 			stats.EditsRelayed++
@@ -285,6 +365,9 @@ func Merge(local, remote Replica) (Replica, MergeStats) {
 func (r Replica) Instances() []InstanceView {
 	ids := map[string]struct{}{r.InstanceID: {}}
 	for id := range r.Connections {
+		ids[id] = struct{}{}
+	}
+	for id := range r.Records {
 		ids[id] = struct{}{}
 	}
 	for _, edit := range r.Pending {
@@ -312,6 +395,14 @@ func (r Replica) Instances() []InstanceView {
 				label = "This engine"
 			}
 		}
+		settings := map[string]any{}
+		if rec, ok := r.Records[id]; ok {
+			for key, field := range rec.Fields {
+				if !field.Deleted {
+					settings[key] = field.Value
+				}
+			}
+		}
 		views = append(views, InstanceView{
 			InstanceID:     id,
 			Label:          label,
@@ -320,6 +411,7 @@ func (r Replica) Instances() []InstanceView {
 			LastSeen:       conn.LastSeen,
 			PendingChanges: pending,
 			Local:          id == r.InstanceID,
+			Settings:       settings,
 		})
 	}
 	sort.Slice(views, func(i, j int) bool {
@@ -329,24 +421,6 @@ func (r Replica) Instances() []InstanceView {
 		return views[i].Label < views[j].Label
 	})
 	return views
-}
-
-// ValidatePath requires the shared or per-instance namespace.
-func ValidatePath(path string) error {
-	if path == "" || strings.Contains(path, "..") {
-		return fmt.Errorf("config path is required")
-	}
-	if strings.HasPrefix(path, "shared/") && len(path) > len("shared/") {
-		return nil
-	}
-	if strings.HasPrefix(path, "instance/") {
-		rest := strings.TrimPrefix(path, "instance/")
-		parts := strings.SplitN(rest, "/", 2)
-		if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-			return nil
-		}
-	}
-	return fmt.Errorf("config path %q must start with shared/ or instance/<id>/", path)
 }
 
 // RejectSecrets refuses paths and string values that would copy credentials
@@ -379,9 +453,13 @@ func secretString(value string) bool {
 
 func cloneReplica(in Replica) Replica {
 	out := in
-	out.Fields = map[string]Field{}
-	for path, field := range in.Fields {
-		out.Fields[path] = field
+	out.Records = map[string]InstanceRecord{}
+	for id, rec := range in.Records {
+		cloned := InstanceRecord{InstanceID: rec.InstanceID, Fields: map[string]Field{}}
+		for key, field := range rec.Fields {
+			cloned.Fields[key] = field
+		}
+		out.Records[id] = cloned
 	}
 	out.Connections = map[string]Connection{}
 	for id, conn := range in.Connections {

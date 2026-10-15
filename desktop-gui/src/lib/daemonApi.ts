@@ -264,6 +264,7 @@ export type ConfigSyncInstance = {
   lastSeen?: string;
   pendingChanges: number;
   local: boolean;
+  settings?: Record<string, unknown>;
 };
 
 export type ConfigSyncView = {

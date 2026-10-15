@@ -99,7 +99,7 @@ The backup planner now has tested mode semantics for which snapshot blocks need 
 - `identity.publicKey` is safe to share with trusted peers for stream hello verification.
 - `identity.encryptionLevel` accepts `0` through `10`; generated configs default to `5`.
 - `identity.groups` is optional and only exists when explicitly configured. Each enabled group needs an `id` and a resettable high-entropy `token` of at least 64 characters. The token is a secret group membership credential; do not publish it.
-- Engines in the same identity group replicate non-secret configuration and connection details. The database, clocks, and offline relay rules are in `docs/CONFIG-SYNC.md`. API keys and group tokens stay out of that database and out of the browser.
+- Engines in the same identity group keep a replica of each instance's non-secret configuration and connection details, keyed by instance UUID, so any linked GUI can view and manage every instance. Each instance owns its settings. A change on one instance is stored as that instance's record and is never applied on another instance. Queued edits apply only on the instance they target. The clocks and relay rules are in `docs/CONFIG-SYNC.md`. API keys and group tokens stay out of that database and out of the browser.
 - `identity.revoked` records persist revoked identity material using `groupId`, optional `discoveryId`, and a non-secret `bootstrapProofKeyHash`. Import/pairing code rejects a package whose group/discovery/proof hash matches a revoked record, so a compromised identity file cannot silently re-establish trust after global revocation; generate and manually import a new identity instead.
 - `fse config show` redacts `api.key`, peer `apiKey`, and the local identity private key.
 
