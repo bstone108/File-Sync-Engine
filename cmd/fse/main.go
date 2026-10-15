@@ -372,6 +372,7 @@ func run(configPath string) {
 		startLocalDiscovery(cfg)
 	}
 	fatalexit.Go(func() { advertise.StartAutoDetect(detectCtx, cfg) })
+	fatalexit.Go(func() { daemonwebgui.StartAutoUpdate(detectCtx, configPath, apiServer.SetWebGUIState) })
 	schedule := daemonloop.NewPollSchedule(time.Now(), time.Now())
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()

@@ -42,8 +42,20 @@ type State struct {
 	Status              string           `json:"status"`
 	Maintenance         MaintenanceState `json:"maintenance"`
 	Backup              BackupState      `json:"backup"`
+	WebGUI              WebGUIState      `json:"webGUI,omitempty"`
 	FoldersState        []FolderState    `json:"-"`
 	PeersState          []PeerState      `json:"-"`
+}
+
+// WebGUIState is the running web GUI package and the latest auto-update check.
+// It is runtime status, not a secret and not a desktop Sparkle update.
+type WebGUIState struct {
+	Enabled           bool      `json:"enabled"`
+	Version           string    `json:"version,omitempty"`
+	LastUpdateCheck   time.Time `json:"lastUpdateCheck,omitempty"`
+	LastUpdateResult  string    `json:"lastUpdateResult,omitempty"`
+	LastUpdateMessage string    `json:"lastUpdateMessage,omitempty"`
+	AutoUpdate        bool      `json:"autoUpdate"`
 }
 
 type MaintenanceState struct {
@@ -1067,7 +1079,21 @@ func (s *Server) Publish(event Event) {
 func (s *Server) UpdateState(state State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if state.WebGUI.LastUpdateCheck.IsZero() && state.WebGUI.Version == "" && state.WebGUI.LastUpdateResult == "" {
+		state.WebGUI = s.state.WebGUI
+	}
 	s.state = state
+}
+
+// SetWebGUIState records the latest web GUI version and update check without
+// replacing the rest of the status snapshot.
+func (s *Server) SetWebGUIState(state WebGUIState) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.state.WebGUI = state
+	s.mu.Unlock()
 }
 
 // SetAdvertiseURL publishes a reachability result without replacing the rest of the status snapshot.

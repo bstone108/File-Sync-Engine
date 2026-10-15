@@ -62,6 +62,7 @@ The `backup` object reports whether this node is configured as a backup destinat
   "folders": 2,
   "peers": 3,
   "status": "running",
+  "webGUI": {"enabled": true, "version": "2026.10.15.05", "lastUpdateCheck": "2026-10-15T23:00:00Z", "lastUpdateResult": "current", "lastUpdateMessage": "Web GUI 2026.10.15.05 is already the newest package compatible with this engine.", "autoUpdate": true},
   "maintenance": {"enabled": false},
   "backup": {
     "enabled": true,
@@ -92,7 +93,7 @@ The `backup` object reports whether this node is configured as a backup destinat
 GET /v1/schema
 ```
 
-Returns `{"engineSchemaVersion":1}`. The same value is on `GET /v1/status` as `engineSchemaVersion`. GUI packages declare an inclusive `minEngineSchema`/`maxEngineSchema` range in `schema.json`, and `schema-versions.json` maps each published GUI package to that range. A container that opts into the web GUI installs only the newest package whose range includes this number.
+Returns `{"engineSchemaVersion":1}`. The same value is on `GET /v1/status` as `engineSchemaVersion`. GUI packages declare an inclusive `minEngineSchema`/`maxEngineSchema` range in `schema.json`, and `schema-versions.json` maps each published GUI package to that range. A container that opts into the web GUI installs only the newest package whose range includes this number. `GET /v1/status` also includes `webGUI.version`, `webGUI.lastUpdateCheck`, `webGUI.lastUpdateResult`, and `webGUI.autoUpdate` for the container web package. Those fields are empty when the web GUI environment is unset. Desktop Sparkle, Windows, and AppImage updates stay on their own path.
 
 `GET /v1/sync-journal?folder=<id>` returns the per-path revision journal used for bidirectional folder sync. It requires the daemon API key and is not exposed through the browser proxy. `POST /v1/pair-exchange` is the daemon-to-daemon pairing exchange. It is authenticated by the identity bootstrap proof, returns API keys, and is not proxied to the browser.
 
