@@ -167,10 +167,15 @@ func run(configPath string) {
 	})
 	pairService := link.NewService(nil)
 	pairService.SetDirectoryFactory(func() (link.Directory, string, error) {
-		router, err := discovery.NewLibp2pDHTRouter(context.Background(), discovery.Libp2pDHTRouterOptions{NodeID: cfg.NodeName})
+		current := cfg
+		if loaded, loadErr := config.LoadFile(configPath); loadErr == nil {
+			current = loaded
+		}
+		router, err := discovery.NewLibp2pDHTRouter(context.Background(), discovery.Libp2pDHTRouterOptions{NodeID: current.NodeName})
 		if err != nil {
 			return nil, "", err
 		}
+		router.SetBootstrapPeers(current.Discovery.DHTBootstrapPeers)
 		return link.NewDHTDirectory(router), router.PeerID(), nil
 	})
 	apicontrol.SetLinkService(pairService)
@@ -268,6 +273,15 @@ func run(configPath string) {
 		MonitorFolders:    activeMonitorFolders,
 	}
 	daemonlogging.DaemonStarted(mgr.Current().NodeName, len(mgr.Current().Folders), configPath)
+	detectCtx, detectCancel := context.WithCancel(context.Background())
+	defer detectCancel()
+	advertise.BindConfigPath(configPath)
+	advertise.SetOnChange(func(url string) {
+		fmt.Fprintf(os.Stderr, "reachable API URL %s\n", url)
+		apiServer.SetAdvertiseURL(url)
+	})
+	go discovery.WatchObservedAddresses(detectCtx, append([]string(nil), cfg.Discovery.DHTBootstrapPeers...), advertise.NoteObservedIP)
+	advertise.StartAutoDetect(detectCtx, cfg)
 	schedule := daemonloop.NewPollSchedule(time.Now(), time.Now())
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -280,6 +294,7 @@ func run(configPath string) {
 			structuredlog.Event(stopProjection.LogLevel, stopProjection.LogEvent, stopProjection.LogMessage, stopProjection.LogFields)
 			return
 		case <-ticker.C:
+			apicontrol.SweepPairingCodes(detectCtx)
 		}
 		now := time.Now()
 		if fresh, loadErr := config.LoadFile(configPath); loadErr == nil {

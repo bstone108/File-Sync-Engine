@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"filesyncengine/internal/advertise"
 )
 
 const versionMarkerName = ".fse-web-version"
@@ -288,6 +290,10 @@ func nativeMethodBridge(nativeAPI http.Handler, nativeAPIKey, nativePath string,
 			nativeRequest.Header.Set("Content-Type", "application/json")
 		}
 		nativeRequest.Header.Set("X-FSE-API-Key", nativeAPIKey)
+		if host := guiHostHeader(r); host != "" {
+			nativeRequest.Header.Set(advertise.GUIHostHeader, host)
+		}
+		nativeRequest.Host = "fse-native"
 		recorder := httptest.NewRecorder()
 		nativeAPI.ServeHTTP(recorder, nativeRequest)
 		if contentType := recorder.Header().Get("Content-Type"); contentType != "" {
@@ -296,6 +302,16 @@ func nativeMethodBridge(nativeAPI http.Handler, nativeAPIKey, nativePath string,
 		w.WriteHeader(recorder.Code)
 		_, _ = w.Write(scrubProxyBody(recorder.Body.Bytes()))
 	}
+}
+
+func guiHostHeader(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwarded != "" {
+		return strings.TrimSpace(strings.Split(forwarded, ",")[0])
+	}
+	return strings.TrimSpace(r.Host)
 }
 
 func scrubProxyBody(body []byte) []byte {

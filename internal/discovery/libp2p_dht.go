@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,13 +27,15 @@ const dhtQueryLimit = 64
 // peers advertising the same namespace. Manual/configured peers remain wired as
 // separate static discovery sources by the daemon.
 type Libp2pDHTRouter struct {
-	host         host.Host
-	dht          *dht.IpfsDHT
-	discovery    *routingdiscovery.RoutingDiscovery
-	mu           sync.Mutex
-	advertise    map[string]struct{}
-	payloads     map[string][]byte
-	bootstrapped bool
+	host           host.Host
+	dht            *dht.IpfsDHT
+	discovery      *routingdiscovery.RoutingDiscovery
+	mu             sync.Mutex
+	advertise      map[string]struct{}
+	payloads       map[string][]byte
+	bootstrapped   bool
+	bootstrapPeers []string
+	resolver       multiaddrResolver
 }
 
 type Libp2pDHTRouterOptions struct {
@@ -64,17 +67,151 @@ func (r *Libp2pDHTRouter) Bootstrap(ctx context.Context, peers []string) error {
 	if r == nil || r.host == nil || r.dht == nil {
 		return fmt.Errorf("libp2p DHT router is not initialized")
 	}
-	infos, err := parsePeerAddrInfos(peers)
+	infos, err := parsePeerAddrInfosWith(ctx, peers, r.activeResolver())
 	if err != nil {
 		return err
 	}
-	for _, info := range infos {
-		r.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
-		connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_ = r.host.Connect(connectCtx, info)
-		cancel()
+	infos = append(r.extraBootstrapInfos(peers), infos...)
+	if r.connectBootstrap(ctx, preferDialableTransports(infos)) > 0 {
+		r.waitForRoutingTable(ctx)
 	}
 	return r.dht.Bootstrap(ctx)
+}
+
+// extraBootstrapInfos adds the libp2p TCP bootstrap peer when the daemon is
+// using the built-in public list. It is not written to config. A test resolver
+// keeps the fixture-only dial list.
+func (r *Libp2pDHTRouter) extraBootstrapInfos(peers []string) []peer.AddrInfo {
+	if r == nil || !samePeers(peers, DefaultPublicDHTBootstrapPeers) {
+		return nil
+	}
+	r.mu.Lock()
+	customResolver := r.resolver != nil
+	r.mu.Unlock()
+	if customResolver {
+		return nil
+	}
+	addr, err := ma.NewMultiaddr("/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ")
+	if err != nil {
+		return nil
+	}
+	info, err := peer.AddrInfoFromP2pAddr(addr)
+	if err != nil || info == nil {
+		return nil
+	}
+	return []peer.AddrInfo{*info}
+}
+
+func samePeers(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// SetResolver replaces DNS multiaddr resolution. Tests use it to expand the
+// default /dnsaddr bootstrap without querying the public DNS.
+func (r *Libp2pDHTRouter) SetResolver(resolver multiaddrResolver) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolver = resolver
+}
+
+// SetBootstrapPeers selects the peers used the next time pairing bootstraps.
+// An empty list keeps the public default, including /dnsaddr/bootstrap.libp2p.io.
+func (r *Libp2pDHTRouter) SetBootstrapPeers(peers []string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(peers) == 0 {
+		r.bootstrapPeers = nil
+		return
+	}
+	r.bootstrapPeers = append([]string(nil), peers...)
+}
+
+func (r *Libp2pDHTRouter) bootstrapPeerList() []string {
+	if r == nil {
+		return append([]string(nil), DefaultPublicDHTBootstrapPeers...)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.bootstrapPeers) == 0 {
+		return append([]string(nil), DefaultPublicDHTBootstrapPeers...)
+	}
+	return append([]string(nil), r.bootstrapPeers...)
+}
+
+func (r *Libp2pDHTRouter) connectBootstrap(ctx context.Context, infos []peer.AddrInfo) int {
+	attempts := singleTransportDials(infos)
+	limit := len(attempts)
+	if limit > maxBootstrapCandidates {
+		limit = maxBootstrapCandidates
+	}
+	// One address at a time. Concurrent dials of the public /dnsaddr peers
+	// fail together from some networks, while the same addresses connect
+	// when each dial finishes before the next one starts.
+	for _, info := range attempts[:limit] {
+		r.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
+		connectCtx, cancel := context.WithTimeout(ctx, bootstrapDialTimeout)
+		err := r.host.Connect(connectCtx, info)
+		cancel()
+		if err == nil {
+			return 1
+		}
+	}
+	return 0
+}
+
+// singleTransportDials separates each address. libp2p treats a combined TCP,
+// WebSocket, and QUIC list as one dial and all three fail together on the
+// public bootstrap, while the same /dnsaddr/p2p address connects alone.
+func singleTransportDials(infos []peer.AddrInfo) []peer.AddrInfo {
+	out := make([]peer.AddrInfo, 0, len(infos))
+	for _, info := range infos {
+		if info.ID == "" {
+			continue
+		}
+		for _, addr := range info.Addrs {
+			if addr == nil || strings.Contains(addr.String(), "/quic") {
+				continue
+			}
+			out = append(out, peer.AddrInfo{ID: info.ID, Addrs: []ma.Multiaddr{addr}})
+		}
+	}
+	return out
+}
+
+func (r *Libp2pDHTRouter) waitForRoutingTable(ctx context.Context) {
+	if r == nil || r.dht == nil || r.dht.RoutingTable() == nil {
+		return
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if r.dht.RoutingTable().Size() > 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (r *Libp2pDHTRouter) FindPeers(ctx context.Context, namespace string) ([]Peer, error) {
@@ -119,25 +256,6 @@ func (r *Libp2pDHTRouter) Close() error {
 		return nil
 	}
 	return r.host.Close()
-}
-
-func parsePeerAddrInfos(addresses []string) ([]peer.AddrInfo, error) {
-	infos := make([]peer.AddrInfo, 0, len(addresses))
-	for _, address := range addresses {
-		if address == "" {
-			continue
-		}
-		multiaddr, err := ma.NewMultiaddr(address)
-		if err != nil {
-			return nil, fmt.Errorf("parse DHT bootstrap peer %q: %w", address, err)
-		}
-		info, err := peer.AddrInfoFromP2pAddr(multiaddr)
-		if err != nil {
-			return nil, fmt.Errorf("parse DHT bootstrap peer %q: %w", address, err)
-		}
-		infos = append(infos, *info)
-	}
-	return infos, nil
 }
 
 func peerAddresses(info peer.AddrInfo) []string {

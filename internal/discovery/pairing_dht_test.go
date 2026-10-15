@@ -2,11 +2,33 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 )
+
+func TestAcceptPartialAdvertiseRequiresPeersAndALiveParent(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := acceptPartialAdvertise(context.DeadlineExceeded, 3, parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := acceptPartialAdvertise(nil, 0, parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := acceptPartialAdvertise(context.DeadlineExceeded, 0, parent); err == nil {
+		t.Fatal("empty routing table was accepted")
+	}
+	cancel()
+	if err := acceptPartialAdvertise(context.DeadlineExceeded, 4, parent); err == nil {
+		t.Fatal("cancelled parent was accepted")
+	}
+	if err := acceptPartialAdvertise(fmt.Errorf("failed to find any peer in table"), 4, context.Background()); err == nil {
+		t.Fatal("lookup failure was accepted")
+	}
+}
 
 func TestPairingStreamReturnsStoredRecordUntilUnpublished(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

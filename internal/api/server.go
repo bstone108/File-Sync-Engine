@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/block"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/foldershare"
@@ -1023,6 +1024,16 @@ func (s *Server) UpdateState(state State) {
 	s.state = state
 }
 
+// SetAdvertiseURL publishes a reachability result without replacing the rest of the status snapshot.
+func (s *Server) SetAdvertiseURL(url string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.state.AdvertiseURL = url
+	s.mu.Unlock()
+}
+
 func (s *Server) CurrentState() State {
 	return s.snapshotState()
 }
@@ -1033,6 +1044,7 @@ func (s *Server) requireKey(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "missing or invalid API key", http.StatusUnauthorized)
 			return
 		}
+		advertise.NoteGUIRequest(r.Host, r.Header.Get(advertise.GUIHostHeader))
 		next(w, r)
 	}
 }

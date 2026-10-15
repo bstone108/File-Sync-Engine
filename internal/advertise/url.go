@@ -51,10 +51,11 @@ func Ensure(configPath string) (config.Config, error) {
 }
 
 // Apply sets cfg.API.AdvertiseURL from an explicit override, a saved
-// host-reachable URL, published port mappings, or a detected address.
-// A stored Docker bridge URL is cleared when nothing better is available.
+// host-reachable URL, published port mappings, a verified learned address,
+// or a detected address. A stored Docker bridge URL is cleared when nothing
+// better is available.
 func Apply(cfg *config.Config, envOverride string) error {
-	resolved, err := ResolveWithHost(*cfg, envOverride, DetectHost())
+	resolved, err := resolve(*cfg, envOverride, DetectHost(), CurrentObservations())
 	if err != nil {
 		if ContainerInternalURL(cfg.API.AdvertiseURL) {
 			cfg.API.AdvertiseURL = ""
@@ -68,22 +69,42 @@ func Apply(cfg *config.Config, envOverride string) error {
 // ResolveWithHost picks the reachable API URL. An explicit override wins, then
 // FSE_ADVERTISE_URLS, then a stored URL, then a published host port, then
 // detectedHost. Docker bridge and other container-internal addresses are skipped.
+// Learned observations are applied by Apply and ResolveWithObservations.
 func ResolveWithHost(cfg config.Config, envOverride, detectedHost string) (string, error) {
-	for _, candidate := range candidateURLs(cfg, envOverride, detectedHost) {
+	return resolve(cfg, envOverride, detectedHost, Observations{})
+}
+
+// ResolveWithObservations applies the same order as ResolveWithHost and, before
+// the locally detected address, accepts verified GUI, peer-observed, and NAT
+// candidates from obs.
+func ResolveWithObservations(cfg config.Config, envOverride, detectedHost string, obs Observations) (string, error) {
+	return resolve(cfg, envOverride, detectedHost, obs)
+}
+
+func resolve(cfg config.Config, envOverride, detectedHost string, obs Observations) (string, error) {
+	for _, candidate := range configuredCandidates(cfg, envOverride) {
 		if !HostReachable(candidate) {
 			continue
 		}
 		return Normalize(candidate, cfg)
 	}
+	for _, candidate := range observationURLs(cfg, obs) {
+		if !HostReachable(candidate) {
+			continue
+		}
+		return Normalize(candidate, cfg)
+	}
+	if strings.TrimSpace(detectedHost) != "" && HostReachable(detectedHost) {
+		return Normalize(detectedHost, cfg)
+	}
 	return "", errors.New("could not detect a host-reachable address; set FSE_ADVERTISE_URL")
 }
 
-func candidateURLs(cfg config.Config, envOverride, detectedHost string) []string {
+func configuredCandidates(cfg config.Config, envOverride string) []string {
 	out := []string{envOverride}
 	out = append(out, ListFromEnv(os.Getenv(EnvVarList))...)
 	out = append(out, cfg.API.AdvertiseURL)
 	out = append(out, PublishedAPIURLs(cfg)...)
-	out = append(out, detectedHost)
 	return out
 }
 

@@ -666,17 +666,6 @@
     });
   }
 
-  function apiTrustStatusSummary(): string {
-    if (!apiTrustStatus) {
-      return 'API certificate trust status has not been fetched for the selected host.';
-    }
-    const fingerprint = apiTrustStatus.certificateSha256 ?? 'not available';
-    const trusted = apiTrustStatus.trustedCertificateConfigured ? 'A trusted fingerprint is configured.' : 'No trusted fingerprint is configured.';
-    const match = apiTrustStatus.trustedCertificateMatches ? 'The trusted certificate matches.' : 'The trusted certificate does not match.';
-    const tls = apiTrustStatus.tlsRequired ? 'yes' : 'no';
-    return `Mode ${apiTrustStatus.mode}. TLS required: ${tls}. Certificate fingerprint: ${fingerprint}. ${trusted} ${match}`;
-  }
-
   function requireNonEmpty(value: string, label: string): string {
     const trimmed = value.trim();
     if (trimmed.length === 0) {
@@ -825,7 +814,8 @@
   }
 
   function publishOperationStatusText(area: LocalControlArea, state: LocalControlOperationState) {
-    const text = `${state.phase}: ${state.summary}${state.detail ? ` ${state.detail}` : ''}`;
+    const extra = state.detail && !state.summary.includes(state.detail) ? ` ${state.detail}` : '';
+    const text = `${state.phase}: ${state.summary}${extra}`;
     if (area === 'peer') peerOperationStatusText = text;
     else if (area === 'folder') folderOperationStatusText = text;
     else if (area === 'discovery') discoveryOperationStatusText = text;
@@ -1854,7 +1844,13 @@
         <button type="button" on:click={pinActiveAPICertificateForSelectedHost} disabled={loading || !hasDaemonCredential || !apiTrustStatus?.certificateSha256}>Pin active certificate</button>
       </div>
       <p class="operation-status" data-phase={localControlOperationStates.apiTrust.phase} aria-label="API trust operation status">{apiTrustOperationStatusText}</p>
-      <p>{apiTrustStatusSummary()}</p>
+      <p data-testid="api-trust-summary">
+        {#if apiTrustStatus}
+          Mode {apiTrustStatus.mode}. TLS required: {apiTrustStatus.tlsRequired ? 'yes' : 'no'}. Certificate fingerprint: {apiTrustStatus.certificateSha256 ?? 'not available'}. {apiTrustStatus.trustedCertificateConfigured ? 'A trusted fingerprint is configured.' : 'No trusted fingerprint is configured.'} {apiTrustStatus.trustedCertificateMatches ? 'The trusted certificate matches.' : 'The trusted certificate does not match.'}
+        {:else}
+          API certificate trust status has not been fetched for the selected host.
+        {/if}
+      </p>
       {#if apiTrustStatus}
         <dl class="host-status-grid" aria-label="API certificate trust details">
           <dt>Certificate fingerprint</dt>
@@ -2059,11 +2055,11 @@
         </p>
         <button type="button" data-testid="show-pairing-code" on:click={showPairingCode} disabled={pairingLoading}>Show pairing code</button>
         {#if pairingCode}
-          <p data-testid="pairing-code">Pairing code {pairingCode}. It expires quickly and works once. The other engine looks it up on the DHT.</p>
+          <p data-testid="pairing-code">Pairing code {pairingCode}. Enter this one code on the other engine. It works once and expires if unused. The other engine looks it up on the DHT.</p>
         {/if}
         <label>
           Remote pairing code
-          <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH" />
+          <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
         </label>
         <button type="button" data-testid="redeem-pairing-code" on:click={redeemRemotePairingCode} disabled={pairingLoading}>Link with pairing code</button>
         <p data-testid="pairing-advertise-url">
@@ -2134,7 +2130,7 @@
           <p class="success">{pairingImportSummary}</p>
         {/if}
         {#if pairingMessage}
-          <p>{pairingMessage}</p>
+          <p data-testid="pairing-message">{pairingMessage}</p>
         {/if}
       </section>
     {/if}

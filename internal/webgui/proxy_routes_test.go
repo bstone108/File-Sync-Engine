@@ -40,9 +40,13 @@ func TestAPITrustProxyUsesDaemonRoute(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(installDir, "index.html"), []byte("ok"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var nativePath string
+	var nativePath, guiHost string
 	native := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nativePath = r.URL.Path
+		guiHost = r.Header.Get("X-FSE-GUI-Host")
+		if r.Host != "fse-native" {
+			t.Fatalf("native host = %q", r.Host)
+		}
 		if r.Header.Get("X-FSE-API-Key") != "native-secret" {
 			t.Fatalf("api key = %q", r.Header.Get("X-FSE-API-Key"))
 		}
@@ -63,6 +67,34 @@ func TestAPITrustProxyUsesDaemonRoute(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || nativePath != "/v1/api/trust" || !strings.Contains(string(body), `"mode":"auto"`) {
 		t.Fatalf("trust proxy status=%d native=%s body=%s", resp.StatusCode, nativePath, body)
+	}
+	if guiHost == "" || guiHost == "fse-native" {
+		t.Fatalf("gui host = %q", guiHost)
+	}
+}
+
+func TestNativeBridgeForwardsConsoleHost(t *testing.T) {
+	var gotHost, gotHeader string
+	native := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		gotHeader = r.Header.Get("X-FSE-GUI-Host")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := nativeMethodBridge(native, "native-secret", "/v1/status", []string{http.MethodGet}, nil)
+	req := httptest.NewRequest(http.MethodGet, "http://ignored/v1/status", nil)
+	req.Host = "192.0.2.20:8385"
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if gotHost != "fse-native" || gotHeader != "192.0.2.20:8385" {
+		t.Fatalf("host=%q header=%q", gotHost, gotHeader)
+	}
+	req = httptest.NewRequest(http.MethodGet, "http://ignored/v1/status", nil)
+	req.Host = "172.17.0.2:8385"
+	req.Header.Set("X-Forwarded-Host", "files.example:8385, proxy.internal")
+	rec = httptest.NewRecorder()
+	handler(rec, req)
+	if gotHeader != "files.example:8385" {
+		t.Fatalf("forwarded host = %q", gotHeader)
 	}
 }
 

@@ -6,7 +6,8 @@
     "dht": true,
     "local": true,
     "dhtNamespace": "filesyncengine/v1",
-    "dhtBootstrapPeers": ["/dnsaddr/bootstrap.libp2p.io"]
+    "dhtBootstrapPeers": ["/dnsaddr/bootstrap.libp2p.io"],
+    "pairingCodeTTL": "1h"
   },
   "peers": [
     {

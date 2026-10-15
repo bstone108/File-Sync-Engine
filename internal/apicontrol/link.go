@@ -22,6 +22,11 @@ var (
 
 // SetLinkService installs the process pairing-code directory. Tests use a
 // memory directory; the daemon installs the libp2p DHT adapter.
+// SweepPairingCodes unpublishes redeemed and expired pairing records.
+func SweepPairingCodes(ctx context.Context) {
+	linkService.Sweep(ctx)
+}
+
 func SetLinkService(service *link.Service) {
 	if service != nil {
 		linkService = service
@@ -49,6 +54,11 @@ func HandleIssuePairCode(configPath string) (api.PairCodeResponse, error) {
 	if err != nil {
 		return api.PairCodeResponse{}, err
 	}
+	ttl, err := cfg.Discovery.PairingCodeLifetime()
+	if err != nil {
+		return api.PairCodeResponse{}, err
+	}
+	linkService.SetTTL(ttl)
 	code, expires, err := linkService.Issue(context.Background(), peeridentity.Identity{PublicKey: cfg.Identity.PublicKey, PrivateKey: cfg.Identity.PrivateKey}, gatheredProfile(cfg, certificate))
 	if err != nil {
 		return api.PairCodeResponse{}, err

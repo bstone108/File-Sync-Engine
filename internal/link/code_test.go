@@ -3,6 +3,7 @@ package link
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,8 +37,11 @@ func TestCodeLookupRejectsHijackAndIsSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(code, "-") || len(NormalizeCode(code)) != 8 {
+	if strings.Count(code, "-") != 3 || len(NormalizeCode(code)) != 16 || Secret(code) == "" || Locator(code) == "" {
 		t.Fatalf("code = %q", code)
+	}
+	if Namespace(code) != Namespace(Locator(code)) || (Locator(code) != Secret(code) && Namespace(code) == Namespace(Secret(code))) {
+		t.Fatalf("namespace = %s locator %s secret %s", Namespace(code), Locator(code), Secret(code))
 	}
 	if expires.Before(time.Now()) {
 		t.Fatal("code already expired")
@@ -66,8 +70,12 @@ func TestCodeLookupRejectsHijackAndIsSingleUse(t *testing.T) {
 	if err != nil || len(payloads) < 2 {
 		t.Fatalf("payloads = %d err=%v", len(payloads), err)
 	}
+	published := string(payloads[0])
+	if strings.Contains(published, Secret(code)) || strings.Contains(published, "203.0.113.9") || strings.Contains(strings.ToLower(published), strings.ToLower(Secret(code))) {
+		t.Fatalf("DHT payload exposes the secret or profile: %s", published)
+	}
 	tampered := append([]byte(nil), payloads[0]...)
-	tampered = []byte(strings.Replace(string(tampered), "203.0.113.9", "198.51.100.8", 1))
+	tampered[len(tampered)/2] ^= 0x01
 	if err := directory.Publish(context.Background(), namespace, tampered); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +195,7 @@ func TestManualProfileKeepsLANTailscalePublicRelayAndPin(t *testing.T) {
 func TestDHTDirectoryPublishesHashedNamespace(t *testing.T) {
 	fake := &recordingDHT{}
 	directory := NewDHTDirectory(fake)
-	code := "ABCD-EFGH"
+	code := "ABCD-EFGH-JKMN-PQRS"
 	payload := []byte(`{"version":"fse-pair-code-v1"}`)
 	if err := directory.Publish(context.Background(), Namespace(code), payload); err != nil {
 		t.Fatal(err)
@@ -203,6 +211,139 @@ func TestDHTDirectoryPublishesHashedNamespace(t *testing.T) {
 	got, err := directory.Lookup(context.Background(), Namespace(code))
 	if err != nil || len(got) != 1 || string(got[0]) != string(payload) {
 		t.Fatalf("lookup = %q err=%v", got, err)
+	}
+}
+
+func TestPairingCodeReplayIsRejectedWithinExpiry(t *testing.T) {
+	identity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	service := NewService(NewMemoryDirectory())
+	service.now = func() time.Time { return now }
+	code, expires, err := service.Issue(context.Background(), identity, Profile{DiscoveryID: identity.PublicKey, NodeName: "node", Addresses: []Address{{Kind: "manual", Address: "http://10.0.0.2:22420"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expires.Sub(now) != CodeTTL || CodeTTL != time.Hour {
+		t.Fatalf("default expiry = %s want %s", expires.Sub(now), CodeTTL)
+	}
+	service.SetTTL(30 * time.Minute)
+	_, shortExpiry, err := service.Issue(context.Background(), identity, Profile{DiscoveryID: identity.PublicKey, NodeName: "node", Addresses: []Address{{Kind: "manual", Address: "http://10.0.0.2:22420"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shortExpiry.Sub(now) != 30*time.Minute {
+		t.Fatalf("configured expiry = %s", shortExpiry.Sub(now))
+	}
+	redeemer, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := SignClaim(redeemer, ClaimRequest{
+		Code:     code,
+		NodeName: "redeemer",
+		APIKey:   "redeemer-api",
+		Profile:  Profile{DiscoveryID: redeemer.PublicKey, NodeName: "redeemer", Addresses: []Address{{Kind: "manual", Address: "http://10.0.0.5:22420"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, claimErr := service.Claim(context.Background(), claim)
+			results <- claimErr
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	accepted := 0
+	rejected := 0
+	for claimErr := range results {
+		if claimErr == nil {
+			accepted++
+			continue
+		}
+		if strings.Contains(claimErr.Error(), "already used") {
+			rejected++
+			continue
+		}
+		t.Fatalf("claim = %v", claimErr)
+	}
+	if accepted != 1 || rejected != 1 {
+		t.Fatalf("accepted %d rejected %d", accepted, rejected)
+	}
+	if _, err := service.Lookup(context.Background(), code); err == nil {
+		t.Fatal("redeemed code is still published")
+	}
+	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("replay = %v", err)
+	}
+}
+
+func TestExpiredPairingCodeIsUnpublished(t *testing.T) {
+	identity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := NewMemoryDirectory()
+	service := NewService(directory)
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	service.ttl = time.Minute
+	code, _, err := service.Issue(context.Background(), identity, Profile{DiscoveryID: identity.PublicKey, NodeName: "node", Addresses: []Address{{Kind: "manual", Address: "http://10.0.0.2:22420"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloads, err := directory.Lookup(context.Background(), Namespace(code))
+	if err != nil || len(payloads) != 1 {
+		t.Fatalf("published = %d err=%v", len(payloads), err)
+	}
+	service.now = func() time.Time { return now.Add(2 * time.Minute) }
+	service.Sweep(context.Background())
+	payloads, err = directory.Lookup(context.Background(), Namespace(code))
+	if err != nil || len(payloads) != 0 {
+		t.Fatalf("expired payload still published: %d err=%v", len(payloads), err)
+	}
+	redeemer, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := SignClaim(redeemer, ClaimRequest{Code: code, NodeName: "redeemer", APIKey: "redeemer-api", Profile: Profile{DiscoveryID: redeemer.PublicKey, NodeName: "redeemer"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("claim = %v", err)
+	}
+}
+
+func TestLocatorAloneCannotReadPairingRecord(t *testing.T) {
+	identity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(NewMemoryDirectory())
+	code, _, err := service.Issue(context.Background(), identity, Profile{DiscoveryID: identity.PublicKey, NodeName: "node", Addresses: []Address{{Kind: "manual", Address: "http://10.0.0.2:22420"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator := Locator(code)
+	display := locator[:4] + "-" + locator[4:]
+	if _, err := service.Lookup(context.Background(), display); err == nil {
+		t.Fatal("locator alone opened the record")
+	}
+	wrong := locator[:4] + "-" + locator[4:] + "-2222-3333"
+	if _, err := service.Lookup(context.Background(), wrong); err == nil || !strings.Contains(err.Error(), "key verification") {
+		t.Fatalf("wrong secret = %v", err)
 	}
 }
 
