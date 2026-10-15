@@ -4,7 +4,16 @@ const path = require('node:path');
 
 const composeFile = path.resolve(__dirname, 'compose.yaml');
 
+async function openNodeOptions(page) {
+  const dialog = page.getByTestId('node-options-dialog');
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page.getByTestId('node-options').click();
+  }
+  await expect(dialog).toBeVisible();
+}
+
 async function pairFrom(page) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-peers').click();
   await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
   await expect(page.getByTestId('pairing-reachable-url')).toHaveCount(0);
@@ -23,6 +32,7 @@ async function pairFrom(page) {
 }
 
 async function importOn(page, packageText, expected) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-peers').click();
   await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
   await page.getByTestId('pairing-import-text').fill(packageText);
@@ -32,7 +42,6 @@ async function importOn(page, packageText, expected) {
 }
 
 async function editSharedFolder(page) {
-  await page.getByTestId('nav-folders').click();
   await page.getByTestId('folder-open').filter({ hasText: 'shared' }).click();
   await expect(page.getByTestId('folder-editor')).toBeVisible();
   await page.getByTestId('folder-edit-mode').selectOption('sendonly');
@@ -55,6 +64,7 @@ async function editSharedFolder(page) {
 }
 
 async function addSharedFolder(page) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-daemon-settings').click();
   await page.locator('form[aria-label="Daemon settings folder form"] select[name="folderFormAction"]').selectOption('add');
   await page.getByTestId('folder-id').fill('shared');
@@ -68,6 +78,7 @@ async function addSharedFolder(page) {
 }
 
 async function changeLogLevel(page) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-daemon-settings').click();
   const localEngine = page.getByTestId('instance-option').filter({ hasText: '· local' });
   if (await localEngine.count()) {
@@ -93,6 +104,7 @@ async function changeLogLevel(page) {
 }
 
 async function pageShowsFolderError(page) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-daemon-settings').click();
   await page.locator('form[aria-label="Daemon settings folder form"] select[name="folderFormAction"]').selectOption('remove');
   await page.getByTestId('folder-id').fill('docs');
@@ -125,6 +137,7 @@ async function showDefaultPairingCode(page, service) {
   const cfg = JSON.parse(raw);
   const peers = cfg.discovery && cfg.discovery.dhtBootstrapPeers;
   expect(peers).toEqual(['/dnsaddr/bootstrap.libp2p.io']);
+  await openNodeOptions(page);
   await page.getByTestId('nav-peers').click();
   await page.getByTestId('show-pairing-code').click();
   const code = page.getByTestId('pairing-code');
@@ -209,7 +222,10 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await expect(a.getByTestId('local-engine-connection')).toHaveText('Online');
   await expect(b.getByTestId('local-engine-connection')).toHaveText('Online');
   await expect(a.getByTestId('instance-switcher')).toBeVisible();
+  await openNodeOptions(a);
   await a.getByTestId('nav-overview').click();
+  await a.getByTestId('node-options-close').click();
+  await expect(a.getByTestId('node-options-dialog')).toHaveCount(0);
   await a.setViewportSize({ width: 1280, height: 800 });
   await a.screenshot({ path: 'screenshots/desktop-overview.png', fullPage: true });
   await a.setViewportSize({ width: 390, height: 844 });

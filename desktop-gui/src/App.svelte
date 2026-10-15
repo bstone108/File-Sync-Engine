@@ -258,6 +258,7 @@
   };
 
   let activeView: DesktopUIView = 'overview';
+  let nodeOptionsOpen = false;
   let managedDaemonInstances: ManagedDaemonInstance[] = ensureLocalInstanceFirst([defaultLocalDaemonInstance()]);
   let selectedInstanceID = managedDaemonInstances[0].id;
   let expandedInstanceGroups: Record<string, boolean> = defaultExpandedInstanceGroups(managedDaemonInstances);
@@ -989,7 +990,16 @@
     theme = theme === 'dark' ? 'light' : 'dark';
   }
 
+  function openNodeOptions() {
+    nodeOptionsOpen = true;
+  }
+
+  function closeNodeOptions() {
+    nodeOptionsOpen = false;
+  }
+
   function openFolderEditor(folder: DaemonFolder) {
+    nodeOptionsOpen = false;
     folderEditor = folder;
     folderEditPath = folder.path ?? '';
     folderEditMode = folder.mode || 'sendrecv';
@@ -1527,66 +1537,19 @@
 
 <main class="host-scoped-shell" data-theme={theme}>
   <aside class="host-sidebar" aria-label="Host and view navigation">
-    <section class="host-card">
-      <span class="eyebrow">Selected host</span>
-      <h1>{selectedManagedInstance.label}</h1>
-      <p>{selectedManagedInstance.statusSummary}</p>
-      <small>Local bundled engine; local instance pinned first; selected host scope applies to every view except the top GUI menu.</small>
-    </section>
-    <section class="host-card" aria-label="Managed daemon instances">
-      <span class="eyebrow">Instance registry</span>
-      <p class="instance-note">Expandable left navigation panel for local and remote engines. The local instance remains pinned first and quick switching updates the selected host scope.</p>
-      {#each Object.entries(groupedManagedDaemonInstances) as [groupName, instances]}
-        <div class="instance-group">
-          <button
-            type="button"
-            class="instance-group-toggle"
-            aria-expanded={expandedInstanceGroups[groupName] ?? true}
-            aria-controls={`instance-group-${groupName.replace(/\s+/g, '-').toLowerCase()}`}
-            on:click={() => toggleInstanceGroup(groupName)}
-          >
-            <span>{groupName}</span>
-            <small>{(expandedInstanceGroups[groupName] ?? true) ? 'Collapse' : 'Expand'} · {instances.length} host{instances.length === 1 ? '' : 's'}</small>
-          </button>
-          {#if expandedInstanceGroups[groupName] ?? true}
-            <div class="instance-list" id={`instance-group-${groupName.replace(/\s+/g, '-').toLowerCase()}`}>
-              {#each instances as instance}
-                <button
-                  type="button"
-                  class="quick-switch"
-                  class:active={selectedInstanceID === instance.id}
-                  aria-current={selectedInstanceID === instance.id ? 'true' : undefined}
-                  on:click={() => selectManagedInstance(instance.id)}
-                >
-                  <span>{instance.label}</span>
-                  <strong class="connection-state" data-state={instance.kind === 'local' ? localEngineConnectionState : instance.connectionState} data-testid={instance.kind === 'local' ? 'local-engine-connection' : undefined}>{instance.kind === 'local' ? localEngineConnectionLabel : formatConnectionStateLabel(instance.connectionState)}</strong>
-                  <small>{instance.apiBaseURL}</small>
-                  <p class="peer-pairing-status" aria-label="Peer pairing/negotiation status">
-                    <strong>Peer pairing/negotiation status</strong>: {buildPeerPairingStatusLine(instance)}
-                  </p>
-                  <span class="sr-only">Negotiating identity · Exchanging keys · Waiting on relay/mesh hop · Direct connection established · Revoked identity</span>
-                  <dl class="host-status-metrics" aria-label="Online/offline state, remaining transfer data, and average transfer rates">
-                    {#each buildReadableHostStatusMetrics(instance) as metric}
-                      <div>
-                        <dt>{metric.label}</dt>
-                        <dd>{metric.value}</dd>
-                      </div>
-                    {/each}
-                  </dl>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/each}
-      <p class="instance-note">Remote daemon instances can be added by API endpoint. API keys stay in the OS credential vault, not in this page.</p>
-    </section>
-    <section class="host-card" data-testid="instance-switcher" aria-label="Linked engines">
+    <section class="host-card slim-node">
       <div class="switcher-head">
-        <span class="eyebrow">Linked engines</span>
+        <span class="eyebrow">This node</span>
         <button type="button" class="theme-toggle" data-testid="theme-toggle" on:click={toggleTheme}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
       </div>
-      <p class="instance-note">This GUI opens on the local engine. Choose another linked engine to manage it here. Offline engines keep a pending-change count until they come online.</p>
+      <h1 data-testid="device-node-name">{status?.nodeName ?? 'Loading'}</h1>
+      <strong class="connection-state" data-state={localEngineConnectionState} data-testid="local-engine-connection">{localEngineConnectionLabel}</strong>
+      <p class="instance-note">{daemonFolders.length} folder{daemonFolders.length === 1 ? '' : 's'} · {daemonPeers.length} peer{daemonPeers.length === 1 ? '' : 's'}</p>
+      <button type="button" data-testid="node-options" on:click={openNodeOptions}>Options</button>
+    </section>
+    <section class="host-card" data-testid="instance-switcher" aria-label="Linked engines">
+      <span class="eyebrow">Instance</span>
+      <p class="instance-note">Local by default. Choose a linked engine to manage that node.</p>
       {#if configInstances.length > 0}
         <label>
           Engine
@@ -1607,9 +1570,7 @@
               on:click={() => selectConfigInstance(instance.instanceId)}
             >
               <span>{instance.local ? `${instance.label} · local` : instance.label}</span>
-              <strong class="connection-state" data-state={instance.online ? 'online' : 'offline'}>{instance.online ? 'Online' : 'Offline'}</strong>
-              <small>Last seen {instance.lastSeen || 'not yet'}</small>
-              <small data-testid="instance-pending-count">{instance.pendingChanges} pending</small>
+              <small>{instance.online ? 'Online' : 'Offline'} · <span data-testid="instance-pending-count">{instance.pendingChanges} pending</span></small>
             </button>
           {/each}
         </div>
@@ -1617,20 +1578,30 @@
         <p class="empty-state">No linked engines are loaded yet. The local engine stays selected.</p>
       {/if}
     </section>
-    <nav aria-label="Selected host sections">
-      {#each viewCatalog.filter((view) => !(dockerGUI && view.id === 'desktop-settings')) as view}
-        <button
-          type="button"
-          class:active={activeView === view.id}
-          aria-current={activeView === view.id ? 'page' : undefined}
-          data-testid={`nav-${view.id}`}
-          on:click={() => activeView = view.id}
-        >
-          <span>{view.label}</span>
-          <small>{view.description}</small>
-        </button>
-      {/each}
-    </nav>
+    <section class="host-card" aria-label="Folders">
+      <span class="eyebrow">Folders</span>
+      {#if daemonFolders.length === 0}
+        <p class="empty-state">No folders are configured.</p>
+      {:else}
+        <ul class="folder-nav" aria-label="Configured folders">
+          {#each daemonFolders as folder}
+            <li>
+              <button
+                type="button"
+                class="quick-switch"
+                class:active={folderEditor?.id === folder.id}
+                aria-current={folderEditor?.id === folder.id ? 'true' : undefined}
+                data-testid="folder-open"
+                on:click={() => openFolderEditor(folder)}
+              >
+                <span>{folder.id}</span>
+                <small>{folder.enabled === false ? 'paused' : (folder.mode ?? 'sendrecv')}</small>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
   </aside>
 
   <section class="host-content" aria-live="polite">
@@ -1654,6 +1625,140 @@
         {/if}
       </section>
     {/if}
+    {#if folderEditor}
+      <form class="control-form folder-edit-view" data-testid="folder-editor" aria-label="Folder editor" on:submit|preventDefault={saveFolderEditor}>
+        <span class="eyebrow">Folder</span>
+        <h2>Edit {folderEditor.id}</h2>
+        <p>sendrecv exchanges files both ways. send only uploads. recv only downloads. An empty peer list shares with every paired peer. Ignore patterns use one pattern per line.</p>
+        <label>
+          Path
+          <input bind:value={folderEditPath} name="folderEditPath" data-testid="folder-edit-path" autocomplete="off" />
+        </label>
+        <label>
+          Mode
+          <select bind:value={folderEditMode} name="folderEditMode" data-testid="folder-edit-mode">
+            <option value="sendrecv">sendrecv</option>
+            <option value="sendonly">send</option>
+            <option value="recvonly">recv</option>
+          </select>
+        </label>
+        <label>
+          Ignore patterns
+          <textarea bind:value={folderEditIgnore} name="folderEditIgnore" data-testid="folder-edit-ignore" rows="4"></textarea>
+        </label>
+        <div>
+          <p>Shared peers</p>
+          {#if folderEditSharedPeers.length === 0}
+            <p>Every paired peer.</p>
+          {:else}
+            <ul aria-label="Shared peers">
+              {#each folderEditSharedPeers as peer}
+                <li>
+                  <span data-testid="folder-shared-peer">{peer}</span>
+                  <button type="button" data-testid="folder-shared-remove" on:click={() => removeFolderSharedPeer(peer)}>Remove {peer}</button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          <label>
+            Add peer ID
+            <input bind:value={folderEditPeerDraft} name="folderEditPeerDraft" data-testid="folder-shared-add-input" autocomplete="off" />
+          </label>
+          <button type="button" data-testid="folder-shared-add" on:click={addFolderSharedPeer}>Add shared peer</button>
+        </div>
+        <div class="lifecycle-actions">
+          <button type="submit" data-testid="folder-edit-save" disabled={loading || !hasDaemonCredential}>Save folder</button>
+          <button type="button" data-testid="folder-pause" on:click={() => pauseOrResumeFolder('pause')} disabled={loading || !hasDaemonCredential}>Pause folder</button>
+          <button type="button" data-testid="folder-resume" on:click={() => pauseOrResumeFolder('resume')} disabled={loading || !hasDaemonCredential}>Resume folder</button>
+          <button type="button" data-testid="folder-editor-remove" on:click={removeFolderFromEditor} disabled={loading || !hasDaemonCredential}>Remove folder</button>
+          <button type="button" on:click={() => { folderEditor = null; }}>Close</button>
+        </div>
+        {#if folderEditorRemoveConfirm}
+          <div class="confirm-dialog" role="dialog" data-testid="folder-editor-confirm">
+            <p>Stop sharing {folderEditor.id}? Files already on disk stay where they are.</p>
+            <button type="button" data-testid="folder-editor-confirm-remove" on:click={removeFolderFromEditor}>Remove folder</button>
+          </div>
+        {/if}
+        <p class="operation-status" data-testid="folder-edit-status">{folderEditorMessage}</p>
+      </form>
+    {:else}
+      <section class="connection-card" aria-label="Folder edit">
+        <span class="eyebrow">Folder</span>
+        <h2>Select a folder</h2>
+        <p>Folders for this node are listed in the panel. Open one to change its path, mode, shared peers, and ignore patterns, or to pause, resume, and remove it. Settings, encryption, pairing, and connection details are in Options.</p>
+      </section>
+    {/if}
+  </section>
+  {#if nodeOptionsOpen}
+    <div class="node-options-dialog" role="dialog" aria-modal="false" aria-label="Node options" data-testid="node-options-dialog">
+      <div class="node-options-bar">
+        <div>
+          <span class="eyebrow">Node options</span>
+          <h2>{configInstances.find((instance) => instance.instanceId === selectedConfigInstanceId)?.label ?? selectedManagedInstance.label}</h2>
+        </div>
+        <button type="button" data-testid="node-options-close" on:click={closeNodeOptions}>Close</button>
+      </div>
+      <section class="host-card" aria-label="Managed daemon instances">
+        <span class="eyebrow">Instance registry</span>
+        <p class="instance-note">Local and remote engines. The local instance remains pinned first. API keys stay in the OS credential vault, not in this page.</p>
+        {#each Object.entries(groupedManagedDaemonInstances) as [groupName, instances]}
+          <div class="instance-group">
+            <button
+              type="button"
+              class="instance-group-toggle"
+              aria-expanded={expandedInstanceGroups[groupName] ?? true}
+              aria-controls={`instance-group-${groupName.replace(/\s+/g, '-').toLowerCase()}`}
+              on:click={() => toggleInstanceGroup(groupName)}
+            >
+              <span>{groupName}</span>
+              <small>{(expandedInstanceGroups[groupName] ?? true) ? 'Collapse' : 'Expand'} · {instances.length} host{instances.length === 1 ? '' : 's'}</small>
+            </button>
+            {#if expandedInstanceGroups[groupName] ?? true}
+              <div class="instance-list" id={`instance-group-${groupName.replace(/\s+/g, '-').toLowerCase()}`}>
+                {#each instances as instance}
+                  <button
+                    type="button"
+                    class="quick-switch"
+                    class:active={selectedInstanceID === instance.id}
+                    aria-current={selectedInstanceID === instance.id ? 'true' : undefined}
+                    on:click={() => selectManagedInstance(instance.id)}
+                  >
+                    <span>{instance.label}</span>
+                    <strong class="connection-state" data-state={instance.kind === 'local' ? localEngineConnectionState : instance.connectionState}>{instance.kind === 'local' ? localEngineConnectionLabel : formatConnectionStateLabel(instance.connectionState)}</strong>
+                    <small>{instance.apiBaseURL}</small>
+                    <p class="peer-pairing-status" aria-label="Peer pairing/negotiation status">
+                      <strong>Peer pairing/negotiation status</strong>: {buildPeerPairingStatusLine(instance)}
+                    </p>
+                    <span class="sr-only">Negotiating identity · Exchanging keys · Waiting on relay/mesh hop · Direct connection established · Revoked identity</span>
+                    <dl class="host-status-metrics" aria-label="Online/offline state, remaining transfer data, and average transfer rates">
+                      {#each buildReadableHostStatusMetrics(instance) as metric}
+                        <div>
+                          <dt>{metric.label}</dt>
+                          <dd>{metric.value}</dd>
+                        </div>
+                      {/each}
+                    </dl>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </section>
+      <nav class="node-options-nav" aria-label="Selected host sections">
+        {#each viewCatalog.filter((view) => !(dockerGUI && view.id === 'desktop-settings')) as view}
+          <button
+            type="button"
+            class:active={activeView === view.id}
+            aria-current={activeView === view.id ? 'page' : undefined}
+            data-testid={`nav-${view.id}`}
+            on:click={() => activeView = view.id}
+          >
+            <span>{view.label}</span>
+            <small>{view.description}</small>
+          </button>
+        {/each}
+      </nav>
     <section class="host-scope-banner" aria-label="Selected host scope">
       <span class="eyebrow">Selected host scope</span>
       <h2>{selectedHostContext.label}</h2>
@@ -1680,7 +1785,7 @@
     {#if dockerGUI}
       <h2>Device identity</h2>
       <dl class="host-status-grid" aria-label="Device identity">
-        <dt>Node</dt><dd data-testid="device-node-name">{status?.nodeName ?? 'Loading'}</dd>
+        <dt>Node</dt><dd>{status?.nodeName ?? 'Loading'}</dd>
         <dt>Identity</dt><dd>{status?.identityPublicKey ?? 'Loading'}</dd>
         <dt>Engine schema</dt><dd>{status?.engineSchemaVersion ?? '—'}</dd>
         <dt>Daemon</dt><dd>{status?.status ?? 'starting'}</dd>
@@ -2015,7 +2120,7 @@
     {#if activeView === 'folders'}
       <section class="connection-card">
         <h2>Selected-host folders</h2>
-        <p>Live folder roots and modes from {selectedManagedInstance.label}. Open a folder to change its path, mode, shared peers, and ignore patterns, or to pause, resume, and remove it.</p>
+        <p>Folder editing opens in the main view. This list is the same set shown beside Options.</p>
         <button type="button" on:click={refreshOperationalState} disabled={loading || !hasDaemonCredential}>Refresh folders</button>
         {#if daemonFolders.length === 0}
           <p>No folders are configured.</p>
@@ -2024,66 +2129,9 @@
             {#each daemonFolders as folder}
               <li data-testid="folder-row">
                 <strong>{folder.id}</strong> · {folder.path ?? 'path unavailable'} · {folder.mode ?? 'mode unavailable'} · {folder.enabled === false ? 'paused' : (folder.status ?? 'configured')}
-                <button type="button" data-testid="folder-open" on:click={() => openFolderEditor(folder)}>Edit {folder.id}</button>
               </li>
             {/each}
           </ul>
-        {/if}
-        {#if folderEditor}
-          <form class="control-form" data-testid="folder-editor" aria-label="Folder editor" on:submit|preventDefault={saveFolderEditor}>
-            <h3>Edit folder {folderEditor.id}</h3>
-            <p>sendrecv exchanges files both ways. send only uploads. recv only downloads. An empty peer list shares with every paired peer. Ignore patterns use one pattern per line.</p>
-            <label>
-              Path
-              <input bind:value={folderEditPath} name="folderEditPath" data-testid="folder-edit-path" autocomplete="off" />
-            </label>
-            <label>
-              Mode
-              <select bind:value={folderEditMode} name="folderEditMode" data-testid="folder-edit-mode">
-                <option value="sendrecv">sendrecv</option>
-                <option value="sendonly">send</option>
-                <option value="recvonly">recv</option>
-              </select>
-            </label>
-            <label>
-              Ignore patterns
-              <textarea bind:value={folderEditIgnore} name="folderEditIgnore" data-testid="folder-edit-ignore" rows="4"></textarea>
-            </label>
-            <div>
-              <p>Shared peers</p>
-              {#if folderEditSharedPeers.length === 0}
-                <p>Every paired peer.</p>
-              {:else}
-                <ul aria-label="Shared peers">
-                  {#each folderEditSharedPeers as peer}
-                    <li>
-                      <span data-testid="folder-shared-peer">{peer}</span>
-                      <button type="button" data-testid="folder-shared-remove" on:click={() => removeFolderSharedPeer(peer)}>Remove {peer}</button>
-                    </li>
-                  {/each}
-                </ul>
-              {/if}
-              <label>
-                Add peer ID
-                <input bind:value={folderEditPeerDraft} name="folderEditPeerDraft" data-testid="folder-shared-add-input" autocomplete="off" />
-              </label>
-              <button type="button" data-testid="folder-shared-add" on:click={addFolderSharedPeer}>Add shared peer</button>
-            </div>
-            <div class="lifecycle-actions">
-              <button type="submit" data-testid="folder-edit-save" disabled={loading || !hasDaemonCredential}>Save folder</button>
-              <button type="button" data-testid="folder-pause" on:click={() => pauseOrResumeFolder('pause')} disabled={loading || !hasDaemonCredential}>Pause folder</button>
-              <button type="button" data-testid="folder-resume" on:click={() => pauseOrResumeFolder('resume')} disabled={loading || !hasDaemonCredential}>Resume folder</button>
-              <button type="button" data-testid="folder-editor-remove" on:click={removeFolderFromEditor} disabled={loading || !hasDaemonCredential}>Remove folder</button>
-              <button type="button" on:click={() => { folderEditor = null; }}>Close</button>
-            </div>
-            {#if folderEditorRemoveConfirm}
-              <div class="confirm-dialog" role="dialog" data-testid="folder-editor-confirm">
-                <p>Stop sharing {folderEditor.id}? Files already on disk stay where they are.</p>
-                <button type="button" data-testid="folder-editor-confirm-remove" on:click={removeFolderFromEditor}>Remove folder</button>
-              </div>
-            {/if}
-            <p class="operation-status" data-testid="folder-edit-status">{folderEditorMessage}</p>
-          </form>
         {/if}
       </section>
       <section class="connection-card remote-folder-browse">
@@ -2438,7 +2486,8 @@
         </div>
       </section>
     {/if}
-  </section>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -2473,7 +2522,7 @@
   }
   .host-scoped-shell {
     display: grid;
-    grid-template-columns: minmax(17rem, 22rem) minmax(0, 1fr);
+    grid-template-columns: minmax(12.5rem, 16rem) minmax(0, 1fr);
     align-items: start;
     gap: 1rem;
     padding: 1rem;
@@ -2488,6 +2537,9 @@
     .connection-card {
       width: auto;
       padding: 1rem;
+    }
+    .node-options-dialog {
+      left: 0;
     }
   }
   .host-sidebar {
@@ -2513,26 +2565,6 @@
     font-size: 0.8rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-  }
-  .host-sidebar nav {
-    display: grid;
-    gap: 0.5rem;
-  }
-  .host-sidebar nav button {
-    display: grid;
-    gap: 0.25rem;
-    text-align: left;
-    background: var(--surface);
-    color: inherit;
-  }
-  .host-sidebar nav button.active,
-  .host-sidebar nav button[aria-current='page'] {
-    border-color: var(--accent);
-    background: #202a3d;
-  }
-  .host-sidebar nav small {
-    color: var(--muted);
-    line-height: 1.35;
   }
   .instance-group,
   .instance-list {
@@ -2834,5 +2866,76 @@
   .host-status-grid dd {
     margin: 0 0 0.5rem;
     overflow-wrap: anywhere;
+  }
+  .host-sidebar .host-card {
+    padding: 0.75rem;
+    gap: 0.4rem;
+  }
+  .host-sidebar h1 {
+    margin: 0;
+    font-size: 1.15rem;
+    overflow-wrap: anywhere;
+  }
+  .slim-node > button {
+    width: 100%;
+  }
+  .folder-nav {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.35rem;
+  }
+  .folder-edit-view {
+    width: min(52rem, 100%);
+  }
+  .node-options-dialog {
+    position: fixed;
+    z-index: 40;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 18rem;
+    overflow: auto;
+    padding: 1rem 1.25rem 2rem;
+    background: var(--bg);
+    border-left: 1px solid var(--line);
+    display: grid;
+    align-content: start;
+    gap: 1rem;
+  }
+  .node-options-bar {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.25rem 0 0.75rem;
+    background: var(--bg);
+  }
+  .node-options-bar h2 {
+    margin: 0;
+  }
+  .node-options-nav {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.5rem;
+  }
+  .node-options-nav button {
+    display: grid;
+    gap: 0.25rem;
+    text-align: left;
+    background: var(--surface);
+    color: inherit;
+  }
+  .node-options-nav button.active,
+  .node-options-nav button[aria-current='page'] {
+    border-color: var(--accent);
+  }
+  .node-options-nav small {
+    color: var(--muted);
+    line-height: 1.35;
   }
 </style>
