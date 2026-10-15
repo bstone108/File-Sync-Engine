@@ -42,14 +42,37 @@ func HandleFolderCommand(configPath string, req api.FolderCommandRequest) (api.F
 		if err := configops.AddFolderShared(configPath, req.ID, req.Path, req.Mode, shared); err != nil {
 			return api.FolderCommandResponse{}, err
 		}
+		if req.Ignore != nil {
+			if err := configops.UpdateFolderDetails(configPath, req.ID, configops.FolderUpdate{Ignore: req.Ignore}); err != nil {
+				return api.FolderCommandResponse{}, err
+			}
+		}
 	case "remove":
 		if err := configops.RemoveFolder(configPath, req.ID); err != nil {
 			return api.FolderCommandResponse{}, err
 		}
 	case "update":
-		if err := configops.UpdateFolderShared(configPath, req.ID, req.Path, req.Mode, req.SharedWith); err != nil {
+		if err := configops.UpdateFolderDetails(configPath, req.ID, configops.FolderUpdate{
+			Path:       req.Path,
+			Mode:       req.Mode,
+			SharedWith: req.SharedWith,
+			Ignore:     req.Ignore,
+			Enabled:    req.Enabled,
+		}); err != nil {
 			return api.FolderCommandResponse{}, err
 		}
+	case "pause":
+		disabled := false
+		if err := configops.UpdateFolderDetails(configPath, req.ID, configops.FolderUpdate{Enabled: &disabled}); err != nil {
+			return api.FolderCommandResponse{}, err
+		}
+		return api.FolderCommandResponse{Action: req.Action, ID: req.ID, Status: "accepted", Message: "folder paused; sync stays stopped until resume"}, nil
+	case "resume":
+		enabled := true
+		if err := configops.UpdateFolderDetails(configPath, req.ID, configops.FolderUpdate{Enabled: &enabled}); err != nil {
+			return api.FolderCommandResponse{}, err
+		}
+		return api.FolderCommandResponse{Action: req.Action, ID: req.ID, Status: "accepted", Message: "folder resumed; daemon hot reload will adopt the config change"}, nil
 	default:
 		return api.FolderCommandResponse{}, fmt.Errorf("unsupported folder command action %q", req.Action)
 	}

@@ -68,6 +68,52 @@ func TestHandlePeerFolderDiscoveryCommandsMutateConfig(t *testing.T) {
 	}
 }
 
+func TestFolderCommandEditsIgnorePeersAndPause(t *testing.T) {
+	configPath := writeCommandConfig(t)
+	folderPath := filepath.Join(t.TempDir(), "docs")
+	ignore := []string{"*.tmp", "cache/"}
+	shared := []string{"peer-a", "peer-a", " peer-b "}
+	if _, err := HandleFolderCommand(configPath, api.FolderCommandRequest{
+		Action: "add", ID: "docs", Path: folderPath, Mode: "send", Ignore: &ignore, SharedWith: &shared,
+	}); err != nil {
+		t.Fatalf("add folder: %v", err)
+	}
+	cleared := []string{}
+	if _, err := HandleFolderCommand(configPath, api.FolderCommandRequest{
+		Action: "update", ID: "docs", Mode: "recv", SharedWith: &cleared, Ignore: &ignore,
+	}); err != nil {
+		t.Fatalf("update folder: %v", err)
+	}
+	cfg, err := config.LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	folder := cfg.Folders[0]
+	if folder.Mode != config.ModeReceiveOnly || len(folder.SharedWith) != 0 || len(folder.Ignore) != 2 || folder.Ignore[0] != "*.tmp" {
+		t.Fatalf("folder edit = %+v", folder)
+	}
+	if _, err := HandleFolderCommand(configPath, api.FolderCommandRequest{Action: "pause", ID: "docs"}); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	cfg, err = config.LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("reload paused: %v", err)
+	}
+	if cfg.Folders[0].Enabled {
+		t.Fatal("paused folder is still enabled")
+	}
+	if _, err := HandleFolderCommand(configPath, api.FolderCommandRequest{Action: "resume", ID: "docs"}); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	cfg, err = config.LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("reload resumed: %v", err)
+	}
+	if !cfg.Folders[0].Enabled || cfg.Folders[0].Mode != config.ModeReceiveOnly {
+		t.Fatalf("resume changed the folder: %+v", cfg.Folders[0])
+	}
+}
+
 func TestHandleConfigCommandsRejectUnsupportedActions(t *testing.T) {
 	configPath := writeCommandConfig(t)
 	if _, err := HandlePeerCommand(configPath, api.PeerCommandRequest{Action: "bogus", ID: "peer-a"}); err == nil || !strings.Contains(err.Error(), "unsupported peer command action") {

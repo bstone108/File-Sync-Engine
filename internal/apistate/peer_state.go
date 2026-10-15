@@ -77,7 +77,20 @@ func BuildState(opts StateBuildOptions) api.State {
 	folders := make([]api.FolderState, 0, len(opts.Config.Folders))
 	eng := engine.New(opts.Store)
 	for _, folder := range opts.Config.Folders {
-		folderState := api.FolderState{ID: folder.ID, Path: folder.Path, Mode: string(folder.Mode), Status: "configured"}
+		enabled := folder.SharingEnabled()
+		status := "configured"
+		if !enabled {
+			status = "paused"
+		}
+		folderState := api.FolderState{
+			ID:         folder.ID,
+			Path:       folder.Path,
+			Mode:       string(folder.Mode),
+			Status:     status,
+			Enabled:    enabled,
+			SharedWith: append([]string(nil), folder.SharedWith...),
+			Ignore:     append([]string(nil), folder.Ignore...),
+		}
 		if index, err := eng.FolderIndexState(folder.ID); err == nil {
 			folderState.Index = FolderIndexState(index)
 		}

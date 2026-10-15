@@ -154,6 +154,14 @@
   let remoteBrowseLoading = false;
   let folderFormMode = 'sendrecv';
   let folderFormSharedWith = '';
+  let folderEditor: DaemonFolder | null = null;
+  let folderEditPath = '';
+  let folderEditMode = 'sendrecv';
+  let folderEditIgnore = '';
+  let folderEditSharedPeers: string[] = [];
+  let folderEditPeerDraft = '';
+  let folderEditorMessage = '';
+  let folderEditorRemoveConfirm = false;
   const dockerGUI = isDockerGUI();
   const guiPlatform = fsePlatform();
   let discoveryFormDisabled = false;
@@ -979,6 +987,97 @@
 
   function toggleTheme() {
     theme = theme === 'dark' ? 'light' : 'dark';
+  }
+
+  function openFolderEditor(folder: DaemonFolder) {
+    folderEditor = folder;
+    folderEditPath = folder.path ?? '';
+    folderEditMode = folder.mode || 'sendrecv';
+    folderEditIgnore = (folder.ignore ?? []).join('\n');
+    folderEditSharedPeers = [...(folder.sharedWith ?? [])];
+    folderEditPeerDraft = '';
+    folderEditorMessage = '';
+    folderEditorRemoveConfirm = false;
+  }
+
+  function addFolderSharedPeer() {
+    const peer = folderEditPeerDraft.trim();
+    if (peer.length === 0 || folderEditSharedPeers.includes(peer)) {
+      folderEditPeerDraft = '';
+      return;
+    }
+    folderEditSharedPeers = [...folderEditSharedPeers, peer];
+    folderEditPeerDraft = '';
+  }
+
+  function removeFolderSharedPeer(peer: string) {
+    folderEditSharedPeers = folderEditSharedPeers.filter((id) => id !== peer);
+  }
+
+  async function runFolderEditor(command: string, action: () => Promise<CommandResponse>) {
+    loading = true;
+    folderEditorMessage = `${command} is pending.`;
+    try {
+      const response = await action();
+      folderEditorMessage = response.message ?? `${command} completed.`;
+      await refreshOperationalState();
+      const current = daemonFolders.find((folder) => folder.id === folderEditor?.id);
+      if (current) {
+        folderEditor = current;
+      }
+    } catch (error) {
+      folderEditorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function saveFolderEditor() {
+    if (!folderEditor) {
+      return;
+    }
+    const id = folderEditor.id;
+    const ignore = folderEditIgnore.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+    await runFolderEditor('folder update', async () => sendFolderCommand(daemonConnectionSettings, {
+      action: 'update',
+      id,
+      path: folderEditPath.trim(),
+      mode: folderEditMode,
+      sharedWith: folderEditSharedPeers,
+      ignore
+    }));
+  }
+
+  async function pauseOrResumeFolder(action: 'pause' | 'resume') {
+    if (!folderEditor) {
+      return;
+    }
+    const id = folderEditor.id;
+    await runFolderEditor(`folder ${action}`, async () => {
+      const updated = await sendFolderCommand(daemonConnectionSettings, { action, id });
+      try {
+        await sendTransferCommand(daemonConnectionSettings, { action, folderID: id });
+      } catch {
+        return { ...updated, message: `${updated.message ?? ''} In-progress transfers were not updated.`.trim() };
+      }
+      return updated;
+    });
+  }
+
+  async function removeFolderFromEditor() {
+    if (!folderEditor) {
+      return;
+    }
+    if (!folderEditorRemoveConfirm) {
+      folderEditorRemoveConfirm = true;
+      return;
+    }
+    const id = folderEditor.id;
+    folderEditorRemoveConfirm = false;
+    await runFolderEditor('folder remove', async () => sendFolderCommand(daemonConnectionSettings, { action: 'remove', id }));
+    if (!folderEditorMessage.toLowerCase().includes('fail') && !folderEditorMessage.toLowerCase().includes('not found')) {
+      folderEditor = null;
+    }
   }
 
   async function submitFolderForm() {
@@ -1916,16 +2015,75 @@
     {#if activeView === 'folders'}
       <section class="connection-card">
         <h2>Selected-host folders</h2>
-        <p>Live folder roots and modes from {selectedManagedInstance.label}. Add, update, and remove operations are available under Daemon settings and refresh this list after completion.</p>
+        <p>Live folder roots and modes from {selectedManagedInstance.label}. Open a folder to change its path, mode, shared peers, and ignore patterns, or to pause, resume, and remove it.</p>
         <button type="button" on:click={refreshOperationalState} disabled={loading || !hasDaemonCredential}>Refresh folders</button>
         {#if daemonFolders.length === 0}
           <p>No folders are configured.</p>
         {:else}
           <ul aria-label="Configured folders">
             {#each daemonFolders as folder}
-              <li><strong>{folder.id}</strong> · {folder.path ?? 'path unavailable'} · {folder.mode ?? 'mode unavailable'} · {folder.status ?? 'configured'}</li>
+              <li data-testid="folder-row">
+                <strong>{folder.id}</strong> · {folder.path ?? 'path unavailable'} · {folder.mode ?? 'mode unavailable'} · {folder.enabled === false ? 'paused' : (folder.status ?? 'configured')}
+                <button type="button" data-testid="folder-open" on:click={() => openFolderEditor(folder)}>Edit {folder.id}</button>
+              </li>
             {/each}
           </ul>
+        {/if}
+        {#if folderEditor}
+          <form class="control-form" data-testid="folder-editor" aria-label="Folder editor" on:submit|preventDefault={saveFolderEditor}>
+            <h3>Edit folder {folderEditor.id}</h3>
+            <p>sendrecv exchanges files both ways. send only uploads. recv only downloads. An empty peer list shares with every paired peer. Ignore patterns use one pattern per line.</p>
+            <label>
+              Path
+              <input bind:value={folderEditPath} name="folderEditPath" data-testid="folder-edit-path" autocomplete="off" />
+            </label>
+            <label>
+              Mode
+              <select bind:value={folderEditMode} name="folderEditMode" data-testid="folder-edit-mode">
+                <option value="sendrecv">sendrecv</option>
+                <option value="sendonly">send</option>
+                <option value="recvonly">recv</option>
+              </select>
+            </label>
+            <label>
+              Ignore patterns
+              <textarea bind:value={folderEditIgnore} name="folderEditIgnore" data-testid="folder-edit-ignore" rows="4"></textarea>
+            </label>
+            <div>
+              <p>Shared peers</p>
+              {#if folderEditSharedPeers.length === 0}
+                <p>Every paired peer.</p>
+              {:else}
+                <ul aria-label="Shared peers">
+                  {#each folderEditSharedPeers as peer}
+                    <li>
+                      <span data-testid="folder-shared-peer">{peer}</span>
+                      <button type="button" data-testid="folder-shared-remove" on:click={() => removeFolderSharedPeer(peer)}>Remove {peer}</button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+              <label>
+                Add peer ID
+                <input bind:value={folderEditPeerDraft} name="folderEditPeerDraft" data-testid="folder-shared-add-input" autocomplete="off" />
+              </label>
+              <button type="button" data-testid="folder-shared-add" on:click={addFolderSharedPeer}>Add shared peer</button>
+            </div>
+            <div class="lifecycle-actions">
+              <button type="submit" data-testid="folder-edit-save" disabled={loading || !hasDaemonCredential}>Save folder</button>
+              <button type="button" data-testid="folder-pause" on:click={() => pauseOrResumeFolder('pause')} disabled={loading || !hasDaemonCredential}>Pause folder</button>
+              <button type="button" data-testid="folder-resume" on:click={() => pauseOrResumeFolder('resume')} disabled={loading || !hasDaemonCredential}>Resume folder</button>
+              <button type="button" data-testid="folder-editor-remove" on:click={removeFolderFromEditor} disabled={loading || !hasDaemonCredential}>Remove folder</button>
+              <button type="button" on:click={() => { folderEditor = null; }}>Close</button>
+            </div>
+            {#if folderEditorRemoveConfirm}
+              <div class="confirm-dialog" role="dialog" data-testid="folder-editor-confirm">
+                <p>Stop sharing {folderEditor.id}? Files already on disk stay where they are.</p>
+                <button type="button" data-testid="folder-editor-confirm-remove" on:click={removeFolderFromEditor}>Remove folder</button>
+              </div>
+            {/if}
+            <p class="operation-status" data-testid="folder-edit-status">{folderEditorMessage}</p>
+          </form>
         {/if}
       </section>
       <section class="connection-card remote-folder-browse">

@@ -31,6 +31,29 @@ async function importOn(page, packageText, expected) {
   await expect(page.getByText(expected, { exact: false })).toBeVisible();
 }
 
+async function editSharedFolder(page) {
+  await page.getByTestId('nav-folders').click();
+  await page.getByTestId('folder-open').filter({ hasText: 'shared' }).click();
+  await expect(page.getByTestId('folder-editor')).toBeVisible();
+  await page.getByTestId('folder-edit-mode').selectOption('sendonly');
+  await page.getByTestId('folder-edit-ignore').fill('*.tmp\ncache/');
+  await page.getByTestId('folder-shared-add-input').fill('peer-extra');
+  await page.getByTestId('folder-shared-add').click();
+  await expect(page.getByTestId('folder-shared-peer')).toHaveText('peer-extra');
+  await page.getByTestId('folder-shared-remove').click();
+  await expect(page.getByTestId('folder-shared-peer')).toHaveCount(0);
+  await page.getByTestId('folder-edit-save').click();
+  const status = page.getByTestId('folder-edit-status');
+  await expect(status).toContainText('folder update accepted');
+  await page.getByTestId('folder-pause').click();
+  await expect(status).toContainText('folder paused');
+  await page.getByTestId('folder-resume').click();
+  await expect(status).toContainText('folder resumed');
+  await page.getByTestId('folder-edit-mode').selectOption('sendrecv');
+  await page.getByTestId('folder-edit-save').click();
+  await expect(status).toContainText('folder update accepted');
+}
+
 async function addSharedFolder(page) {
   await page.getByTestId('nav-daemon-settings').click();
   await page.locator('form[aria-label="Daemon settings folder form"] select[name="folderFormAction"]').selectOption('add');
@@ -161,6 +184,7 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await expect(a.getByText('prepared at level 0')).toHaveCount(0);
   await changeLogLevel(a);
   await addSharedFolder(a);
+  await editSharedFolder(a);
   await addSharedFolder(b);
   await pageShowsFolderError(a);
   compose(['exec', '-T', '-u', '99:100', 'fse-a', 'sh', '-c', 'echo hello-from-a > /data/shared/note.txt']);
