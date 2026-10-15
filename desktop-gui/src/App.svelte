@@ -1516,7 +1516,7 @@
         Share with peer IDs
         <input bind:value={folderFormSharedWith} name="folderFormSharedWith" data-testid="folder-shared-with" autocomplete="off" placeholder="empty shares with every paired peer" />
       </label>
-      <button type="submit" data-testid="folder-submit" disabled={loading || !hasDaemonCredential}>Submit folder command</button>
+      <button type="button" data-testid="folder-submit" on:click={submitFolderForm} disabled={loading || !hasDaemonCredential}>Submit folder command</button>
       <p class="operation-status" data-phase={getLocalControlOperationState('folder').phase} aria-label="Folder operation status">
         {renderLocalControlOperationSummary(getLocalControlOperationState('folder'))}
         {#if getLocalControlOperationState('folder').detail}
