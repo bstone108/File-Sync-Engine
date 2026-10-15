@@ -646,6 +646,13 @@ jobs:
             fi
             cp "$file" "$dest"
           done
+          mapfile -t gui_zips < <(find release-artifacts -type f -name 'fse-web-container-default.zip' -print)
+          if [[ "${#gui_zips[@]}" -ne 1 ]]; then
+            printf 'expected one web GUI zip to publish schema-versions.json, found %s\n' "${#gui_zips[@]}" >&2
+            exit 1
+          fi
+          scripts/stamp-schema-versions.sh "$version" "${gui_zips[0]}" schema-versions.json
+          cp schema-versions.json release-assets/schema-versions.json
           cd release-assets
           sha256sum * > RELEASE_ASSET_SHA256SUMS
           ls -la
@@ -661,7 +668,7 @@ jobs:
           cat > "$notes_file" <<NOTES
           Automated File Sync Engine release $VERSION.
 
-          This release contains daemon and desktop GUI build artifacts produced by GitHub Actions for Linux, Windows, and macOS targets, plus the matching signed GHCR image `${{ needs.publish-container.outputs.image }}:$VERSION` (digest `${{ needs.publish-container.outputs.digest }}`). Linux desktop installers include both WebKitGTK ABI lanes where applicable.
+          This release contains daemon and desktop GUI build artifacts produced by GitHub Actions for Linux, Windows, and macOS targets, plus the matching signed GHCR image `${{ needs.publish-container.outputs.image }}:$VERSION` (digest `${{ needs.publish-container.outputs.digest }}`), the optional web GUI package, and schema-versions.json. Linux desktop installers include both WebKitGTK ABI lanes where applicable.
           NOTES
 
           if gh release view "$TAG" >/dev/null 2>&1; then

@@ -470,6 +470,7 @@ func TestReleaseWorkflowPublishesVerifiedOptionalWebGUIPackageAsset(t *testing.T
 		"name: fse-web-gui-package-${{ needs.version-preflight.outputs.version }}-${{ github.sha }}",
 		"web-gui-package",
 		"RELEASE_ASSET_SHA256SUMS",
+		"release-assets/schema-versions.json",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("release workflow must publish the separately delivered optional web GUI package, missing %q", want)
