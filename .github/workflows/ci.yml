@@ -256,6 +256,13 @@ jobs:
           printf 'FSE_WEB_GUI_PACKAGE_HOST_PATH=%s\n' "$PWD/web-gui/dist/fse-web-container-default.zip" >> "$GITHUB_ENV"
           docker compose -f e2e/gui-sync/compose.yaml up -d
           (cd e2e/gui-sync && npm install && npx playwright install --with-deps chromium && npx playwright test)
+      - name: Upload GUI screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gui-screenshots
+          path: e2e/gui-sync/screenshots/
+          if-no-files-found: warn
       - name: Collect container logs
         if: always()
         run: docker compose -f e2e/gui-sync/compose.yaml logs || true

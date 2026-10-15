@@ -5,6 +5,7 @@
     fetchDaemonStatus,
     fetchDaemonFolders,
     fetchDaemonPeers,
+    fetchConfigSync,
     fetchDaemonLogs,
     fetchDaemonTransfers,
     fetchBackupJobs,
@@ -17,6 +18,7 @@
     redeemPairingCode,
     patchDaemonConfig,
     pinActiveAPICertificate,
+    queueConfigSyncEdit,
     queueRemoteMeshSettingsCommand,
     readDaemonConfig,
     runBackupScrub,
@@ -43,7 +45,8 @@
     type IdentityPairingPackage,
     type FilesystemBrowseEntry,
     type MeshSettingsCommandResponse,
-    type MeshSettingsDocument
+    type MeshSettingsDocument,
+    type ConfigSyncInstance
   } from './lib/daemonApi';
   import {
     adoptGUIOwnedNonServiceDaemon,
@@ -106,6 +109,12 @@
   $: daemonConnectionSettings = { apiBaseURL, credentialRef: localCredentialRef || undefined };
   $: hasDaemonCredential = Boolean(localCredentialRef);
   let status: DaemonStatus | null = null;
+  let configInstances: ConfigSyncInstance[] = [];
+  let selectedConfigInstanceId = '';
+  let configInstanceTouched = false;
+  let theme: 'dark' | 'light' = 'dark';
+  let folderRemoveConfirm = false;
+  let folderRemoveArmed = false;
   let bundledEngineInspection: BundledEngineInspection | null = null;
   let bundledEngineInspectionMessage = 'Bundled engine manifest has not been inspected.';
   let desktopPreferences: DesktopPreferences = { theme: 'system', density: 'comfortable', minimizeToTray: false, notificationsEnabled: true };
@@ -296,11 +305,12 @@
   const viewCatalog: DesktopViewCatalogEntry[] = [
     { id: 'overview', label: 'Overview', description: 'Connection, daemon health, startup, tray, and bundled lifecycle summary.' },
     { id: 'folders', label: 'Folders', description: 'Folder roots, modes, sync groups, and local folder commands.' },
-    { id: 'peers', label: 'Peers & identity', description: 'Peers, discovery, identity pairing, and future remote instances.' },
-    { id: 'transfers', label: 'Transfers', description: 'Transfer queue controls, pause/resume/cancel state, and rates.' },
+    { id: 'peers', label: 'Peers & Linking', description: 'Peers, discovery, pairing codes, and identity packages.' },
+    { id: 'transfers', label: 'Transfers', description: 'Activity, queue, pause, and rates.' },
     { id: 'warnings', label: 'Warnings & logs', description: 'Warnings, structured logs, and recent daemon events.' },
     { id: 'maintenance', label: 'Maintenance & backups', description: 'Scrub, repair, backup, snapshot, restore, retention, and web GUI package operations.' },
-    { id: 'daemon-settings', label: 'Daemon settings', description: 'Selected-host daemon options and non-secret config patches.' },
+    { id: 'daemon-settings', label: 'Settings', description: 'General, network, logging, and folders for the selected engine.' },
+    { id: 'security', label: 'Security', description: 'Certificate trust and how session encryption is chosen.' },
     { id: 'desktop-settings', label: 'Desktop app settings', description: 'GUI-only desktop preferences kept separate from daemon host settings.' },
     { id: 'help', label: 'Help & details', description: 'Advanced option details and contextual help without cluttering operation views.' }
   ];
@@ -573,6 +583,7 @@
       if (!advertiseFieldDirty) {
         advertiseOverride = status?.advertiseURL ?? '';
       }
+      void refreshConfigInstances();
       managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
         ...instance,
         connectionState: 'online',
@@ -958,7 +969,34 @@
     await runControlCommand('peer', `peer ${peerFormAction}`, async () => sendPeerCommand(settings, validatePeerCommandForm()));
   }
 
+  async function refreshConfigInstances() {
+    try {
+      const view = await fetchConfigSync(daemonConnectionSettings);
+      configInstances = view.instances ?? [];
+      if (!configInstanceTouched) {
+        selectedConfigInstanceId = view.localInstanceId;
+      }
+    } catch {
+      configInstances = configInstances;
+    }
+  }
+
+  function selectConfigInstance(instanceId: string) {
+    configInstanceTouched = true;
+    selectedConfigInstanceId = instanceId;
+  }
+
+  function toggleTheme() {
+    theme = theme === 'dark' ? 'light' : 'dark';
+  }
+
   async function submitFolderForm() {
+    if (folderFormAction === 'remove' && !folderRemoveArmed) {
+      folderRemoveConfirm = true;
+      return;
+    }
+    folderRemoveConfirm = false;
+    folderRemoveArmed = false;
     const settings = daemonConnectionSettings;
     await runControlCommand('folder', `folder ${folderFormAction}`, async () => sendFolderCommand(settings, validateFolderCommandForm()));
   }
@@ -985,6 +1023,19 @@
 
   async function submitConfigPatchForm() {
     const settings = daemonConnectionSettings;
+    const target = configInstances.find((instance) => instance.instanceId === selectedConfigInstanceId);
+    if (target && !target.local) {
+      await runControlCommand('config', 'config patch', async () => {
+        const view = await queueConfigSyncEdit(settings, {
+          targetInstanceId: target.instanceId,
+          path: 'logging.level',
+          value: configPatchLoggingLevel
+        });
+        configInstances = view.instances ?? configInstances;
+        return { status: 'queued', message: target.online ? `Queued for ${target.label}. It applies on that engine.` : `Queued for ${target.label}. It stays pending until that engine is online, and any online linked engine can relay it.` };
+      });
+      return;
+    }
     await runControlCommand('config', 'config patch', async () => patchDaemonConfig(settings, validateConfigPatchForm()));
   }
 
@@ -1359,6 +1410,9 @@
   }
 
   onMount(() => {
+    if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+      theme = 'light';
+    }
     if (dockerGUI) {
       localCredentialRef = 'same-origin';
       const tick = () => refreshOperationalState().catch(() => undefined);
@@ -1381,7 +1435,7 @@
   });
 </script>
 
-<main class="host-scoped-shell">
+<main class="host-scoped-shell" data-theme={theme}>
   <aside class="host-sidebar" aria-label="Host and view navigation">
     <section class="host-card">
       <span class="eyebrow">Selected host</span>
@@ -1435,7 +1489,43 @@
           {/if}
         </div>
       {/each}
-      <p class="instance-note">Remote daemon instances can be added by API endpoint, pairing code, identity file, or future animated code without storing raw API keys in this registry. The host list keeps a readable status layout for Online/offline state, Remaining to receive, Remaining to send, Average receive rate, and Average send rate.</p>
+      <p class="instance-note">Remote daemon instances can be added by API endpoint. API keys stay in the OS credential vault, not in this page.</p>
+    </section>
+    <section class="host-card" data-testid="instance-switcher" aria-label="Linked engines">
+      <div class="switcher-head">
+        <span class="eyebrow">Linked engines</span>
+        <button type="button" class="theme-toggle" data-testid="theme-toggle" on:click={toggleTheme}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
+      </div>
+      <p class="instance-note">This GUI opens on the local engine. Choose another linked engine to manage it here. Offline engines keep a pending-change count until they come online.</p>
+      {#if configInstances.length > 0}
+        <label>
+          Engine
+          <select data-testid="instance-dropdown" value={selectedConfigInstanceId} on:change={(event) => selectConfigInstance(event.currentTarget.value)}>
+            {#each configInstances as instance}
+              <option value={instance.instanceId}>{instance.label}</option>
+            {/each}
+          </select>
+        </label>
+        <div class="instance-list">
+          {#each configInstances as instance}
+            <button
+              type="button"
+              class="quick-switch"
+              class:active={selectedConfigInstanceId === instance.instanceId}
+              aria-current={selectedConfigInstanceId === instance.instanceId ? 'true' : undefined}
+              data-testid="instance-option"
+              on:click={() => selectConfigInstance(instance.instanceId)}
+            >
+              <span>{instance.local ? `${instance.label} · local` : instance.label}</span>
+              <strong class="connection-state" data-state={instance.online ? 'online' : 'offline'}>{instance.online ? 'Online' : 'Offline'}</strong>
+              <small>Last seen {instance.lastSeen || 'not yet'}</small>
+              <small data-testid="instance-pending-count">{instance.pendingChanges} pending</small>
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <p class="empty-state">No linked engines are loaded yet. The local engine stays selected.</p>
+      {/if}
     </section>
     <nav aria-label="Selected host sections">
       {#each viewCatalog.filter((view) => !(dockerGUI && view.id === 'desktop-settings')) as view}
@@ -1650,6 +1740,16 @@
         <input bind:value={folderFormSharedWith} name="folderFormSharedWith" data-testid="folder-shared-with" autocomplete="off" placeholder="empty shares with every paired peer" />
       </label>
       <button type="button" data-testid="folder-submit" on:click={submitFolderForm} disabled={loading || !hasDaemonCredential}>Submit folder command</button>
+      {#if folderRemoveConfirm}
+        <div class="confirm-dialog" role="dialog" aria-labelledby="folder-remove-title" data-testid="destructive-confirm">
+          <h3 id="folder-remove-title">Remove folder {folderFormID || 'without an id'}?</h3>
+          <p>This asks the selected engine to stop sharing that folder. Files already on disk are left in place.</p>
+          <div class="lifecycle-actions">
+            <button type="button" data-testid="confirm-destructive" on:click={() => { folderRemoveArmed = true; submitFolderForm(); }}>Remove folder</button>
+            <button type="button" data-testid="cancel-destructive" on:click={() => { folderRemoveConfirm = false; }}>Cancel</button>
+          </div>
+        </div>
+      {/if}
       <p class="operation-status" data-phase={localControlOperationStates.folder.phase} aria-label="Folder operation status">{folderOperationStatusText}</p>
     </form>
 
@@ -1719,8 +1819,9 @@
       <p class="operation-status" data-phase={localControlOperationStates.webGUI.phase} aria-label="Web GUI operation status">{webGUIOperationStatusText}</p>
     </form>
 
+    <h2 class="section-label">Logging</h2>
     <form class="control-form" on:submit|preventDefault={submitConfigPatchForm} aria-label="Config patch form">
-      <h3>Config patch form</h3>
+      <h3>Logging level</h3>
       <label>
         Logging level
         <select bind:value={configPatchLoggingLevel} name="configPatchLoggingLevel">
@@ -1866,7 +1967,7 @@
         <p>Peer lists, discovery, identity pairing, and remote-instance onboarding for {selectedManagedInstance.label}. Add, update, and remove operations are available under Daemon settings.</p>
         <button type="button" on:click={refreshOperationalState} disabled={loading || !hasDaemonCredential}>Refresh peers</button>
         {#if daemonPeers.length === 0}
-          <p>No peers are configured.</p>
+          <p class="empty-state">No peers are linked yet. Pair from this page with a code or an identity package.</p>
         {:else}
           <ul aria-label="Configured peers">
             {#each daemonPeers as peer}
@@ -2149,6 +2250,18 @@
       </section>
     {/if}
 
+    {#if activeView === 'security'}
+      <section class="connection-card">
+        <h2>Security</h2>
+        <p>Session encryption follows the paired identity. Certificate trust for this engine is checked in Settings, and the labels there say what they mean instead of showing raw field names.</p>
+        <p>API keys are not shown in this browser. The Docker GUI uses the daemon's own credential, and desktop remote engines keep keys in the operating system vault. Startup, tray, and installer choices are operating-system specific and appear only in Desktop app settings.</p>
+        <dl class="host-status-grid" aria-label="Security summary">
+          <dt>Selected engine</dt><dd>{selectedConfigInstanceId || 'local'}</dd>
+          <dt>Pending changes</dt><dd>{configInstances.find((instance) => instance.instanceId === selectedConfigInstanceId)?.pendingChanges ?? 0}</dd>
+        </dl>
+      </section>
+    {/if}
+
     {#if activeView === 'help'}
       <section class="connection-card">
         <h2>Dedicated help/details pages</h2>
@@ -2168,10 +2281,33 @@
 
 <style>
   main {
+    --bg: #101510;
+    --surface: #1b2420;
+    --surface-2: #121815;
+    --line: #314038;
+    --text: #f4f7f2;
+    --muted: #b7c4b8;
+    --accent: #8fd0a8;
+    --danger: #ffb4b4;
+    --ok: #b8f7c0;
+    --focus: #e7ffe8;
     min-height: 100vh;
-    font-family: system-ui, sans-serif;
-    background: #10131a;
-    color: #f4f7fb;
+    font-family: "Avenir Next", "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.45;
+  }
+  main[data-theme='light'] {
+    --bg: #f6f8f4;
+    --surface: #ffffff;
+    --surface-2: #eef3ec;
+    --line: #c9d4c8;
+    --text: #172117;
+    --muted: #3f5346;
+    --accent: #1d6b42;
+    --danger: #8d2b2b;
+    --ok: #1d6b42;
+    --focus: #1d6b42;
   }
   .host-scoped-shell {
     display: grid;
@@ -2202,16 +2338,16 @@
     display: grid;
     gap: 0.5rem;
     padding: 1.25rem;
-    border: 1px solid #2b3344;
+    border: 1px solid var(--line);
     border-radius: 1rem;
-    background: #171c26;
+    background: var(--surface);
   }
   .host-card h1,
   .host-card p {
     margin: 0;
   }
   .eyebrow {
-    color: #8fa3c6;
+    color: var(--muted);
     font-size: 0.8rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -2224,16 +2360,16 @@
     display: grid;
     gap: 0.25rem;
     text-align: left;
-    background: #171c26;
+    background: var(--surface);
     color: inherit;
   }
   .host-sidebar nav button.active,
   .host-sidebar nav button[aria-current='page'] {
-    border-color: #80a7ff;
+    border-color: var(--accent);
     background: #202a3d;
   }
   .host-sidebar nav small {
-    color: #bac7df;
+    color: var(--muted);
     line-height: 1.35;
   }
   .instance-group,
@@ -2247,7 +2383,7 @@
     gap: 0.25rem;
     width: 100%;
     text-align: left;
-    background: #111722;
+    background: var(--surface-2);
     color: inherit;
   }
   .instance-group-toggle {
@@ -2255,7 +2391,7 @@
   }
   .quick-switch.active,
   .quick-switch[aria-current='true'] {
-    border-color: #80a7ff;
+    border-color: var(--accent);
     background: #202a3d;
   }
   .connection-state {
@@ -2306,20 +2442,20 @@
     gap: 0.1rem;
     padding: 0.35rem;
     border-radius: 0.35rem;
-    background: #0e1420;
+    background: var(--surface-2);
   }
   .host-status-metrics dt {
-    color: #8fa3c6;
+    color: var(--muted);
     font-size: 0.72rem;
     text-transform: uppercase;
   }
   .host-status-metrics dd {
     margin: 0;
-    color: #f4f7fb;
+    color: var(--text);
     font-weight: 700;
   }
   .instance-note {
-    color: #bac7df;
+    color: var(--muted);
     line-height: 1.4;
   }
   .host-content {
@@ -2368,10 +2504,10 @@
     gap: 0.15rem;
     padding: 0.5rem;
     border-radius: 0.5rem;
-    background: #0e1420;
+    background: var(--surface-2);
   }
   .host-scope-details dt {
-    color: #8fa3c6;
+    color: var(--muted);
     font-size: 0.72rem;
     text-transform: uppercase;
   }
@@ -2384,9 +2520,9 @@
     display: grid;
     gap: 1rem;
     padding: 2rem;
-    border: 1px solid #2b3344;
+    border: 1px solid var(--line);
     border-radius: 1rem;
-    background: #171c26;
+    background: var(--surface);
   }
   label {
     display: grid;
@@ -2396,28 +2532,28 @@
     font: inherit;
     padding: 0.65rem 0.75rem;
     border-radius: 0.5rem;
-    border: 1px solid #3c465b;
+    border: 1px solid var(--line);
   }
   textarea {
-    color: #f4f7fb;
-    background: #0e1420;
+    color: var(--text);
+    background: var(--surface-2);
   }
   button {
     cursor: pointer;
   }
   .error {
-    color: #ffb4b4;
+    color: var(--danger);
   }
   .success {
-    color: #b8f7c0;
+    color: var(--ok);
   }
   .control-form {
     display: grid;
     gap: 0.75rem;
     padding: 1rem;
-    border: 1px solid #2b3344;
+    border: 1px solid var(--line);
     border-radius: 0.75rem;
-    background: #111722;
+    background: var(--surface-2);
   }
   .control-form h3 {
     margin: 0;
@@ -2439,7 +2575,7 @@
     padding: 0.75rem;
     border: 1px solid #33405a;
     border-radius: 0.5rem;
-    background: #0e1420;
+    background: var(--surface-2);
   }
   .operation-status[data-phase='pending'], .operation-status[data-phase='accepted'] {
     border-color: #e8c86a;
@@ -2456,9 +2592,9 @@
   }
   .settings-card {
     padding: 1rem;
-    border: 1px solid #2b3344;
+    border: 1px solid var(--line);
     border-radius: 0.75rem;
-    background: #111722;
+    background: var(--surface-2);
   }
   .settings-card h3,
   .settings-card p {
@@ -2466,9 +2602,75 @@
   }
   .settings-card p {
     margin-top: 0.35rem;
-    color: #bac7df;
+    color: var(--muted);
   }
   .download-link {
-    color: #b8d2ff;
+    color: var(--accent);
+  }
+  .section-label {
+    width: min(52rem, 100%);
+    margin: 0.5rem 0 0;
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .empty-state {
+    margin: 0;
+    padding: 0.85rem 1rem;
+    border: 1px dashed var(--line);
+    border-radius: 0.75rem;
+    color: var(--muted);
+  }
+  .confirm-dialog {
+    display: grid;
+    gap: 0.75rem;
+    padding: 1rem;
+    border: 1px solid var(--danger);
+    border-radius: 0.75rem;
+    background: var(--surface-2);
+  }
+  .confirm-dialog h3,
+  .confirm-dialog p {
+    margin: 0;
+  }
+  .switcher-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .theme-toggle {
+    background: transparent;
+    color: var(--text);
+  }
+  button, input, select, textarea {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  .host-content {
+    justify-items: stretch;
+  }
+  .connection-card, .host-scope-banner, .update-banner {
+    width: min(52rem, 100%);
+  }
+  .host-status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 0.5rem;
+    margin: 0;
+  }
+  .host-status-grid dt {
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+  }
+  .host-status-grid dd {
+    margin: 0 0 0.5rem;
+    overflow-wrap: anywhere;
   }
 </style>

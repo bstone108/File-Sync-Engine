@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -191,8 +192,12 @@ func run(configPath string) {
 	foldershare.SetLinkRefresher(func(peer config.PeerConfig, failedOver bool) {
 		refreshCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		if err := apicontrol.RefreshPeerLink(refreshCtx, configPath, peer); err != nil && failedOver {
-			structuredlog.Event("warn", "link.refresh.failed", "peer address refresh failed after failover", map[string]any{"peer": peer.ID, "error": err.Error()})
+		if err := apicontrol.RefreshPeerLink(refreshCtx, configPath, peer); err != nil {
+			if failedOver {
+				structuredlog.Event("warn", "link.refresh.failed", "peer address refresh failed after failover", map[string]any{"peer": peer.ID, "error": err.Error()})
+			}
+		} else if err := apicontrol.ExchangeConfigSync(refreshCtx, configPath, peer); err != nil {
+			structuredlog.Event("warn", "configsync.exchange.failed", "identity config sync was not exchanged with this peer", map[string]any{"peer": peer.ID, "error": err.Error()})
 		}
 	})
 	daemonapihandlers.RegisterStatic(apiServer, daemonapihandlers.BuildStaticHandlers(daemonapihandlers.StaticRuntimeDeps{
@@ -377,6 +382,15 @@ func registerStoreBackedAPIHandlers(server *api.Server, cfg config.Config, confi
 		MeshSettingsCommand: func(ctx context.Context, req api.MeshSettingsCommandRequest) (api.MeshSettingsCommandResponse, error) {
 			return meshSettingsCommandAPIResponse(store, cfg.NodeName, req)
 		},
+	})
+	server.SetConfigSyncGetHandler(func(context.Context) (any, error) {
+		return apicontrol.HandleConfigSync(configPath)
+	})
+	server.SetConfigSyncEditHandler(func(_ context.Context, raw json.RawMessage) (any, error) {
+		return apicontrol.HandleConfigSyncEdit(configPath, raw)
+	})
+	server.SetConfigSyncMergeHandler(func(_ context.Context, raw json.RawMessage) (any, error) {
+		return apicontrol.HandleConfigSyncMerge(configPath, raw)
 	})
 }
 

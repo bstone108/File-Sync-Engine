@@ -737,6 +737,9 @@ type Server struct {
 	apiTrustCommandHandler     APITrustCommandHandler
 	meshSettingsHandler        MeshSettingsHandler
 	meshSettingsCommandHandler MeshSettingsCommandHandler
+	configSyncGetHandler       ConfigSyncGetHandler
+	configSyncEditHandler      ConfigSyncEditHandler
+	configSyncMergeHandler     ConfigSyncMergeHandler
 	filesystemBrowseHandler    FilesystemBrowseHandler
 	configReadHandler          ConfigReadHandler
 	configUpdateHandler        ConfigUpdateHandler
@@ -788,6 +791,9 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/api/trust-command", s.requireKey(s.handleAPITrustCommand))
 	mux.HandleFunc("/v1/mesh/settings", s.requireKey(s.handleMeshSettings))
 	mux.HandleFunc("/v1/mesh/settings-command", s.requireKey(s.handleMeshSettingsCommand))
+	mux.HandleFunc("/v1/config-sync", s.requireKey(s.handleConfigSync))
+	mux.HandleFunc("/v1/config-sync/edit", s.requireKey(s.handleConfigSyncEdit))
+	mux.HandleFunc("/v1/config-sync/merge", s.requireKey(s.handleConfigSyncMerge))
 	mux.HandleFunc("/v1/filesystem/browse", s.requireKey(s.handleFilesystemBrowse))
 	mux.HandleFunc("/v1/config", s.requireKey(s.handleConfig))
 	mux.HandleFunc("/v1/stop", s.requireKey(s.handleStop))
@@ -945,6 +951,24 @@ func (s *Server) SetMeshSettingsCommandHandler(handler MeshSettingsCommandHandle
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.meshSettingsCommandHandler = handler
+}
+
+func (s *Server) SetConfigSyncGetHandler(handler ConfigSyncGetHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.configSyncGetHandler = handler
+}
+
+func (s *Server) SetConfigSyncEditHandler(handler ConfigSyncEditHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.configSyncEditHandler = handler
+}
+
+func (s *Server) SetConfigSyncMergeHandler(handler ConfigSyncMergeHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.configSyncMergeHandler = handler
 }
 
 func (s *Server) SetFilesystemBrowseHandler(handler FilesystemBrowseHandler) {
