@@ -86,7 +86,7 @@ func TestRootReadmeDockerExamplesKeepTheCoreHeadless(t *testing.T) {
 	for _, want := range []string{
 		"FSE_WEB_GUI_ENABLED: \"false\"",
 		"FSE_WEB_GUI_ENABLED=false",
-		"The optional web GUI is not yet a working deployment interface.",
+		"The optional web GUI is a working deployment interface when its environment variable is set.",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("root Docker example must preserve headless-default boundary, missing %q", want)

@@ -196,6 +196,22 @@ func webMux(installDir, version string, nativeAPI http.Handler, nativeAPIKey str
 		mux.HandleFunc("/api/v1/peers", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/peers"))
 		mux.HandleFunc("/api/v1/transfers", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/transfers"))
 		mux.HandleFunc("/api/v1/actionable-errors", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/actionable-errors"))
+		mux.HandleFunc("/api/v1/logs", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/logs"))
+		mux.HandleFunc("/api/v1/schema", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/schema"))
+		mux.HandleFunc("/api/v1/config", nativeMethodBridge(nativeAPI, nativeAPIKey, "/v1/config", []string{http.MethodGet, http.MethodPatch}, false))
+		mux.HandleFunc("/api/v1/filesystem/browse", nativeMethodBridge(nativeAPI, nativeAPIKey, "/v1/filesystem/browse", []string{http.MethodGet}, true))
+		for _, path := range []string{
+			"/v1/peer-command",
+			"/v1/folder-command",
+			"/v1/discovery-command",
+			"/v1/transfer-command",
+			"/v1/identity-package",
+			"/v1/identity-import",
+			"/v1/maintenance/scrub",
+			"/v1/web-gui-command",
+		} {
+			mux.HandleFunc("/api"+path, nativeMethodBridge(nativeAPI, nativeAPIKey, path, []string{http.MethodPost}, false))
+		}
 	}
 	mux.Handle("/", http.FileServer(http.Dir(installDir)))
 	return mux
@@ -221,6 +237,92 @@ func nativeReadOnlyBridge(nativeAPI http.Handler, nativeAPIKey, nativePath strin
 		}
 		w.WriteHeader(recorder.Code)
 		_, _ = w.Write(recorder.Body.Bytes())
+	}
+}
+
+func nativeMethodBridge(nativeAPI http.Handler, nativeAPIKey, nativePath string, methods []string, pathQuery bool) http.HandlerFunc {
+	allowed := map[string]struct{}{}
+	for _, method := range methods {
+		allowed[method] = struct{}{}
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := allowed[r.Method]; !ok {
+			w.Header().Set("Allow", strings.Join(methods, ", "))
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		target := "http://fse-native" + nativePath
+		if pathQuery {
+			if path := r.URL.Query().Get("path"); path != "" {
+				target += "?path=" + url.QueryEscape(path)
+			}
+		}
+		var body io.Reader
+		if r.Method != http.MethodGet && r.Body != nil {
+			limited := io.LimitReader(r.Body, 1<<20)
+			payload, err := io.ReadAll(limited)
+			if err != nil {
+				http.Error(w, "web control bridge request failed", http.StatusBadRequest)
+				return
+			}
+			body = strings.NewReader(string(payload))
+		}
+		nativeRequest, err := http.NewRequestWithContext(r.Context(), r.Method, target, body)
+		if err != nil {
+			http.Error(w, "web control bridge request failed", http.StatusInternalServerError)
+			return
+		}
+		if body != nil {
+			nativeRequest.Header.Set("Content-Type", "application/json")
+		}
+		nativeRequest.Header.Set("X-FSE-API-Key", nativeAPIKey)
+		recorder := httptest.NewRecorder()
+		nativeAPI.ServeHTTP(recorder, nativeRequest)
+		if contentType := recorder.Header().Get("Content-Type"); contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		w.WriteHeader(recorder.Code)
+		_, _ = w.Write(scrubProxyBody(recorder.Body.Bytes()))
+	}
+}
+
+func scrubProxyBody(body []byte) []byte {
+	if !bytesContainSecretKey(body) {
+		return body
+	}
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		return body
+	}
+	scrubJSONSecrets(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return body
+	}
+	return encoded
+}
+
+func bytesContainSecretKey(body []byte) bool {
+	text := string(body)
+	return strings.Contains(text, `"apiKey"`) || strings.Contains(text, `"privateKey"`) || strings.Contains(text, `"identityPrivateKey"`)
+}
+
+func scrubJSONSecrets(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		delete(typed, "apiKey")
+		delete(typed, "privateKey")
+		delete(typed, "identityPrivateKey")
+		if _, hasListen := typed["listen"]; hasListen {
+			delete(typed, "key")
+		}
+		for _, child := range typed {
+			scrubJSONSecrets(child)
+		}
+	case []any:
+		for _, child := range typed {
+			scrubJSONSecrets(child)
+		}
 	}
 }
 

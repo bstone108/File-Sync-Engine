@@ -1,11 +1,18 @@
 package containerbootstrap
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/guischema"
+	"filesyncengine/internal/schemaversion"
 )
 
 type RuntimeDefaults struct {
@@ -57,8 +64,118 @@ func RunFromEnvironment(configPath string) error {
 	if err != nil {
 		return err
 	}
+	if name := strings.TrimSpace(os.Getenv("FSE_NODE_NAME")); name != "" && envBoolOrDefault("FSE_CONTAINER_FIRST_RUN", false) {
+		cfg.NodeName = name
+		if err := writeConfig(configPath, cfg); err != nil {
+			return err
+		}
+	}
+	cfg, err = ReconcileWebGUI(configPath, cfg, DefaultsFromEnvironment())
+	if err != nil {
+		return err
+	}
 	_, err = ExportIdentityPackage(cfg, os.Getenv("FSE_IDENTITY_EXPORT_PATH"), envBoolOrDefault("FSE_IDENTITY_EXPORT_FORCE", false))
 	return err
+}
+
+// ReconcileWebGUI applies the GUI environment on every container start.
+// Unset or false disables the listener. A complete explicit package is installed
+// as given. Otherwise the newest catalog package compatible with this engine
+// schema is downloaded and checksum-verified. An incompatible or empty catalog
+// is logged and the GUI stays off; the daemon still starts.
+func ReconcileWebGUI(configPath string, cfg config.Config, defaults RuntimeDefaults) (config.Config, error) {
+	if !defaults.WebGUIEnabled {
+		if cfg.WebGUI.Enabled {
+			cfg.WebGUI.Enabled = false
+			if err := writeConfig(configPath, cfg); err != nil {
+				return cfg, err
+			}
+			fmt.Fprintln(os.Stderr, "web GUI disabled because FSE_WEB_GUI_ENABLED is not true")
+		}
+		return cfg, nil
+	}
+	if defaults.webGUIOptInComplete() {
+		cfg.WebGUI.Enabled = true
+		cfg.WebGUI.Version = defaults.WebGUIVersion
+		cfg.WebGUI.PackagePath = defaults.WebGUIPackage
+		cfg.WebGUI.InstallDir = defaults.WebGUIInstallDir
+		cfg.WebGUI.Listen = defaults.WebGUIListen
+		cfg.WebGUI.ChecksumSHA256 = defaults.WebGUIChecksum
+		cfg.WebGUI.UpdateURL = ""
+		if defaults.WebGUITLSEnabled {
+			cfg.WebGUI.HTTPSListen = defaults.WebGUIHTTPSListen
+		} else {
+			cfg.WebGUI.HTTPSListen = ""
+		}
+		return cfg, writeConfig(configPath, cfg)
+	}
+	index := os.Getenv("FSE_WEB_GUI_SCHEMA_INDEX")
+	if index == "" {
+		index = "/usr/local/share/fse/schema-versions.json"
+	}
+	installDir := defaults.WebGUIInstallDir
+	if installDir == "" {
+		installDir = "/config/web-gui"
+	}
+	listen := defaults.WebGUIListen
+	if listen == "" {
+		listen = "0.0.0.0:8385"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	catalog, err := guischema.LoadCatalog(ctx, index, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "web GUI skipped: cannot read schema catalog %s: %v\n", index, err)
+		return disableWebGUI(configPath, cfg)
+	}
+	selected, err := guischema.SelectNewestCompatible(catalog.Packages, schemaversion.Engine)
+	if err != nil {
+		if errors.Is(err, guischema.ErrNoneCompatible) {
+			fmt.Fprintf(os.Stderr, "web GUI skipped: no GUI package is compatible with engine schema %d\n", schemaversion.Engine)
+		} else {
+			fmt.Fprintf(os.Stderr, "web GUI skipped: %v\n", err)
+		}
+		return disableWebGUI(configPath, cfg)
+	}
+	if cfg.WebGUI.Version == selected.GUIVersion && strings.EqualFold(cfg.WebGUI.ChecksumSHA256, selected.ChecksumSHA256) && cfg.WebGUI.PackagePath != "" {
+		if _, statErr := os.Stat(cfg.WebGUI.PackagePath); statErr == nil {
+			cfg.WebGUI.Enabled = true
+			cfg.WebGUI.InstallDir = installDir
+			cfg.WebGUI.Listen = listen
+			return cfg, writeConfig(configPath, cfg)
+		}
+	}
+	resolved, err := guischema.ResolveNewestCompatible(ctx, index, filepath.Join(filepath.Dir(configPath), "web-gui-packages"), schemaversion.Engine, nil)
+	if err != nil {
+		if errors.Is(err, guischema.ErrNoneCompatible) {
+			fmt.Fprintf(os.Stderr, "web GUI skipped: no GUI package is compatible with engine schema %d\n", schemaversion.Engine)
+		} else {
+			fmt.Fprintf(os.Stderr, "web GUI skipped: %v\n", err)
+		}
+		return disableWebGUI(configPath, cfg)
+	}
+	cfg.WebGUI.Enabled = true
+	cfg.WebGUI.Version = resolved.GUIVersion
+	cfg.WebGUI.PackagePath = resolved.LocalPath
+	cfg.WebGUI.InstallDir = installDir
+	cfg.WebGUI.Listen = listen
+	cfg.WebGUI.ChecksumSHA256 = resolved.ChecksumSHA256
+	cfg.WebGUI.UpdateURL = ""
+	fmt.Fprintf(os.Stderr, "web GUI selected package %s for engine schema %d\n", resolved.GUIVersion, schemaversion.Engine)
+	return cfg, writeConfig(configPath, cfg)
+}
+
+func disableWebGUI(configPath string, cfg config.Config) (config.Config, error) {
+	cfg.WebGUI.Enabled = false
+	return cfg, writeConfig(configPath, cfg)
+}
+
+func writeConfig(path string, cfg config.Config) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return config.WriteFileAtomic(path, append(data, '\n'), 0o600)
 }
 
 func envOrDefault(name string, fallback string) string {
@@ -88,6 +205,9 @@ func ApplyFirstRunDefaults(cfg config.Config, defaults RuntimeDefaults) config.C
 	}
 	if defaults.LogOutput != "" {
 		cfg.Logging.Output = defaults.LogOutput
+	}
+	if name := strings.TrimSpace(os.Getenv("FSE_NODE_NAME")); name != "" {
+		cfg.NodeName = name
 	}
 	cfg.Metadata = config.MetadataConfig{Backend: config.MetadataBackendBadger, Path: "/config/metadata", PerFolder: true}
 	cfg.Discovery.Local = defaults.DiscoveryLocal

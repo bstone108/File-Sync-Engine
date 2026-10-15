@@ -37,6 +37,7 @@ import (
 	"filesyncengine/internal/daemonwebgui"
 	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/discoverycontrol"
+	"filesyncengine/internal/foldershare"
 	"filesyncengine/internal/foldersync"
 	"filesyncengine/internal/maintenance"
 	"filesyncengine/internal/maintenancecli"
@@ -150,6 +151,9 @@ func run(configPath string) {
 	transferControl := transfercontrol.New()
 	webGUIServer := webgui.NewServer()
 	webGUIServer.SetNativeAPI(apiServer.Router(), cfg.API.Key)
+	apiServer.SetPairExchangeHandler(func(ctx context.Context, req api.PairExchangeRequest) (api.PairExchangeResponse, error) {
+		return apicontrol.HandlePairExchange(configPath, req)
+	})
 	daemonapihandlers.RegisterStatic(apiServer, daemonapihandlers.BuildStaticHandlers(daemonapihandlers.StaticRuntimeDeps{
 		ConfigPath:      configPath,
 		CurrentStore:    func() state.JSONStore { return metadataStore },
@@ -185,7 +189,8 @@ func run(configPath string) {
 			SyncRunner:   syncRunner,
 			PeerPulls:    peerPulls,
 			PeerPuller: daemonruntime.PeerPullerFunc(func(pull peerPull) (peersync.Result, error) {
-				return peersync.PullFolderWithOptions(pull.BaseURL, pull.APIKey, pull.FolderID, pull.LocalPath, peersync.PullOptions{ReceiveBytesPerSecond: pull.ReceiveBytesPerSecond, BlockSources: pull.BlockSources})
+				// Bidirectional folder alignment is owned by foldershare. A mirror pull would delete files the other side just created.
+				return peersync.Result{}, nil
 			}),
 			WarningHandler: func(warnings []foldersync.InaccessibleWarning) {
 				publishFolderWarnings(apiServer, warnings)
@@ -231,6 +236,11 @@ func run(configPath string) {
 		case <-ticker.C:
 		}
 		now := time.Now()
+		if fresh, loadErr := config.LoadFile(configPath); loadErr == nil {
+			foldershare.Reconcile(fresh, configPath, func(folderID string) bool {
+				return transferControl.IsPaused(folderID, "")
+			})
+		}
 		daemonloop.RunDueWork(&schedule, now, daemonloop.DueWorkOptions{
 			DiscoveryInterval: discoveryPollInterval,
 			MetadataInterval:  metadataReconciliationInterval,

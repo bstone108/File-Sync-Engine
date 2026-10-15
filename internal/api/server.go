@@ -15,23 +15,27 @@ import (
 
 	"filesyncengine/internal/block"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/foldershare"
 	"filesyncengine/internal/pairing"
 	"filesyncengine/internal/scanner"
+	"filesyncengine/internal/schemaversion"
 	"filesyncengine/internal/state"
 )
 
 type State struct {
-	NodeName      string           `json:"nodeName"`
-	StartedAt     time.Time        `json:"startedAt"`
-	ConfigPath    string           `json:"configPath"`
-	ConfigVersion uint64           `json:"configVersion"`
-	Folders       int              `json:"folders"`
-	Peers         int              `json:"peers"`
-	Status        string           `json:"status"`
-	Maintenance   MaintenanceState `json:"maintenance"`
-	Backup        BackupState      `json:"backup"`
-	FoldersState  []FolderState    `json:"-"`
-	PeersState    []PeerState      `json:"-"`
+	NodeName            string           `json:"nodeName"`
+	EngineSchemaVersion int              `json:"engineSchemaVersion,omitempty"`
+	IdentityPublicKey   string           `json:"identityPublicKey,omitempty"`
+	StartedAt           time.Time        `json:"startedAt"`
+	ConfigPath          string           `json:"configPath"`
+	ConfigVersion       uint64           `json:"configVersion"`
+	Folders             int              `json:"folders"`
+	Peers               int              `json:"peers"`
+	Status              string           `json:"status"`
+	Maintenance         MaintenanceState `json:"maintenance"`
+	Backup              BackupState      `json:"backup"`
+	FoldersState        []FolderState    `json:"-"`
+	PeersState          []PeerState      `json:"-"`
 }
 
 type MaintenanceState struct {
@@ -252,10 +256,11 @@ type PeerCommandResponse struct {
 }
 
 type FolderCommandRequest struct {
-	Action string `json:"action"`
-	ID     string `json:"id"`
-	Path   string `json:"path,omitempty"`
-	Mode   string `json:"mode,omitempty"`
+	Action     string    `json:"action"`
+	ID         string    `json:"id"`
+	Path       string    `json:"path,omitempty"`
+	Mode       string    `json:"mode,omitempty"`
+	SharedWith *[]string `json:"sharedWith,omitempty"`
 }
 
 type FolderCommandResponse struct {
@@ -329,11 +334,33 @@ type WebGUICommandResponse struct {
 }
 
 type IdentityPackageRequest struct {
-	GroupID string `json:"groupId"`
+	GroupID         string `json:"groupId"`
+	ReachableAPIURL string `json:"reachableAPIURL,omitempty"`
 }
 
 type IdentityImportRequest struct {
-	Package pairing.IdentityPackage `json:"package"`
+	Package              pairing.IdentityPackage `json:"package"`
+	LocalReachableAPIURL string                  `json:"localReachableAPIURL,omitempty"`
+}
+
+// PairExchangeRequest is the daemon-to-daemon pairing offer. It carries API keys
+// and is never proxied to a browser.
+type PairExchangeRequest struct {
+	GroupID              string `json:"groupId"`
+	BootstrapProofKey    string `json:"bootstrapProofKey"`
+	DiscoveryID          string `json:"discoveryId"`
+	NodeName             string `json:"nodeName"`
+	ReachableAPIURL      string `json:"reachableAPIURL"`
+	APICertificateSHA256 string `json:"apiCertificateSha256"`
+	APIKey               string `json:"apiKey"`
+}
+
+// PairExchangeResponse returns this node's API key to the paired daemon.
+type PairExchangeResponse struct {
+	DiscoveryID          string `json:"discoveryId"`
+	NodeName             string `json:"nodeName"`
+	APIKey               string `json:"apiKey"`
+	APICertificateSHA256 string `json:"apiCertificateSha256"`
 }
 
 type IdentityImportResponse struct {
@@ -468,6 +495,7 @@ type TransferCommandHandler func(context.Context, TransferCommandRequest) (Trans
 type WebGUICommandHandler func(context.Context, WebGUICommandRequest) (WebGUICommandResponse, error)
 type IdentityPackageHandler func(context.Context, IdentityPackageRequest) (pairing.IdentityPackage, error)
 type IdentityImportHandler func(context.Context, IdentityImportRequest) (IdentityImportResponse, error)
+type PairExchangeHandler func(context.Context, PairExchangeRequest) (PairExchangeResponse, error)
 type APITrustHandler func(context.Context) (APITrustResponse, error)
 type APITrustCommandHandler func(context.Context, APITrustCommandRequest) (APITrustCommandResponse, error)
 type MeshSettingsHandler func(context.Context, MeshSettingsRequest) (MeshSettingsResponse, error)
@@ -668,6 +696,7 @@ type Server struct {
 	webGUICommandHandler       WebGUICommandHandler
 	identityPackageHandler     IdentityPackageHandler
 	identityImportHandler      IdentityImportHandler
+	pairExchangeHandler        PairExchangeHandler
 	apiTrustHandler            APITrustHandler
 	apiTrustCommandHandler     APITrustCommandHandler
 	meshSettingsHandler        MeshSettingsHandler
@@ -712,6 +741,9 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/web-gui-command", s.requireKey(s.handleWebGUICommand))
 	mux.HandleFunc("/v1/identity-package", s.requireKey(s.handleIdentityPackage))
 	mux.HandleFunc("/v1/identity-import", s.requireKey(s.handleIdentityImport))
+	mux.HandleFunc("/v1/schema", s.requireKey(s.handleSchema))
+	mux.HandleFunc("/v1/sync-journal", s.requireKey(s.handleSyncJournal))
+	mux.HandleFunc("/v1/pair-exchange", s.handlePairExchange)
 	mux.HandleFunc("/v1/api/trust", s.requireKey(s.handleAPITrust))
 	mux.HandleFunc("/v1/api/trust-command", s.requireKey(s.handleAPITrustCommand))
 	mux.HandleFunc("/v1/mesh/settings", s.requireKey(s.handleMeshSettings))
@@ -807,6 +839,12 @@ func (s *Server) SetIdentityPackageHandler(handler IdentityPackageHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.identityPackageHandler = handler
+}
+
+func (s *Server) SetPairExchangeHandler(handler PairExchangeHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pairExchangeHandler = handler
 }
 
 func (s *Server) SetIdentityImportHandler(handler IdentityImportHandler) {
@@ -1457,6 +1495,61 @@ func (s *Server) handleIdentityImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Publish(Event{Type: "identity.package.imported", Message: fmt.Sprintf("identity package import accepted for group %s remote %s", response.GroupID, response.RemoteDiscoveryID)})
+	writeJSON(w, response)
+}
+
+func (s *Server) handleSchema(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]int{"engineSchemaVersion": schemaversion.Engine})
+}
+
+func (s *Server) handleSyncJournal(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	folderID := strings.TrimSpace(r.URL.Query().Get("folder"))
+	if folderID == "" {
+		http.Error(w, "folder is required", http.StatusBadRequest)
+		return
+	}
+	state := s.snapshotState()
+	entries, err := foldershare.LoadJournal(state.ConfigPath, folderID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if entries == nil {
+		entries = []foldershare.Entry{}
+	}
+	writeJSON(w, map[string]any{"folder": folderID, "entries": entries})
+}
+
+func (s *Server) handlePairExchange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.RLock()
+	handler := s.pairExchangeHandler
+	s.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "pair exchange handler is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var req PairExchangeRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "invalid pair exchange request", http.StatusBadRequest)
+		return
+	}
+	response, err := handler(r.Context(), req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
 	writeJSON(w, response)
 }
 

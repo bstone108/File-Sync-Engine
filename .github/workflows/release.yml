@@ -482,6 +482,7 @@ jobs:
     needs:
       - version-preflight
       - linux-release-artifacts
+      - web-gui-package
       - linux-desktop-artifacts
       - windows-desktop-artifacts
       - macos-desktop-artifacts
@@ -529,6 +530,21 @@ jobs:
             fi
             install -m 0755 "$binary_path" "docker-artifacts/$binary"
           done
+      - name: Download same-run web GUI package
+        uses: actions/download-artifact@v7
+        with:
+          name: fse-web-gui-package-${{ needs.version-preflight.outputs.version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/web-gui-package
+      - name: Stamp schema catalog for this engine image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t matches < <(find "${{ runner.temp }}/web-gui-package" -type f -name '*.zip' -print)
+          if [[ "${#matches[@]}" -ne 1 ]]; then
+            printf 'expected one web GUI zip, found %s\n' "${#matches[@]}" >&2
+            exit 1
+          fi
+          scripts/stamp-schema-versions.sh "${{ needs.version-preflight.outputs.version }}" "${matches[0]}" schema-versions.json
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR

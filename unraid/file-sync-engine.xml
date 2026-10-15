@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>File-Sync-Engine</Name>
+  <Repository>ghcr.io/bstone108/file-sync-engine:v2026.10.15.01</Repository>
+  <Registry>https://github.com/bstone108/File-Sync-Engine/pkgs/container/file-sync-engine</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/bstone108/File-Sync-Engine/issues</Support>
+  <Project>https://github.com/bstone108/File-Sync-Engine</Project>
+  <Overview>File Sync Engine ships the engine only. Set FSE_WEB_GUI_ENABLED to true to download the newest GUI package compatible with this engine schema, or supply an explicit package and checksum. Unset the variable to disable the GUI listener. Replace the repository tag with the published YYYY.MM.DD.BB release.</Overview>
+  <Category>Backup: Network:Other Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8385]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/bstone108/File-Sync-Engine/main/unraid/file-sync-engine.xml</TemplateURL>
+  <Icon/>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/file-sync-engine" Mode="rw" Description="Persistent config, metadata, logs, and an installed GUI when enabled." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/file-sync-engine</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/filesync" Mode="rw" Description="Folder data to sync. Share subfolders from the GUI." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/filesync</Config>
+  <Config Name="API port" Target="22420" Default="22420" Mode="tcp" Description="Daemon HTTPS API. The GUI proxies this server-side." Type="Port" Display="always" Required="true" Mask="false">22420</Config>
+  <Config Name="GUI port" Target="8385" Default="8385" Mode="tcp" Description="Web GUI. Nothing listens here unless FSE_WEB_GUI_ENABLED=true." Type="Port" Display="always" Required="false" Mask="false">8385</Config>
+  <Config Name="Sync port" Target="22000" Default="32000" Mode="tcp" Description="Host port for the container sync listener. Default host port 32000 leaves Syncthing's 22000 free. The container still listens on 22000 unless FSE_SYNC_LISTEN is changed." Type="Port" Display="always" Required="false" Mask="false">32000</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User id. 99 is Unraid nobody." Type="Variable" Display="always" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group id. 100 is Unraid users." Type="Variable" Display="always" Required="false" Mask="false">100</Config>
+  <Config Name="FSE_NODE_NAME" Target="FSE_NODE_NAME" Default="unraid" Mode="" Description="Node name used the first time config is created." Type="Variable" Display="always" Required="false" Mask="false">unraid</Config>
+  <Config Name="FSE_WEB_GUI_ENABLED" Target="FSE_WEB_GUI_ENABLED" Default="false" Mode="" Description="true downloads or installs the GUI. false or empty disables the GUI listener." Type="Variable" Display="always" Required="false" Mask="false">false</Config>
+  <Config Name="FSE_WEB_GUI_VERSION" Target="FSE_WEB_GUI_VERSION" Default="" Mode="" Description="Explicit GUI package version. Leave empty to select the newest schema-compatible package." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="FSE_WEB_GUI_PACKAGE" Target="FSE_WEB_GUI_PACKAGE" Default="" Mode="" Description="Absolute in-container path of an explicit GUI zip. Leave empty for catalog download." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="FSE_WEB_GUI_INSTALL_DIR" Target="FSE_WEB_GUI_INSTALL_DIR" Default="/config/web-gui" Mode="" Description="Persistent GUI install directory." Type="Variable" Display="always" Required="false" Mask="false">/config/web-gui</Config>
+  <Config Name="FSE_WEB_GUI_LISTEN" Target="FSE_WEB_GUI_LISTEN" Default="0.0.0.0:8385" Mode="" Description="GUI listen address inside the container." Type="Variable" Display="always" Required="false" Mask="false">0.0.0.0:8385</Config>
+  <Config Name="FSE_WEB_GUI_CHECKSUM" Target="FSE_WEB_GUI_CHECKSUM" Default="" Mode="" Description="SHA-256 of an explicit GUI package. Required together with version, package, install dir, and listen." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="FSE_WEB_GUI_SCHEMA_INDEX" Target="FSE_WEB_GUI_SCHEMA_INDEX" Default="/usr/local/share/fse/schema-versions.json" Mode="" Description="Catalog mapping GUI packages to engine schema versions." Type="Variable" Display="always" Required="false" Mask="false">/usr/local/share/fse/schema-versions.json</Config>
+  <Config Name="FSE_WEB_GUI_TLS_ENABLED" Target="FSE_WEB_GUI_TLS_ENABLED" Default="false" Mode="" Description="Enable the optional GUI HTTPS listener." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="FSE_WEB_GUI_HTTPS_LISTEN" Target="FSE_WEB_GUI_HTTPS_LISTEN" Default="" Mode="" Description="Explicit GUI HTTPS listen address." Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="FSE_SYNC_LISTEN" Target="FSE_SYNC_LISTEN" Default="tcp://0.0.0.0:22000" Mode="" Description="Sync listen address inside the container. File sync between paired GUIs uses the API port." Type="Variable" Display="advanced" Required="false" Mask="false">tcp://0.0.0.0:22000</Config>
+  <Config Name="FSE_UMASK" Target="FSE_UMASK" Default="002" Mode="" Description="Umask for files the daemon creates." Type="Variable" Display="advanced" Required="false" Mask="false">002</Config>
+</Container>
