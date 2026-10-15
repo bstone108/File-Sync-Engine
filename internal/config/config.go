@@ -303,6 +303,7 @@ func (d DiscoveryConfig) AllDisabled() bool {
 type PeerConfig struct {
 	ID                    string           `json:"id"`
 	APIKey                string           `json:"apiKey,omitempty"`
+	APICertificateSHA256  string           `json:"apiCertificateSha256,omitempty"`
 	IdentityPublicKey     string           `json:"identityPublicKey,omitempty"`
 	EncryptionLevel       int              `json:"encryptionLevel"`
 	SendBytesPerSecond    int64            `json:"sendBytesPerSecond,omitempty"`
@@ -347,6 +348,7 @@ type FolderConfig struct {
 	SyncGroup     string            `json:"syncGroup,omitempty"`
 	Mode          FolderMode        `json:"mode"`
 	BlockSize     int               `json:"blockSize"`
+	SharedWith    []string          `json:"sharedWith,omitempty"`
 	Ignore        []string          `json:"ignore"`
 	Permissions   PermissionPolicy  `json:"permissions,omitempty"`
 	Maintenance   MaintenanceConfig `json:"maintenance,omitempty"`
@@ -486,8 +488,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("duplicate identity group id %q", group.ID)
 		}
 		seenGroups[group.ID] = struct{}{}
-		if group.Enabled && len(group.Token) < 64 {
-			return fmt.Errorf("identity group %q token must be at least 64 characters", group.ID)
+		if group.Enabled && len(group.Token) < 43 {
+			return fmt.Errorf("identity group %q token must be at least 43 characters", group.ID)
 		}
 	}
 	for i, record := range c.Identity.Revoked {

@@ -86,6 +86,16 @@ The `backup` object reports whether this node is configured as a backup destinat
 }
 ```
 
+## Engine schema
+
+```http
+GET /v1/schema
+```
+
+Returns `{"engineSchemaVersion":1}`. The same value is on `GET /v1/status` as `engineSchemaVersion`. GUI packages declare an inclusive `minEngineSchema`/`maxEngineSchema` range in `schema.json`, and `schema-versions.json` maps each published GUI package to that range. A container that opts into the web GUI installs only the newest package whose range includes this number.
+
+`GET /v1/sync-journal?folder=<id>` returns the per-path revision journal used for bidirectional folder sync. It requires the daemon API key and is not exposed through the browser proxy. `POST /v1/pair-exchange` is the daemon-to-daemon pairing exchange. It is authenticated by the identity bootstrap proof, returns API keys, and is not proxied to the browser.
+
 ## Stop endpoint
 
 ```http
@@ -277,9 +287,13 @@ The revocation foundation is currently a prototype planning contract rather than
   "groupId": "family-sync",
   "bootstrapProofKey": "long-secret-bootstrap-key",
   "bootstrapEncryptionLevel": 10,
-  "defaultPeerEncryptionLevel": 4
+  "defaultPeerEncryptionLevel": 4,
+  "reachableAPIURL": "https://fileserver.example:22420",
+  "apiCertificateSha256": "lowercase-sha256-of-the-api-certificate"
 }
 ```
+
+`reachableAPIURL` and `apiCertificateSha256` are optional. When the importer sends them with `localReachableAPIURL`, the daemon adopts a missing identity group (it does not overwrite a different existing token), calls the peer's `/v1/pair-exchange`, and stores the peer API key and certificate pin. The browser response stays redacted.
 
 ## Peer, folder, discovery, and config commands
 

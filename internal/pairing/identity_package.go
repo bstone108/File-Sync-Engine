@@ -32,6 +32,11 @@ type IdentityPackage struct {
 	BootstrapProofKey          string    `json:"bootstrapProofKey"`
 	BootstrapEncryptionLevel   int       `json:"bootstrapEncryptionLevel"`
 	DefaultPeerEncryptionLevel int       `json:"defaultPeerEncryptionLevel"`
+	// ReachableAPIURL is the HTTPS API address other devices use to reach this
+	// node. It is not an API key.
+	ReachableAPIURL string `json:"reachableAPIURL,omitempty"`
+	// APICertificateSHA256 pins the daemon API certificate for that address.
+	APICertificateSHA256 string `json:"apiCertificateSha256,omitempty"`
 }
 
 func BuildIdentityPackage(cfg config.Config, groupID string) (IdentityPackage, error) {
@@ -43,8 +48,7 @@ func BuildIdentityPackage(cfg config.Config, groupID string) (IdentityPackage, e
 		// Legacy GUI-owned daemon configurations predate explicit pairing state.
 		// Derive one stable internal bootstrap proof from the existing private
 		// identity, rather than forcing a destructive identity reset on upgrade.
-		proof := sha256.Sum256([]byte("fse-primary-identity-bootstrap-v1:" + cfg.Identity.PrivateKey))
-		group = config.IdentityGroupConfig{ID: "primary", Token: base64.RawURLEncoding.EncodeToString(proof[:]), Enabled: true}
+		group = config.IdentityGroupConfig{ID: "primary", Token: PrimaryBootstrapToken(cfg.Identity.PrivateKey), Enabled: true}
 		ok = true
 	}
 	if !ok {
@@ -64,6 +68,25 @@ func BuildIdentityPackage(cfg config.Config, groupID string) (IdentityPackage, e
 		BootstrapEncryptionLevel:   IdentityBootstrapEncryptionLevel,
 		DefaultPeerEncryptionLevel: peerLevel,
 	}, nil
+}
+
+// PrimaryBootstrapToken is the stable bootstrap proof derived for the implicit
+// primary group when a config has an identity but no explicit group record.
+func PrimaryBootstrapToken(privateKey string) string {
+	proof := sha256.Sum256([]byte("fse-primary-identity-bootstrap-v1:" + privateKey))
+	return base64.RawURLEncoding.EncodeToString(proof[:])
+}
+
+// GroupToken returns the bootstrap proof for an enabled group, including the
+// implicit primary group derived from the node private key.
+func GroupToken(cfg config.Config, groupID string) (string, bool) {
+	if group, ok := findEnabledIdentityGroup(cfg.Identity.Groups, groupID); ok {
+		return group.Token, true
+	}
+	if groupID == "primary" && cfg.Identity.PrivateKey != "" {
+		return PrimaryBootstrapToken(cfg.Identity.PrivateKey), true
+	}
+	return "", false
 }
 
 func MarshalIdentityPackage(pkg IdentityPackage) ([]byte, error) {

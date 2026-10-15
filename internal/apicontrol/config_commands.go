@@ -35,7 +35,11 @@ func HandlePeerCommand(configPath string, req api.PeerCommandRequest) (api.PeerC
 func HandleFolderCommand(configPath string, req api.FolderCommandRequest) (api.FolderCommandResponse, error) {
 	switch req.Action {
 	case "add":
-		if err := configops.AddFolder(configPath, req.ID, req.Path, req.Mode); err != nil {
+		var shared []string
+		if req.SharedWith != nil {
+			shared = *req.SharedWith
+		}
+		if err := configops.AddFolderShared(configPath, req.ID, req.Path, req.Mode, shared); err != nil {
 			return api.FolderCommandResponse{}, err
 		}
 	case "remove":
@@ -43,7 +47,7 @@ func HandleFolderCommand(configPath string, req api.FolderCommandRequest) (api.F
 			return api.FolderCommandResponse{}, err
 		}
 	case "update":
-		if err := configops.UpdateFolder(configPath, req.ID, req.Path, req.Mode); err != nil {
+		if err := configops.UpdateFolderShared(configPath, req.ID, req.Path, req.Mode, req.SharedWith); err != nil {
 			return api.FolderCommandResponse{}, err
 		}
 	default:

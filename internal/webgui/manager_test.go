@@ -227,7 +227,7 @@ func TestServerProvidesSameOriginStatusWithoutExposingNativeAPIKey(t *testing.T)
 		t.Fatalf("native calls = %d, want 1", nativeCalls)
 	}
 
-	blocked, err := http.Get(status.URL + "/api/v1/config")
+	blocked, err := http.Get(status.URL + "/api/v1/pair-exchange")
 	if err != nil {
 		t.Fatalf("blocked route request: %v", err)
 	}

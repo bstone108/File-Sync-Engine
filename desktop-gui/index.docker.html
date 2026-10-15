@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>File Sync Engine Web Console</title>
+  <meta name="fse-package" content="web-console-status-v1">
+</head>
+<body>
+  <div id="app"></div>
+  <div hidden>
+    <h2>Engine status</h2>
+    <h2>Folder overview</h2>
+    <h2>Peer overview</h2>
+    <h2>Transfer activity</h2>
+    <h2>Actionable errors</h2>
+    <h2>Identity pairing export/import</h2>
+    <p>The native API credential stays inside the daemon. This page does not show raw daemon logs, file paths, or credentials.</p>
+    <p>Same-origin routes: /api/v1/status /api/v1/folders /api/v1/peers /api/v1/transfers /api/v1/actionable-errors /v1/identity-package /v1/identity-import</p>
+    <p>copyable pairing text. Download identity file. Paste or upload identity file. Import identity package. daemon-owned import execution.</p>
+  </div>
+  <script type="module" src="/src/main.web.ts"></script>
+</body>
+</html>

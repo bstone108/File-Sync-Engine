@@ -223,3 +223,39 @@ jobs:
           cache: true
       - name: Run build-all script
         run: scripts/build-all.sh "ci-${GITHUB_SHA::12}"
+
+  gui-sync-e2e:
+    name: Two-container GUI sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Set up Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop-gui/package-lock.json
+      - name: Build engine image and GUI package
+        run: |
+          set -euo pipefail
+          (cd desktop-gui && npm ci)
+          scripts/package-web-gui.sh
+          mkdir -p docker-artifacts
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o docker-artifacts/fse-linux-amd64 ./cmd/fse
+          docker build -t file-sync-engine:e2e .
+          checksum="$(sha256sum web-gui/dist/fse-web-container-default.zip | awk '{ print $1 }')"
+          export FSE_WEB_GUI_CHECKSUM="$checksum"
+          export FSE_WEB_GUI_PACKAGE_HOST_PATH="$PWD/web-gui/dist/fse-web-container-default.zip"
+          printf 'FSE_WEB_GUI_CHECKSUM=%s\n' "$checksum" >> "$GITHUB_ENV"
+          printf 'FSE_WEB_GUI_PACKAGE_HOST_PATH=%s\n' "$PWD/web-gui/dist/fse-web-container-default.zip" >> "$GITHUB_ENV"
+          docker compose -f e2e/gui-sync/compose.yaml up -d
+          (cd e2e/gui-sync && npm install && npx playwright install --with-deps chromium && npx playwright test)
+      - name: Collect container logs
+        if: always()
+        run: docker compose -f e2e/gui-sync/compose.yaml logs || true

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { fsePlatform, isDockerGUI } from './lib/platform';
   import {
     fetchDaemonStatus,
     fetchDaemonFolders,
@@ -141,6 +142,9 @@
   let remoteBrowseMessage = 'Manual path entry remains available when the selected host is offline.';
   let remoteBrowseLoading = false;
   let folderFormMode = 'sendrecv';
+  let folderFormSharedWith = '';
+  const dockerGUI = isDockerGUI();
+  const guiPlatform = fsePlatform();
   let discoveryFormDisabled = false;
   let discoveryFormDHT = true;
   let discoveryFormLocal = true;
@@ -151,6 +155,9 @@
   let webGUIFormAction: 'status' | 'install' | 'update' | 'start' | 'stop' = 'status';
   let configPatchLoggingLevel = 'info';
   const primaryIdentityPackageID = 'primary';
+  const pairingGroupID = primaryIdentityPackageID;
+  let pairingReachableAPIURL = '';
+  let pairingLocalReachableAPIURL = '';
   let pairingPackage: IdentityPairingPackage | null = null;
   let pairingExportText = '';
   let pairingDownloadFilename = '';
@@ -637,7 +644,8 @@
   function validateFolderCommandForm() {
     const id = requireNonEmpty(folderFormID, 'Folder ID');
     const path = folderFormAction === 'remove' ? undefined : requireNonEmpty(folderFormPath, 'Folder path');
-    return { action: folderFormAction, id, path, mode: folderFormMode };
+    const sharedWith = folderFormAction === 'remove' ? undefined : folderFormSharedWith.split(',').map((part) => part.trim()).filter((part) => part.length > 0);
+    return { action: folderFormAction, id, path, mode: folderFormMode, sharedWith };
   }
 
   function validateDiscoveryCommandForm() {
@@ -673,7 +681,7 @@
     pairingLoading = true;
     pairingMessage = '';
     try {
-      pairingPackage = await generateIdentityPairingPackage(daemonConnectionSettings, primaryIdentityPackageID);
+      pairingPackage = await generateIdentityPairingPackage(daemonConnectionSettings, pairingGroupID, pairingReachableAPIURL.trim());
       pairingExportText = exportIdentityPackageAsCopyableText(pairingPackage);
       const download = buildIdentityPackageDownload(pairingPackage);
       pairingDownloadFilename = download.filename;
@@ -714,7 +722,7 @@
     try {
       const imported = parsedPairingImport ?? parseImportedIdentityPackageText(pairingImportText);
       parsedPairingImport = imported;
-      const response = await importIdentityPairingPackage(daemonConnectionSettings, imported);
+      const response = await importIdentityPairingPackage(daemonConnectionSettings, imported, pairingLocalReachableAPIURL.trim());
       pairingImportSummary = `Imported identity package for group ${response.groupId} from ${response.remoteDiscoveryId}; peer-pair key ${response.keyId ?? 'pending'} prepared at level ${response.peerPairEncryptionLevel}.`;
       pairingMessage = response.message ?? 'Identity package import accepted by daemon-owned import execution.';
     } catch (error) {
@@ -781,11 +789,12 @@
   }
 
   function markLocalControlOperationCompleted(area: LocalControlArea, command: string, response: unknown) {
+    const detail = commandResponseDetail(response);
     setLocalControlOperationState(area, {
       phase: 'completed',
       command,
-      summary: `${command} request completed and status was refreshed.`,
-      detail: commandResponseDetail(response)
+      summary: detail ? `${command} request completed. ${detail}` : `${command} request completed and status was refreshed.`,
+      detail
     });
   }
 
@@ -1213,6 +1222,14 @@
   }
 
   onMount(() => {
+    if (dockerGUI) {
+      localCredentialRef = 'same-origin';
+      const timer = setInterval(() => {
+        void refreshOperationalState();
+      }, 3000);
+      void refreshOperationalState();
+      return () => clearInterval(timer);
+    }
     void (async () => {
       await loadRemoteRegistry();
       await ensureLocalDaemonConnection();
@@ -1283,11 +1300,12 @@
       <p class="instance-note">Remote daemon instances can be added by API endpoint, pairing code, identity file, or future animated code without storing raw API keys in this registry. The host list keeps a readable status layout for Online/offline state, Remaining to receive, Remaining to send, Average receive rate, and Average send rate.</p>
     </section>
     <nav aria-label="Selected host sections">
-      {#each viewCatalog as view}
+      {#each viewCatalog.filter((view) => !(dockerGUI && view.id === 'desktop-settings')) as view}
         <button
           type="button"
           class:active={activeView === view.id}
           aria-current={activeView === view.id ? 'page' : undefined}
+          data-testid={`nav-${view.id}`}
           on:click={() => activeView = view.id}
         >
           <span>{view.label}</span>
@@ -1339,8 +1357,21 @@
     </section>
 
     {#if activeView === 'overview'}
-  <section class="connection-card">
+  <section class="connection-card" aria-label="Engine status">
     <span class="eyebrow">Engine status</span>
+    {#if dockerGUI}
+      <h2>Device identity</h2>
+      <dl class="host-status-grid" aria-label="Device identity">
+        <dt>Node</dt><dd data-testid="device-node-name">{status?.nodeName ?? 'Loading'}</dd>
+        <dt>Identity</dt><dd>{status?.identityPublicKey ?? 'Loading'}</dd>
+        <dt>Engine schema</dt><dd>{status?.engineSchemaVersion ?? '—'}</dd>
+        <dt>Daemon</dt><dd>{status?.status ?? 'starting'}</dd>
+        <dt>Folders</dt><dd>{daemonFolders.length}</dd>
+        <dt>Peers</dt><dd>{daemonPeers.length}</dd>
+      </dl>
+      <p>The native API credential stays inside the daemon.</p>
+      <button type="button" on:click={refreshOperationalState}>Refresh folders, peers, and status</button>
+    {:else}
     <h2>Local engine</h2>
     <p class:success={guiOwnedNonServiceDaemonSession?.connectionState === 'running'}>
       {guiOwnedNonServiceDaemonSession?.connectionState === 'running' ? 'Running and reachable' : lifecycleLoading ? 'Connecting…' : 'Stopped or unreachable'}
@@ -1367,6 +1398,7 @@
         <dt>Started</dt><dd>{status.startedAt ?? 'unknown'}</dd>
       </dl>
       <button type="button" on:click={refreshOperationalState} disabled={loading || !hasDaemonCredential}>Refresh folders, peers, and status</button>
+    {/if}
     {/if}
   </section>
 
@@ -1446,15 +1478,15 @@
         <input bind:value={peerFormEndpoint} name="peerFormEndpoint" autocomplete="off" placeholder="tcp://host:port or https://host" />
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit peer command</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('peer').phase} aria-label="Peer operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('peer'))}
-        {#if getLocalControlOperationState('peer').detail}
-          <span>{getLocalControlOperationState('peer').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.peer.phase} aria-label="Peer operation status">
+        {localControlOperationStates.peer.phase}: {localControlOperationStates.peer.summary}
+        {#if localControlOperationStates.peer.detail}
+          <span>{localControlOperationStates.peer.detail}</span>
         {/if}
       </p>
     </form>
 
-    <form class="control-form" on:submit|preventDefault={submitFolderForm} aria-label="Folder form">
+    <form class="control-form" on:submit|preventDefault={submitFolderForm} aria-label="Daemon settings folder form">
       <h3>Folder form</h3>
       <label>
         Action
@@ -1466,11 +1498,11 @@
       </label>
       <label>
         Folder ID
-        <input bind:value={folderFormID} name="folderFormID" autocomplete="off" />
+        <input bind:value={folderFormID} name="folderFormID" data-testid="folder-id" autocomplete="off" />
       </label>
       <label>
         Folder path
-        <input bind:value={folderFormPath} name="folderFormPath" autocomplete="off" />
+        <input bind:value={folderFormPath} name="folderFormPath" data-testid="folder-path" autocomplete="off" />
       </label>
       <label>
         Folder mode
@@ -1480,11 +1512,15 @@
           <option value="recvonly">recvonly</option>
         </select>
       </label>
-      <button type="submit" disabled={loading || !hasDaemonCredential}>Submit folder command</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('folder').phase} aria-label="Folder operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('folder'))}
-        {#if getLocalControlOperationState('folder').detail}
-          <span>{getLocalControlOperationState('folder').detail}</span>
+      <label>
+        Share with peer IDs
+        <input bind:value={folderFormSharedWith} name="folderFormSharedWith" data-testid="folder-shared-with" autocomplete="off" placeholder="empty shares with every paired peer" />
+      </label>
+      <button type="button" data-testid="folder-submit" on:click={submitFolderForm} disabled={loading || !hasDaemonCredential}>Submit folder command</button>
+      <p class="operation-status" data-phase={localControlOperationStates.folder.phase} aria-label="Folder operation status">
+        {localControlOperationStates.folder.phase}: {localControlOperationStates.folder.summary}
+        {#if localControlOperationStates.folder.detail}
+          <span>{localControlOperationStates.folder.detail}</span>
         {/if}
       </p>
     </form>
@@ -1504,10 +1540,10 @@
         Local/LAN discovery enabled
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit discovery update</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('discovery').phase} aria-label="Discovery operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('discovery'))}
-        {#if getLocalControlOperationState('discovery').detail}
-          <span>{getLocalControlOperationState('discovery').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.discovery.phase} aria-label="Discovery operation status">
+        {localControlOperationStates.discovery.phase}: {localControlOperationStates.discovery.summary}
+        {#if localControlOperationStates.discovery.detail}
+          <span>{localControlOperationStates.discovery.detail}</span>
         {/if}
       </p>
     </form>
@@ -1517,8 +1553,8 @@
       <label>
         Action
         <select bind:value={transferFormAction} name="transferFormAction">
-          <option value="pause">pause</option>
-          <option value="resume">resume</option>
+          <option value="pause">Pause sync</option>
+          <option value="resume">Resume sync</option>
           <option value="cancel">cancel next matching transfer</option>
         </select>
       </label>
@@ -1531,10 +1567,10 @@
         <input bind:value={transferFormPeerID} name="transferFormPeerID" autocomplete="off" />
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit transfer command</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('transfer').phase} aria-label="Transfer operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('transfer'))}
-        {#if getLocalControlOperationState('transfer').detail}
-          <span>{getLocalControlOperationState('transfer').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.transfer.phase} aria-label="Transfer operation status">
+        {localControlOperationStates.transfer.phase}: {localControlOperationStates.transfer.summary}
+        {#if localControlOperationStates.transfer.detail}
+          <span>{localControlOperationStates.transfer.detail}</span>
         {/if}
       </p>
     </form>
@@ -1546,10 +1582,10 @@
         <input bind:value={maintenanceFormFolderID} name="maintenanceFormFolderID" autocomplete="off" />
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Run maintenance scrub</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('maintenance').phase} aria-label="Maintenance operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('maintenance'))}
-        {#if getLocalControlOperationState('maintenance').detail}
-          <span>{getLocalControlOperationState('maintenance').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.maintenance.phase} aria-label="Maintenance operation status">
+        {localControlOperationStates.maintenance.phase}: {localControlOperationStates.maintenance.summary}
+        {#if localControlOperationStates.maintenance.detail}
+          <span>{localControlOperationStates.maintenance.detail}</span>
         {/if}
       </p>
     </form>
@@ -1567,10 +1603,10 @@
         </select>
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit web GUI command</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('webGUI').phase} aria-label="Web GUI operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('webGUI'))}
-        {#if getLocalControlOperationState('webGUI').detail}
-          <span>{getLocalControlOperationState('webGUI').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.webGUI.phase} aria-label="Web GUI operation status">
+        {localControlOperationStates.webGUI.phase}: {localControlOperationStates.webGUI.summary}
+        {#if localControlOperationStates.webGUI.detail}
+          <span>{localControlOperationStates.webGUI.detail}</span>
         {/if}
       </p>
     </form>
@@ -1588,10 +1624,10 @@
         </select>
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit non-secret config patch</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('config').phase} aria-label="Config operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('config'))}
-        {#if getLocalControlOperationState('config').detail}
-          <span>{getLocalControlOperationState('config').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.config.phase} aria-label="Config operation status">
+        {localControlOperationStates.config.phase}: {localControlOperationStates.config.summary}
+        {#if localControlOperationStates.config.detail}
+          <span>{localControlOperationStates.config.detail}</span>
         {/if}
       </p>
     </form>
@@ -1605,10 +1641,10 @@
         <button type="button" on:click={refreshAPITrustStatus} disabled={loading || !hasDaemonCredential}>Fetch API trust status</button>
         <button type="button" on:click={pinActiveAPICertificateForSelectedHost} disabled={loading || !hasDaemonCredential || !apiTrustStatus?.certificateSha256}>Pin active certificate</button>
       </div>
-      <p class="operation-status" data-phase={getLocalControlOperationState('apiTrust').phase} aria-label="API trust operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('apiTrust'))}
-        {#if getLocalControlOperationState('apiTrust').detail}
-          <span>{getLocalControlOperationState('apiTrust').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.apiTrust.phase} aria-label="API trust operation status">
+        {localControlOperationStates.apiTrust.phase}: {localControlOperationStates.apiTrust.summary}
+        {#if localControlOperationStates.apiTrust.detail}
+          <span>{localControlOperationStates.apiTrust.detail}</span>
         {/if}
       </p>
       <p>{apiTrustStatusSummary()}</p>
@@ -1633,7 +1669,7 @@
   </section>
     {/if}
 
-    {#if activeView === 'desktop-settings'}
+    {#if activeView === 'desktop-settings' && !dockerGUI}
 
   <section class="connection-card">
     <h2>Local engine lifecycle</h2>
@@ -1742,6 +1778,7 @@
         {/if}
         <p>Configured and discovered peers above are live daemon state. They are not promoted into remote API hosts because the daemon does not yet publish authenticated remote API endpoints or a progressive remote-instance pairing read model.</p>
       </section>
+      {#if !dockerGUI}
       <section class="connection-card">
         <h2>Remote instance onboarding form</h2>
         <p>Add a remote instance only when you have its HTTPS API endpoint and key. On Linux, raw API keys are stored through Freedesktop Secret Service and resolved only inside the native API proxy. Pairing import remains daemon-owned and does not fabricate a remote host entry.</p>
@@ -1772,6 +1809,7 @@
           <p>{remoteOnboardingMessage}</p>
         {/if}
       </section>
+      {/if}
       <section class="connection-card remote-mesh-settings-plan">
         <h2>Trusted eventually-consistent mesh management</h2>
         <p>Each identity-linked daemon will publish a per-node settings document so offline instances can be inspected or queued for later adoption through trusted relays instead of requiring direct reachability.</p>
@@ -1812,13 +1850,21 @@
         <p>
           This exports this engine's single identity for pairing. The package still contains identity secret material, so it is never written to logs or generic status events.
         </p>
-        <button type="button" on:click={generatePairingPackage} disabled={pairingLoading}>
+        <label>
+          Reachable API URL for other devices
+          <input data-testid="pairing-reachable-url" bind:value={pairingReachableAPIURL} autocomplete="off" placeholder="https://this-host:22420" />
+        </label>
+        <label>
+          This device's reachable API URL
+          <input data-testid="pairing-local-url" bind:value={pairingLocalReachableAPIURL} autocomplete="off" placeholder="https://this-host:22420" />
+        </label>
+        <button type="button" data-testid="generate-pairing" on:click={generatePairingPackage} disabled={pairingLoading}>
           Generate pairing package
         </button>
         {#if pairingExportText}
           <label>
             copyable pairing text
-            <textarea readonly rows="8" value={pairingExportText}></textarea>
+            <textarea data-testid="pairing-export-text" readonly rows="8" value={pairingExportText}></textarea>
           </label>
           <a
             class="download-link"
@@ -1858,11 +1904,11 @@
         {/if}
         <label>
           Paste or upload identity file
-          <textarea bind:value={pairingImportText} rows="8" placeholder="Paste identity package JSON here"></textarea>
+          <textarea data-testid="pairing-import-text" bind:value={pairingImportText} rows="8" placeholder="Paste identity package JSON here"></textarea>
         </label>
         <input type="file" accept="application/json,.json" on:change={handlePairingFileUpload} aria-label="Upload identity file" />
-        <button type="button" on:click={parsePairingImportText}>Parse pasted identity file</button>
-        <button type="button" on:click={importParsedPairingPackage} disabled={pairingLoading}>Import identity package</button>
+        <button type="button" data-testid="parse-pairing" on:click={parsePairingImportText}>Parse pasted identity file</button>
+        <button type="button" data-testid="import-pairing" on:click={importParsedPairingPackage} disabled={pairingLoading}>Import identity package</button>
         <p>Import uses daemon-owned import execution over the authenticated encrypted API and returns only redacted peer-pair identifiers.</p>
         {#if pairingImportSummary}
           <p class="success">{pairingImportSummary}</p>
@@ -1962,10 +2008,13 @@
       </section>
     {/if}
 
-    {#if activeView === 'desktop-settings'}
+    {#if activeView === 'desktop-settings' && !dockerGUI}
       <section class="connection-card">
         <h2>Desktop GUI settings menu</h2>
         <p>These preferences are persisted in native per-user storage and are never written into the selected host's daemon config.</p>
+        {#if guiPlatform === 'macos'}<p data-platform="macos">macOS settings stay on this platform.</p>{/if}
+        {#if guiPlatform === 'windows'}<p data-platform="windows">Windows settings stay on this platform.</p>{/if}
+        {#if guiPlatform === 'linux'}<p data-platform="linux">Linux settings stay on this platform.</p>{/if}
         <form class="control-form" on:submit|preventDefault={saveDesktopPreferences} aria-label="Desktop preferences">
           <label>Theme<select bind:value={desktopPreferences.theme}><option value="system">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
           <label>Density<select bind:value={desktopPreferences.density}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
@@ -2019,6 +2068,18 @@
     align-items: start;
     gap: 1rem;
     padding: 1rem;
+  }
+  @media (max-width: 800px) {
+    .host-scoped-shell {
+      grid-template-columns: 1fr;
+    }
+    .host-sidebar {
+      position: static;
+    }
+    .connection-card {
+      width: auto;
+      padding: 1rem;
+    }
   }
   .host-sidebar {
     position: sticky;

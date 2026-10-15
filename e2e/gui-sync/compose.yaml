@@ -1,0 +1,45 @@
+name: fse-e2e
+services:
+  fse-a:
+    image: file-sync-engine:e2e
+    hostname: fse-a
+    environment:
+      FSE_NODE_NAME: fse-a
+      FSE_WEB_GUI_ENABLED: "true"
+      FSE_WEB_GUI_VERSION: ${FSE_WEB_GUI_VERSION:-0.0.0-dev}
+      FSE_WEB_GUI_PACKAGE: /opt/fse/web-package/fse-web-gui.zip
+      FSE_WEB_GUI_INSTALL_DIR: /config/web-gui
+      FSE_WEB_GUI_LISTEN: 0.0.0.0:8385
+      FSE_WEB_GUI_CHECKSUM: ${FSE_WEB_GUI_CHECKSUM:?Set FSE_WEB_GUI_CHECKSUM}
+      FSE_SYNC_LISTEN: tcp://0.0.0.0:22000
+    ports:
+      - "8385:8385"
+      - "32001:22000"
+    volumes:
+      - a-config:/config
+      - a-data:/data
+      - ${FSE_WEB_GUI_PACKAGE_HOST_PATH:?Set FSE_WEB_GUI_PACKAGE_HOST_PATH}:/opt/fse/web-package/fse-web-gui.zip:ro
+  fse-b:
+    image: file-sync-engine:e2e
+    hostname: fse-b
+    environment:
+      FSE_NODE_NAME: fse-b
+      FSE_WEB_GUI_ENABLED: "true"
+      FSE_WEB_GUI_VERSION: ${FSE_WEB_GUI_VERSION:-0.0.0-dev}
+      FSE_WEB_GUI_PACKAGE: /opt/fse/web-package/fse-web-gui.zip
+      FSE_WEB_GUI_INSTALL_DIR: /config/web-gui
+      FSE_WEB_GUI_LISTEN: 0.0.0.0:8385
+      FSE_WEB_GUI_CHECKSUM: ${FSE_WEB_GUI_CHECKSUM:?Set FSE_WEB_GUI_CHECKSUM}
+      FSE_SYNC_LISTEN: tcp://0.0.0.0:22000
+    ports:
+      - "8386:8385"
+      - "32002:22000"
+    volumes:
+      - b-config:/config
+      - b-data:/data
+      - ${FSE_WEB_GUI_PACKAGE_HOST_PATH}:/opt/fse/web-package/fse-web-gui.zip:ro
+volumes:
+  a-config:
+  b-config:
+  a-data:
+  b-data:

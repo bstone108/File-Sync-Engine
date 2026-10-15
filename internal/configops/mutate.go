@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/peeridentity"
 )
 
 func AddPeer(path, id, endpoint string) error {
@@ -42,7 +43,7 @@ func AddFolder(path, id, folderPath, mode string) error {
 			return fmt.Errorf("folder %q already exists", id)
 		}
 	}
-	cfg.Folders = append(cfg.Folders, config.FolderConfig{ID: id, Path: folderPath, Mode: config.FolderMode(mode), BlockSize: config.DefaultBlockSize})
+	cfg.Folders = append(cfg.Folders, config.FolderConfig{ID: id, Path: folderPath, Enabled: true, Mode: config.FolderMode(mode), BlockSize: config.DefaultBlockSize})
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -70,6 +71,30 @@ func UpdatePeer(path, id, endpoint string) error {
 	return fmt.Errorf("peer %q not found", id)
 }
 
+// AddFolderShared persists a folder that starts enabled and is optionally limited to peer IDs.
+func AddFolderShared(path, id, folderPath, mode string, sharedWith []string) error {
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return err
+	}
+	if mode == "" {
+		mode = string(config.ModeSendReceive)
+	}
+	for _, folder := range cfg.Folders {
+		if folder.ID == id {
+			return fmt.Errorf("folder %q already exists", id)
+		}
+	}
+	cfg.Folders = append(cfg.Folders, config.FolderConfig{
+		ID: id, Path: folderPath, Enabled: true, Mode: config.FolderMode(mode), BlockSize: config.DefaultBlockSize,
+		SharedWith: append([]string(nil), sharedWith...),
+	})
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return save(path, cfg)
+}
+
 func UpdateFolder(path, id, folderPath, mode string) error {
 	cfg, err := config.LoadFile(path)
 	if err != nil {
@@ -90,6 +115,109 @@ func UpdateFolder(path, id, folderPath, mode string) error {
 		}
 	}
 	return fmt.Errorf("folder %q not found", id)
+}
+
+// UpdateFolderShared updates path, mode, and, when sharedWith is non-nil, the peer allow-list.
+func UpdateFolderShared(path, id, folderPath, mode string, sharedWith *[]string) error {
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return err
+	}
+	for i := range cfg.Folders {
+		if cfg.Folders[i].ID == id {
+			if folderPath != "" {
+				cfg.Folders[i].Path = folderPath
+			}
+			if mode != "" {
+				cfg.Folders[i].Mode = config.FolderMode(mode)
+			}
+			if sharedWith != nil {
+				cfg.Folders[i].SharedWith = append([]string(nil), (*sharedWith)...)
+			}
+			if err := cfg.Validate(); err != nil {
+				return err
+			}
+			return save(path, cfg)
+		}
+	}
+	return fmt.Errorf("folder %q not found", id)
+}
+
+// PairedPeerID derives a stable peer id from the remote node name, falling back
+// to a discovery-id prefix when two default nodes would otherwise collide.
+func PairedPeerID(nodeName, discoveryID string) string {
+	trimmed := strings.TrimSpace(nodeName)
+	if trimmed == "" || trimmed == "node-CHANGE-ME" {
+		prefix := sanitizePeerID(discoveryID)
+		if len(prefix) > 12 {
+			prefix = prefix[:12]
+		}
+		if prefix == "" {
+			prefix = "peer"
+		}
+		return "peer-" + prefix
+	}
+	return sanitizePeerID(trimmed)
+}
+
+// UpsertPairedPeer stores the API key, certificate pin, and HTTPS endpoint learned
+// during daemon-to-daemon pairing. An existing peer with the same identity is updated.
+func UpsertPairedPeer(path string, peer config.PeerConfig) error {
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return err
+	}
+	if peer.ID == "" {
+		peer.ID = PairedPeerID(peer.ID, peer.IdentityPublicKey)
+	}
+	if peer.EncryptionLevel == 0 {
+		peer.EncryptionLevel = peeridentity.DefaultEncryptionLevel
+	}
+	for i := range cfg.Peers {
+		sameIdentity := peer.IdentityPublicKey != "" && cfg.Peers[i].IdentityPublicKey == peer.IdentityPublicKey
+		sameID := cfg.Peers[i].ID == peer.ID && (cfg.Peers[i].IdentityPublicKey == "" || cfg.Peers[i].IdentityPublicKey == peer.IdentityPublicKey)
+		if sameIdentity || sameID {
+			cfg.Peers[i].APIKey = peer.APIKey
+			cfg.Peers[i].APICertificateSHA256 = peer.APICertificateSHA256
+			cfg.Peers[i].IdentityPublicKey = peer.IdentityPublicKey
+			if len(peer.Endpoints) > 0 {
+				cfg.Peers[i].Endpoints = peer.Endpoints
+			}
+			if err := cfg.Validate(); err != nil {
+				return err
+			}
+			return save(path, cfg)
+		}
+	}
+	for _, existing := range cfg.Peers {
+		if existing.ID == peer.ID {
+			peer.ID = peer.ID + "-" + sanitizePeerID(peer.IdentityPublicKey)
+			if len(peer.ID) > 48 {
+				peer.ID = peer.ID[:48]
+			}
+			break
+		}
+	}
+	cfg.Peers = append(cfg.Peers, peer)
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return save(path, cfg)
+}
+
+func sanitizePeerID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	if b.Len() == 0 {
+		return "peer"
+	}
+	return b.String()
 }
 
 func UpdateDiscovery(path string, discovery config.DiscoveryConfig) error {

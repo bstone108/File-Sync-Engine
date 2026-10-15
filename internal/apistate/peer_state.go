@@ -10,6 +10,7 @@ import (
 	"filesyncengine/internal/engine"
 	"filesyncengine/internal/metadatastore"
 	"filesyncengine/internal/routing"
+	"filesyncengine/internal/schemaversion"
 	"filesyncengine/internal/snapshotcontrol"
 	"filesyncengine/internal/state"
 )
@@ -101,17 +102,19 @@ func BuildState(opts StateBuildOptions) api.State {
 	}
 
 	return api.State{
-		NodeName:      opts.Config.NodeName,
-		StartedAt:     startedAt,
-		ConfigPath:    opts.ConfigPath,
-		Folders:       len(opts.Config.Folders),
-		Peers:         len(opts.Config.Peers),
-		ConfigVersion: opts.Version,
-		Status:        opts.Status,
-		Maintenance:   api.MaintenanceState{Enabled: MaintenanceEnabled(opts.Config)},
-		Backup:        backupState,
-		FoldersState:  folders,
-		PeersState:    peers,
+		NodeName:            opts.Config.NodeName,
+		EngineSchemaVersion: schemaversion.Engine,
+		IdentityPublicKey:   opts.Config.Identity.PublicKey,
+		StartedAt:           startedAt,
+		ConfigPath:          opts.ConfigPath,
+		Folders:             len(opts.Config.Folders),
+		Peers:               len(opts.Config.Peers),
+		ConfigVersion:       opts.Version,
+		Status:              opts.Status,
+		Maintenance:         api.MaintenanceState{Enabled: MaintenanceEnabled(opts.Config)},
+		Backup:              backupState,
+		FoldersState:        folders,
+		PeersState:          peers,
 	}
 }
 

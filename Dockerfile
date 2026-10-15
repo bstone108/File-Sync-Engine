@@ -5,6 +5,7 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 RUN apk add --no-cache ca-certificates su-exec
 COPY --chmod=0755 docker-artifacts/fse-linux-${TARGETARCH}${TARGETVARIANT} /usr/local/bin/fse
+COPY schema-versions.json /usr/local/share/fse/schema-versions.json
 COPY scripts/container-entrypoint.sh /usr/local/bin/fse-container-entrypoint
 RUN chmod 0755 /usr/local/bin/fse-container-entrypoint \
     && mkdir -p /config/logs /config/metadata

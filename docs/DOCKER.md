@@ -85,14 +85,16 @@ Secrets are generated inside `/config/config.jsonc` and are not logged by the en
 | `FSE_LOG_OUTPUT` | `/config/logs/fse.jsonl` | Initial log file path. |
 | `FSE_DISCOVERY_LOCAL` | `true` | Initial local discovery switch. |
 | `FSE_DISCOVERY_DHT` | `false` | Initial public-DHT discovery switch. |
-| `FSE_WEB_GUI_ENABLED` | `false` | Explicit opt-in for a separately delivered trusted web-GUI package on first config creation. |
+| `FSE_NODE_NAME` | unset | Node name written on first config creation. | 
+| `FSE_WEB_GUI_ENABLED` | `false` | Opt in to the web GUI on every start. Unset or `false` disables the GUI listener. |
 | `FSE_WEB_GUI_VERSION` | unset | Explicit version of the separately delivered web-GUI package; required with every other web-GUI delivery field when opt-in is enabled. |
 | `FSE_WEB_GUI_PACKAGE` | unset | Absolute path of a separately mounted trusted GUI package; required with its version and checksum when the GUI is enabled. |
 | `FSE_WEB_GUI_INSTALL_DIR` | unset | Persistent install directory for an explicitly enabled GUI package. |
 | `FSE_WEB_GUI_LISTEN` | unset | Explicit web-GUI listener. The core image never supplies a web listener. |
 | `FSE_WEB_GUI_TLS_ENABLED` | `false` | Explicitly enable HTTPS for an opt-in web GUI. |
 | `FSE_WEB_GUI_HTTPS_LISTEN` | unset | Explicit HTTPS listener for an opt-in web GUI. |
-| `FSE_WEB_GUI_CHECKSUM` | unset | SHA-256 checksum required before installing an opted-in trusted package. |
+| `FSE_WEB_GUI_CHECKSUM` | unset | SHA-256 checksum required before installing an explicit trusted package. |
+| `FSE_WEB_GUI_SCHEMA_INDEX` | `/usr/local/share/fse/schema-versions.json` | Catalog used to pick the newest GUI package compatible with this engine schema when the explicit package fields are not all set. |
 | `FSE_IDENTITY_EXPORT_PATH` | unset | Optional path for writing a JSON identity package from the current generated config for pairing/bootstrap import on other systems. |
 | `FSE_IDENTITY_EXPORT_FORCE` | `false` | Set to `true` to replace an existing identity export at `FSE_IDENTITY_EXPORT_PATH`; otherwise the entrypoint preserves the existing export. |
 | `PUID` / `UID` | `99` | Runtime user ID used to own `/config` and run `fse` when the container starts as root. Default `99` maps to `nobody` on Unraid. |
@@ -100,15 +102,15 @@ Secrets are generated inside `/config/config.jsonc` and are not logged by the en
 | `FSE_UMASK` | `002` | Process umask for daemon-created files. Use `022` for owner-writable/group-readable defaults. |
 | `FSE_RUN_AS_ROOT` | `false` | Set to `true` only for debug containers that must run as root. |
 
-These environment-derived values apply only while the entrypoint creates the first config. Once `/config/config.jsonc` exists, normal config/API/CLI changes are authoritative.
+Listener, logging, discovery, and node-name values apply while the entrypoint creates the first config. GUI enablement is reconciled on every start: unset or `false` turns the listener off, and `true` installs either the explicit package or the newest compatible catalog package.
 
 ## Optional web GUI delivery boundary
 
-The package in `web-gui/dist/` is now a small **read-only functional reference package**: it reads daemon-owned same-origin status, folders, peers, transfers, and actionable-error boundaries, shows node/state/folder/peer counts plus normal-user folder, peer, transfer, and bounded error-category summaries without receiving the native API credential. Each bridge allows only its named GET route, discards browser request headers/query input, and returns only the native status, body, and `Content-Type`; it never forwards native cookies, redirects, CORS/browser-policy headers, or credentials. The actionable-error view deliberately excludes raw daemon logs, file paths, and credentials; administrators review structured logs on the server for diagnostics. Transfer activity is bounded to the daemon's active/recent pass model; byte progress and rates remain unavailable until the daemon publishes them. It is deliberately not yet a complete server deployment interface: settings and mutating controls are still pending. Use a separately versioned, trusted package for normal deployment; the core image remains package-free.
+The package in `web-gui/dist/` is the shared desktop/web GUI built for Docker. It reads daemon-owned same-origin status, folders, peers, transfers, and actionable-error boundaries and can pair peers, edit folders, and pause or resume sync. The native API credential stays inside the daemon. Each read-only bridge discards browser request headers and query input and returns only the native status, body, and `Content-Type`. Mutating routes are a separate allowlist (`/api/v1/config`, peer/folder/discovery/transfer commands, identity package/import, maintenance, and web GUI commands). `/api/v1/pair-exchange`, `/api/v1/stop`, `/api/v1/folder-file`, and `/api/v1/sync-journal` are not proxied. The actionable-error view does not show raw daemon logs, file paths, or credentials. The core image remains package-free and ships only `schema-versions.json`.
 
-Deployment must explicitly opt in with `FSE_WEB_GUI_ENABLED=true`, mount or otherwise provide a trusted package, and provide **all** of `FSE_WEB_GUI_VERSION`, `FSE_WEB_GUI_PACKAGE`, `FSE_WEB_GUI_INSTALL_DIR`, `FSE_WEB_GUI_LISTEN`, and `FSE_WEB_GUI_CHECKSUM`. On first run, incomplete opt-in metadata deliberately leaves a valid headless configuration instead of persisting an enabled but unusable GUI configuration. For a complete opt-in, daemon startup installs the verified package and starts its configured listener. Package/checksum/listener failures emit a `webgui.startup.failed` event and structured warning while the core daemon continues headless. The browser must never receive the daemon API key.
+Set `FSE_WEB_GUI_ENABLED=true` to opt in. Provide **all** of `FSE_WEB_GUI_VERSION`, `FSE_WEB_GUI_PACKAGE`, `FSE_WEB_GUI_INSTALL_DIR`, `FSE_WEB_GUI_LISTEN`, and `FSE_WEB_GUI_CHECKSUM` to install one explicit package after checksum verification. If those fields are incomplete, the container reads the schema catalog and downloads the newest GUI package whose declared schema range includes the running engine schema, then verifies the catalog checksum and the package `schema.json`. If none are compatible, it logs `no GUI package is compatible with engine schema` and skips the GUI. The daemon stays up. Package/checksum/listener failures emit a `webgui.startup.failed` event and structured warning while the core daemon continues headless. The browser must never receive the daemon API key.
 
-For each intentional release, download the separately delivered trusted package asset named `fse-web-gui-package-<version>.zip` and the matching `RELEASE_ASSET_SHA256SUMS` from that GitHub Release. Verify the asset checksum before mounting it. This keeps the package outside the core image while ensuring the GUI package, release checksum, and GHCR image use the same release version.
+For each intentional release, download the separately delivered trusted package asset named `fse-web-gui-package-<version>.zip`, `schema-versions.json`, and the matching `RELEASE_ASSET_SHA256SUMS` from that GitHub Release. Verify the asset checksum before mounting it. The release catalog lists that GUI package's schema range, download URL, and SHA-256, and the image build copies the same catalog to `/usr/local/share/fse/schema-versions.json`. This keeps the package outside the core image while ensuring the GUI package, schema catalog, release checksum, and GHCR image use the same release version.
 
 ### Explicit Compose overlay
 
@@ -136,10 +138,9 @@ docker compose -f compose.yaml -f compose.web-gui.yaml up -d
 The overlay is intentionally fail-closed: Compose rejects missing version, package path, or
 checksum variables before starting the container. Package verification/install/listener failures
 after startup leave the daemon available headless and report `webgui.startup.failed`; resolve the
-reported delivery problem rather than copying GUI assets into the core image. Because first-run
-container defaults do not overwrite an existing `/config/config.jsonc`, changing these environment
-variables later does not reconfigure an already initialized instance; use the authenticated
-non-secret web-GUI command/config controls after reviewing the change.
+reported delivery problem rather than copying GUI assets into the core image. Unset
+`FSE_WEB_GUI_ENABLED` on a later start and the GUI listener stays down. Other first-run defaults
+do not overwrite an existing `/config/config.jsonc`.
 
 ## Container networking diagnostics
 

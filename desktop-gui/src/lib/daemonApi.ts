@@ -5,6 +5,8 @@ export type DaemonConnectionSettings = {
 
 export type DaemonStatus = {
   nodeName?: string;
+  identityPublicKey?: string;
+  engineSchemaVersion?: number;
   startedAt?: string;
   status?: string;
   folders?: number;
@@ -47,6 +49,8 @@ export type IdentityPairingPackage = {
   bootstrapProofKey: string;
   bootstrapEncryptionLevel: number;
   defaultPeerEncryptionLevel: number;
+  reachableAPIURL?: string;
+  apiCertificateSha256?: string;
 };
 
 export type IdentityPairingImportResponse = {
@@ -201,6 +205,9 @@ async function daemonAPIRequest<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
+  if (import.meta.env.VITE_FSE_PLATFORM === 'docker') {
+    return await dockerSameOriginRequest<T>(path, init);
+  }
   const nativeShell = typeof window === 'undefined' ? undefined : window.fseDesktopShell;
   if (!nativeShell || !settings.credentialRef) {
     throw new Error('Native desktop daemon bridge is unavailable or no native credential is configured for the selected daemon. Start the packaged desktop application and connect through its local engine controls.');
@@ -217,6 +224,21 @@ async function daemonAPIRequest<T>(
 
 function jsonBody(body: unknown): string {
   return JSON.stringify(body ?? {});
+}
+
+async function dockerSameOriginRequest<T>(path: string, init: RequestInit): Promise<T> {
+  const response = await fetch('/api' + path, {
+    method: init.method ?? 'GET',
+    headers: init.body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: typeof init.body === 'string' ? init.body : undefined,
+    credentials: 'same-origin',
+    cache: 'no-store'
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text || `Request failed (${response.status})`);
+  }
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 export async function fetchDaemonStatus(settings: DaemonConnectionSettings): Promise<DaemonStatus> {
@@ -259,21 +281,23 @@ export async function patchDaemonConfig(
 
 export async function generateIdentityPairingPackage(
   settings: DaemonConnectionSettings,
-  groupID: string
+  groupID: string,
+  reachableAPIURL?: string
 ): Promise<IdentityPairingPackage> {
   return await daemonAPIRequest<IdentityPairingPackage>(settings, '/v1/identity-package', {
     method: 'POST',
-    body: jsonBody({ groupId: groupID })
+    body: jsonBody({ groupId: groupID, reachableAPIURL: reachableAPIURL || undefined })
   });
 }
 
 export async function importIdentityPairingPackage(
   settings: DaemonConnectionSettings,
-  identityPackage: IdentityPairingPackage
+  identityPackage: IdentityPairingPackage,
+  localReachableAPIURL?: string
 ): Promise<IdentityPairingImportResponse> {
   return await daemonAPIRequest<IdentityPairingImportResponse>(settings, '/v1/identity-import', {
     method: 'POST',
-    body: jsonBody({ package: identityPackage })
+    body: jsonBody({ package: identityPackage, localReachableAPIURL: localReachableAPIURL || undefined })
   });
 }
 

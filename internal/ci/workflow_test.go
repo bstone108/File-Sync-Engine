@@ -86,7 +86,7 @@ func TestRootReadmeDockerExamplesKeepTheCoreHeadless(t *testing.T) {
 	for _, want := range []string{
 		"FSE_WEB_GUI_ENABLED: \"false\"",
 		"FSE_WEB_GUI_ENABLED=false",
-		"The optional web GUI is not yet a working deployment interface.",
+		"The optional web GUI is a working deployment interface when its environment variable is set.",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("root Docker example must preserve headless-default boundary, missing %q", want)
@@ -470,6 +470,7 @@ func TestReleaseWorkflowPublishesVerifiedOptionalWebGUIPackageAsset(t *testing.T
 		"name: fse-web-gui-package-${{ needs.version-preflight.outputs.version }}-${{ github.sha }}",
 		"web-gui-package",
 		"RELEASE_ASSET_SHA256SUMS",
+		"release-assets/schema-versions.json",
 	} {
 		if !strings.Contains(workflow, want) {
 			t.Fatalf("release workflow must publish the separately delivered optional web GUI package, missing %q", want)
