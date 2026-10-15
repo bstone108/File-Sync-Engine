@@ -18,7 +18,16 @@ export type DaemonStatus = {
   backup?: Record<string, unknown>;
 };
 
-export type DaemonFolder = { id: string; path?: string; mode?: string; status?: string; [key: string]: unknown };
+export type DaemonFolder = {
+  id: string;
+  path?: string;
+  mode?: string;
+  status?: string;
+  enabled?: boolean;
+  sharedWith?: string[];
+  ignore?: string[];
+  [key: string]: unknown;
+};
 export type DaemonPeer = {
   id: string;
   endpoint?: string;
@@ -89,10 +98,13 @@ export type PeerCommandRequest = {
 };
 
 export type FolderCommandRequest = {
-  action: 'add' | 'remove' | 'update';
+  action: 'add' | 'remove' | 'update' | 'pause' | 'resume';
   id?: string;
   path?: string;
   mode?: string;
+  sharedWith?: string[];
+  ignore?: string[];
+  enabled?: boolean;
   [key: string]: unknown;
 };
 

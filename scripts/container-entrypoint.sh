@@ -28,14 +28,34 @@ if [ "${FSE_RUN_AS_ROOT:-false}" != "true" ]; then
     addgroup -g "$gid" -S fsegroup 2>/dev/null || true
     adduser -S -D -H -u "$uid" -G fsegroup fseuser 2>/dev/null || true
     chown -R "$uid:$gid" /config
-    if [ "${1:-start}" = "start" ]; then
-      exec su-exec "$uid:$gid" fse start "$CONFIG_PATH"
-    fi
-    exec su-exec "$uid:$gid" fse "$@"
   fi
 fi
 
-if [ "${1:-start}" = "start" ]; then
-  exec fse start "$CONFIG_PATH"
+# The shell stays PID 1 for `start` so a child os.Exit is printed even when the
+# process itself wrote nothing. TERM and INT are forwarded to that child.
+supervise_fse() {
+  if [ "$(id -u)" = "0" ] && [ "${FSE_RUN_AS_ROOT:-false}" != "true" ]; then
+    su-exec "$uid:$gid" "$@" &
+  else
+    "$@" &
+  fi
+  child=$!
+  trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT
+  set +e
+  wait "$child"
+  code=$?
+  set -e
+  trap - TERM INT
+  printf 'fse exited with status %s\n' "$code"
+  printf 'fse exited with status %s\n' "$code" >&2
+  exit "$code"
+}
+
+if [ "${1:-start}" != "start" ]; then
+  if [ "$(id -u)" = "0" ] && [ "${FSE_RUN_AS_ROOT:-false}" != "true" ]; then
+    exec su-exec "$uid:$gid" fse "$@"
+  fi
+  exec fse "$@"
 fi
-exec fse "$@"
+
+supervise_fse fse start "$CONFIG_PATH"

@@ -338,10 +338,10 @@ Supported peer actions are `add`, `remove`, and `update`. The response includes 
 POST /v1/folder-command
 Content-Type: application/json
 
-{"action":"add","id":"docs","path":"/data/docs","mode":"sendrecv"}
+{"action":"update","id":"docs","path":"/data/docs","mode":"send","sharedWith":["peer-a"],"ignore":["*.tmp","cache/"]}
 ```
 
-Supported folder actions are `add`, `remove`, and `update`. The response includes only the action, folder id, status, and a compact message:
+`GET /v1/folders` includes `enabled`, `sharedWith`, and `ignore` beside the live index. Supported folder actions are `add`, `remove`, `update`, `pause`, and `resume`. `mode` accepts `sendrecv`, `sendonly` (`send`), and `recvonly` (`recv`). `sharedWith` and `ignore` replace those lists when present; an empty list clears them. An empty `sharedWith` shares the folder with every paired peer. `pause` sets the folder disabled so sync stays stopped across a restart, and `resume` enables it again. The response includes only the action, folder id, status, and a compact message:
 
 ```json
 {"action":"add","id":"docs","status":"accepted","message":"folder add accepted; daemon hot reload will adopt the config change"}

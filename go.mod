@@ -7,6 +7,7 @@ toolchain go1.25.11
 require (
 	github.com/cloudflare/circl v1.6.3
 	github.com/fsnotify/fsnotify v1.7.0
+	github.com/golang/glog v1.2.4
 	github.com/huin/goupnp v1.3.0
 	github.com/jackpal/go-nat-pmp v1.0.2
 	github.com/multiformats/go-multiaddr-dns v0.5.0
@@ -35,7 +36,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang/glog v1.2.4 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.5-0.20231225225746-43d5d4cd4e0e // indirect

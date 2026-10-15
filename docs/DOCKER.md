@@ -68,6 +68,7 @@ On first start, the entrypoint creates `/config/config.jsonc`, generates API and
 - API listener: `0.0.0.0:22420`
 - sync listener: `tcp://0.0.0.0:22000`
 - structured logs: `/config/logs/fse.jsonl`
+- fatal exits: also written to stdout and stderr, which `docker logs` captures. Ordinary events stay in the log file, so a file-only tail can miss a crash. Exit code 2 is the Go panic and glog fatal status. The Unraid template sets `--restart=unless-stopped` so that crash comes back without restarting a container the operator stopped.
 - metadata: per-folder Badger stores under `/config/metadata`
 - runtime owner/group: Unraid-friendly `nobody:users` (`99:100`) unless `PUID`/`PGID` or `UID`/`GID` override it
 - runtime umask: `002` for group-writable NAS shares
