@@ -643,6 +643,90 @@ func TestMacOSDesktopEntitlementsEnableHardenedRuntimeWithoutSandbox(t *testing.
 	}
 }
 
+func TestStaplerRetryRetriesTransientCloudKitErrorsOnly(t *testing.T) {
+	root := filepath.Join("..", "..")
+	bin := t.TempDir()
+	logPath := filepath.Join(bin, "calls.log")
+	fake := filepath.Join(bin, "xcrun")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$STAPLER_CALL_LOG"
+count=$(wc -l < "$STAPLER_CALL_LOG" | tr -d ' ')
+mode="${STAPLER_FAKE_MODE:-transient-then-ok}"
+if [ "$mode" = "permanent" ]; then
+  echo "code object is not signed at all" >&2
+  exit 1
+fi
+if [ "$mode" = "always-transient" ] || [ "$count" -lt 2 ]; then
+  echo "NSURLErrorDomain Code=-1005 network connection lost CloudKit error 68" >&2
+  exit 68
+fi
+echo "The validate action worked!"
+exit 0
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(mode string) (string, int) {
+		if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("bash", "scripts/sign-and-notarize-macos-desktop.sh", "--self-test-stapler-retry", "validate", "FileSync.dmg")
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"STAPLER_CALL_LOG="+logPath,
+			"STAPLER_FAKE_MODE="+mode,
+			"FSE_STAPLER_RETRY_DELAYS=0 0 0",
+		)
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				code = exitErr.ExitCode()
+			} else {
+				t.Fatal(err)
+			}
+		}
+		return string(out), code
+	}
+	out, code := run("transient-then-ok")
+	if code != 0 {
+		t.Fatalf("transient stapler error should succeed on retry, exit %d\n%s", code, out)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(calls), "stapler validate FileSync.dmg"); got != 2 {
+		t.Fatalf("transient failure should retry validate once, calls=%d\n%s\n%s", got, calls, out)
+	}
+	if !strings.Contains(out, "attempt 1/4") {
+		t.Fatalf("retry log missing attempt notice:\n%s", out)
+	}
+	out, code = run("permanent")
+	if code == 0 {
+		t.Fatalf("permanent stapler failure should not succeed:\n%s", out)
+	}
+	calls, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(calls), "stapler validate"); got != 1 {
+		t.Fatalf("non-network stapler failure should not retry, calls=%d\n%s", got, calls)
+	}
+	out, code = run("always-transient")
+	if code == 0 {
+		t.Fatalf("repeated network errors should still fail:\n%s", out)
+	}
+	calls, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(calls), "stapler validate"); got != 4 {
+		t.Fatalf("transient stapler errors should stop after 4 attempts, calls=%d\n%s", got, calls)
+	}
+}
+
 func TestMacOSSignAndNotarizeScriptRefusesNonDarwinHosts(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("non-Darwin guard is exercised on Linux CI")
@@ -743,6 +827,10 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"--entitlements",
 		"xcrun notarytool submit",
 		"xcrun stapler staple",
+		"xcrun stapler validate",
+		"run_stapler_with_retry staple",
+		"run_stapler_with_retry validate",
+		"NSURLErrorDomain",
 		"hdiutil create",
 		"ditto -c -k --keepParent",
 		"codesign --verify --deep --strict",

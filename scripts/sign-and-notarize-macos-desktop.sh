@@ -28,6 +28,63 @@
 #     does not restrict TCP client or server use.
 set -euo pipefail
 
+# stapler fetches the notarization ticket from Apple CloudKit. That lookup
+# drops the connection after a successful notarization (NSURLErrorDomain
+# -1005, error 68). Retry staple and validate; leave other failures alone.
+stapler_failure_is_transient() {
+  grep -E -i -q 'NSURLErrorDomain|-1005|error 68([^0-9]|$)|network connection|CloudKit|timed out|Could not connect|connection lost|NSURLError' "$1"
+}
+
+run_stapler_with_retry() {
+  local action="$1"
+  local target="$2"
+  local attempt delay status
+  local -a delays=(15 30 60)
+  if [[ -n "${FSE_STAPLER_RETRY_DELAYS:-}" ]]; then
+    # shellcheck disable=SC2206
+    delays=(${FSE_STAPLER_RETRY_DELAYS})
+  fi
+  local log
+  log="$(mktemp "${TMPDIR:-/tmp}/fse-stapler.XXXXXX")"
+  for attempt in 1 2 3 4; do
+    status=0
+    case "$action" in
+      staple)
+        xcrun stapler staple "$target" >"$log" 2>&1 || status=$?
+        ;;
+      validate)
+        xcrun stapler validate "$target" >"$log" 2>&1 || status=$?
+        ;;
+      *)
+        printf 'unsupported stapler action: %s\n' "$action" >&2
+        rm -f "$log"
+        return 1
+        ;;
+    esac
+    cat "$log" >&2
+    if [[ "$status" -eq 0 ]]; then
+      rm -f "$log"
+      return 0
+    fi
+    if [[ "$attempt" -eq 4 ]] || ! stapler_failure_is_transient "$log"; then
+      printf 'xcrun stapler %s failed for %s (exit %s)\n' "$action" "$target" "$status" >&2
+      rm -f "$log"
+      return "$status"
+    fi
+    delay="${delays[$((attempt - 1))]:-60}"
+    printf 'xcrun stapler %s transient network error for %s (attempt %s/4); retrying in %ss\n' "$action" "$target" "$attempt" "$delay" >&2
+    sleep "$delay"
+  done
+  rm -f "$log"
+  return 1
+}
+
+if [[ "${1:-}" == "--self-test-stapler-retry" ]]; then
+  shift
+  run_stapler_with_retry "$@"
+  exit $?
+fi
+
 usage() {
   cat >&2 <<'USAGE'
 Usage: scripts/sign-and-notarize-macos-desktop.sh <app-bundle> <version> <arch>
@@ -262,8 +319,8 @@ xcrun notarytool submit "$APP_ZIP" \
   --team-id "$APPLE_TEAM_ID" \
   --wait \
   --timeout 45m
-xcrun stapler staple "$APP_BUNDLE"
-xcrun stapler validate "$APP_BUNDLE"
+run_stapler_with_retry staple "$APP_BUNDLE"
+run_stapler_with_retry validate "$APP_BUNDLE"
 
 DMG_STAGE="$WORK_DIR/dmg-stage"
 DMG_PATH="$(dirname "$APP_BUNDLE")/fse-desktop.dmg"
@@ -284,7 +341,7 @@ xcrun notarytool submit "$DMG_PATH" \
   --team-id "$APPLE_TEAM_ID" \
   --wait \
   --timeout 45m
-xcrun stapler staple "$DMG_PATH"
-xcrun stapler validate "$DMG_PATH"
+run_stapler_with_retry staple "$DMG_PATH"
+run_stapler_with_retry validate "$DMG_PATH"
 
 printf 'signed, notarized, and stapled %s and %s for %s %s\n' "$APP_BUNDLE" "$DMG_PATH" "$VERSION" "$ARCH"
