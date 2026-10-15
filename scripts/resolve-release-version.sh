@@ -9,22 +9,25 @@ set -euo pipefail
 # or local smoke/dev builds. Those paths keep dummy/dev versions such as
 # 0.1.0-dev, 0.1.99-test, and ci-<sha>.
 #
-# Format is YYYY.M.D.N with no zero-padding, using the America/Chicago calendar
-# day. Example: first published build on 24 August 2026 is 2026.8.24.1; the
-# second that same Chicago day is 2026.8.24.2. Git tags keep the v prefix
-# (v2026.8.24.1); this script prints the version without v.
+# Format is vYYYY.MM.DD.BB using the America/Chicago calendar day, never UTC.
+# Every part is zero-padded to at least 2 digits (the year is 4). Example:
+# the first published build on 15 October 2026 is v2026.10.15.01; the next
+# build that same Chicago day is v2026.10.15.02. Build numbers past 99 keep
+# their full width (v2026.10.15.100). This script prints the version without v.
 #
-# Historical published tags used zero-padded YYYY.MM.DD.NN (v2026.08.11.01).
-# New versions are always emitted unpadded. When choosing the next N, both
-# padded and unpadded tags/releases for that Chicago calendar day count, so
-# a new unpadded stamp cannot collide with an old padded one.
+# Historical tags used unpadded YYYY.M.D.N (v2026.8.24.1) and an older padded
+# spelling (v2026.08.11.01). Both still count when choosing the next BB, and
+# both are accepted as input, but new output is always the padded spelling.
+# Existing unpadded tags stay as they were. Never retag any v2026.8.28.* tag;
+# the release workflow refuses to publish the padded twin of an existing
+# unpadded tag, including every v2026.8.28.x tag.
 #
 # Precedence:
 #   1. Explicit version argument, if supplied and non-empty.
 #   2. Git tag name, with a leading v stripped, when GITHUB_REF_TYPE=tag.
-#   3. Otherwise auto-generate: America/Chicago today's YYYY.M.D, then
-#      N = 1 + max existing N for that day from local tags, remote tags, and
-#      GitHub releases. If none exist, N=1.
+#   3. Otherwise auto-generate: America/Chicago today's date, then
+#      N = 1 + max existing N for that Chicago day (the padded build BB), from local tags, remote tags,
+#      and GitHub releases. If none exist, BB=1. The printed value is padded.
 #
 # FSE_RELEASE_DATE (YYYY-MM-DD) is a test-only override for the Chicago
 # calendar day. It is rejected when GITHUB_ACTIONS=true.
@@ -63,11 +66,13 @@ parse_release_version() {
   printf '%s %s %s %s\n' "$year" "$month" "$day" "$n"
 }
 
+# Emit YYYY.MM.DD.BB. Month, day, and build are zero-padded to at least 2 digits.
+# Builds of 100 or more keep every digit. The year stays 4 digits.
 canonicalize_release_version() {
   local parsed year month day n
   parsed="$(parse_release_version "$1")" || return 1
   read -r year month day n <<<"$parsed"
-  printf '%s.%s.%s.%s\n' "$year" "$month" "$day" "$n"
+  printf '%04d.%02d.%02d.%02d\n' "$year" "$month" "$day" "$n"
 }
 
 chicago_calendar_day() {
@@ -172,7 +177,7 @@ auto_generate_version() {
     consider_ref "$tag"
   done < <(list_github_release_tags)
 
-  printf '%s.%s.%s.%s\n' "$want_year" "$want_month" "$want_day" "$((max_n + 1))"
+  printf '%04d.%02d.%02d.%02d\n' "$want_year" "$want_month" "$want_day" "$((max_n + 1))"
 }
 
 if [[ -n "${FSE_RELEASE_DATE:-}" && "${GITHUB_ACTIONS:-}" == "true" ]]; then
@@ -191,7 +196,7 @@ fi
 
 raw_version="$version"
 if ! version="$(canonicalize_release_version "$raw_version")"; then
-  usage_error "invalid release version ${raw_version}; expected YYYY.M.D.N (unpadded; leftover YYYY.MM.DD.NN is accepted and canonicalized)"
+  usage_error "invalid release version ${raw_version}; expected vYYYY.MM.DD.BB (America/Chicago; unpadded YYYY.M.D.N input is accepted and canonicalized to the padded form)"
 fi
 
 printf '%s\n' "$version"

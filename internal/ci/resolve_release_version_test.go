@@ -10,19 +10,19 @@ import (
 	"testing"
 )
 
-func TestResolveReleaseVersionAutoStampsUnpaddedChicagoDateBuild(t *testing.T) {
+func TestResolveReleaseVersionAutoStampsPaddedChicagoDateBuild(t *testing.T) {
 	script := resolverScript(t)
 	repo := initVersionRepo(t)
 
 	got := runResolver(t, script, repo, pinnedChicagoEnv(), nil)
-	if got != "2026.8.24.1" {
-		t.Fatalf("first auto-stamp on 2026-08-24 Chicago with no tags: got %q, want 2026.8.24.1", got)
+	if got != "2026.08.24.01" {
+		t.Fatalf("first auto-stamp on 2026-08-24 Chicago with no tags: got %q, want 2026.08.24.01", got)
 	}
 
 	tagVersionRepo(t, repo, "v2026.8.24.1")
 	got = runResolver(t, script, repo, pinnedChicagoEnv(), nil)
-	if got != "2026.8.24.2" {
-		t.Fatalf("second auto-stamp the same Chicago day: got %q, want 2026.8.24.2", got)
+	if got != "2026.08.24.02" {
+		t.Fatalf("second auto-stamp the same Chicago day: got %q, want 2026.08.24.02", got)
 	}
 }
 
@@ -32,14 +32,14 @@ func TestResolveReleaseVersionCountsPaddedHistoricalTags(t *testing.T) {
 	tagVersionRepo(t, repo, "v2026.08.24.01")
 
 	got := runResolver(t, script, repo, pinnedChicagoEnv(), nil)
-	if got != "2026.8.24.2" {
-		t.Fatalf("padded v2026.08.24.01 must count as N=1: got %q, want 2026.8.24.2", got)
+	if got != "2026.08.24.02" {
+		t.Fatalf("padded v2026.08.24.01 must count as N=1: got %q, want 2026.08.24.02", got)
 	}
 
 	tagVersionRepo(t, repo, "v2026.8.24.2")
 	got = runResolver(t, script, repo, pinnedChicagoEnv(), nil)
-	if got != "2026.8.24.3" {
-		t.Fatalf("mixed padded and unpadded same-day tags: got %q, want 2026.8.24.3", got)
+	if got != "2026.08.24.03" {
+		t.Fatalf("mixed padded and unpadded same-day tags: got %q, want 2026.08.24.03", got)
 	}
 }
 
@@ -49,8 +49,8 @@ func TestResolveReleaseVersionIgnoresOtherDaysAndDevStamps(t *testing.T) {
 	tagVersionRepo(t, repo, "v2026.08.11.01", "v2026.8.23.9", "v0.1.99-test")
 
 	got := runResolver(t, script, repo, pinnedChicagoEnv(), nil)
-	if got != "2026.8.24.1" {
-		t.Fatalf("other days and dummy tags must not consume 2026.8.24 N: got %q", got)
+	if got != "2026.08.24.01" {
+		t.Fatalf("other days and dummy tags must not consume 2026.08.24 N: got %q", got)
 	}
 }
 
@@ -62,8 +62,8 @@ func TestResolveReleaseVersionCountsRemoteTagsAndGitHubReleases(t *testing.T) {
 	runGit(t, local, "remote", "add", "origin", origin)
 
 	got := runResolver(t, script, local, pinnedChicagoEnv(), nil)
-	if got != "2026.8.24.2" {
-		t.Fatalf("remote padded tag must count: got %q, want 2026.8.24.2", got)
+	if got != "2026.08.24.02" {
+		t.Fatalf("remote padded tag must count: got %q, want 2026.08.24.02", got)
 	}
 
 	ghDir := t.TempDir()
@@ -77,8 +77,8 @@ func TestResolveReleaseVersionCountsRemoteTagsAndGitHubReleases(t *testing.T) {
 		"GITHUB_REPOSITORY=bstone108/File-Sync-Engine",
 		"PATH="+ghDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	), nil)
-	if got != "2026.8.24.3" {
-		t.Fatalf("GitHub release v2026.8.24.2 must count: got %q, want 2026.8.24.3", got)
+	if got != "2026.08.24.03" {
+		t.Fatalf("GitHub release v2026.8.24.2 must count: got %q, want 2026.08.24.03", got)
 	}
 }
 
@@ -88,28 +88,33 @@ func TestResolveReleaseVersionExplicitAndTagPushStillWork(t *testing.T) {
 	tagVersionRepo(t, repo, "v2026.8.24.1")
 
 	got := runResolver(t, script, repo, nil, []string{"2026.8.24.9"})
-	if got != "2026.8.24.9" {
-		t.Fatalf("explicit unpadded override: got %q, want 2026.8.24.9", got)
+	if got != "2026.08.24.09" {
+		t.Fatalf("explicit unpadded override must canonicalize to padded form: got %q, want 2026.08.24.09", got)
 	}
 
 	got = runResolver(t, script, repo, nil, []string{"2026.08.24.03"})
-	if got != "2026.8.24.3" {
-		t.Fatalf("explicit leftover padded version must canonicalize: got %q, want 2026.8.24.3", got)
+	if got != "2026.08.24.03" {
+		t.Fatalf("explicit padded version must stay padded: got %q, want 2026.08.24.03", got)
+	}
+
+	got = runResolver(t, script, repo, nil, []string{"2026.10.15.100"})
+	if got != "2026.10.15.100" {
+		t.Fatalf("build numbers past 99 keep their full width: got %q, want 2026.10.15.100", got)
 	}
 
 	got = runResolver(t, script, repo, []string{"GITHUB_REF_TYPE=tag", "GITHUB_REF_NAME=v2026.8.24.4"}, nil)
-	if got != "2026.8.24.4" {
-		t.Fatalf("tag push: got %q, want 2026.8.24.4", got)
+	if got != "2026.08.24.04" {
+		t.Fatalf("tag push must canonicalize to padded form: got %q, want 2026.08.24.04", got)
 	}
 
 	got = runResolver(t, script, repo, []string{"GITHUB_REF_TYPE=tag", "GITHUB_REF_NAME=v2026.08.11.01"}, nil)
-	if got != "2026.8.11.1" {
-		t.Fatalf("padded tag push must canonicalize: got %q, want 2026.8.11.1", got)
+	if got != "2026.08.11.01" {
+		t.Fatalf("already padded tag push must stay padded: got %q, want 2026.08.11.01", got)
 	}
 
 	got = runResolver(t, script, repo, []string{"GITHUB_REF_TYPE=tag", "GITHUB_REF_NAME=v2026.8.24.4"}, []string{"2026.8.25.1"})
-	if got != "2026.8.25.1" {
-		t.Fatalf("explicit argument must win over tag push: got %q, want 2026.8.25.1", got)
+	if got != "2026.08.25.01" {
+		t.Fatalf("explicit argument must win over tag push and canonicalize: got %q, want 2026.08.25.01", got)
 	}
 }
 
@@ -137,7 +142,7 @@ func TestResolveReleaseVersionLiveChicagoCalendarDay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("day: %v", err)
 	}
-	want := fmt.Sprintf("%d.%d.%d.1", year, month, day)
+	want := fmt.Sprintf("%04d.%02d.%02d.%02d", year, month, day, 1)
 
 	got := runResolver(t, script, repo, nil, nil)
 	if got != want {
@@ -158,8 +163,8 @@ func TestResolveReleaseVersionRejectsInvalidAndActionsDateOverride(t *testing.T)
 	}
 	// Explicit success path should still work without the test-only date override.
 	got := runResolver(t, script, repo, []string{"GITHUB_ACTIONS=true", "GH_TOKEN=unused"}, []string{"2026.8.24.1"})
-	if got != "2026.8.24.1" {
-		t.Fatalf("explicit version in GITHUB_ACTIONS: got %q, want 2026.8.24.1", got)
+	if got != "2026.08.24.01" {
+		t.Fatalf("explicit version in GITHUB_ACTIONS: got %q, want 2026.08.24.01", got)
 	}
 }
 

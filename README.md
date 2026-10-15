@@ -14,7 +14,7 @@ also one more fair warning, some of the encryption used is placeholders.  it's n
 
 ## Docker
 
-The container image is an early server/NAS prototype. Its core image is **headless by default**: it contains the daemon only, creates the web GUI configuration disabled, and exposes only the API and sync ports. Keep `/config` persistent when replacing the image. Replace `<version>` with a published `YYYY.M.D.N` release tag (America/Chicago date.build, no zero-padding; older images used zero-padded `YYYY.MM.DD.NN` tags such as `2026.08.11.01`); `latest` is intentionally not published.
+The container image is an early server/NAS prototype. Its core image is **headless by default**: it contains the daemon only, creates the web GUI configuration disabled, and exposes only the API and sync ports. Keep `/config` persistent when replacing the image. Replace `<version>` with a published `YYYY.MM.DD.BB` release tag (America/Chicago date.build, never UTC, every part zero-padded to at least 2 digits, for example `2026.10.15.01`). Older images keep their original tags, including unpadded `YYYY.M.D.N` tags such as `2026.8.28.1` and earlier padded tags such as `2026.08.11.01`. Those existing tags are never retagged. `latest` is intentionally not published.
 
 ### Docker Compose
 

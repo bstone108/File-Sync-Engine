@@ -340,10 +340,14 @@ func TestReleaseWorkflowUsesAutomaticChicagoDateBuildVersions(t *testing.T) {
 	ciWorkflow := readWorkflow(t, "ci.yml")
 
 	// Published releases (Release artifacts, git tags, GitHub Releases, GHCR)
-	// use America/Chicago date.build YYYY.M.D.N. Humans do not invent N.
+	// use America/Chicago date.build vYYYY.MM.DD.BB. Humans do not invent BB.
+	// Historical unpadded YYYY.M.D.N tags, including v2026.8.28.x, stay put.
 	for _, want := range []string{
 		"required: false",
+		"YYYY.MM.DD.BB",
 		"YYYY.M.D.N",
+		"v2026.8.28",
+		"Never retag any v2026.8.28",
 		"scripts/resolve-release-version.sh \"${{ inputs.version }}\"",
 		"GH_TOKEN: ${{ github.token }}",
 		"fetch-tags: true",
@@ -408,6 +412,9 @@ func TestReleaseWorkflowPreflightsAndRefusesDuplicateVersions(t *testing.T) {
 		"gh release view \"$tag\"",
 		"git ls-remote --exit-code --tags origin \"refs/tags/$tag\"",
 		"padded_tag=",
+		"unpadded_tag=",
+		"v2026.8.28",
+		"never retag",
 		"refusing to build duplicate release version",
 		"needs: version-preflight",
 		"${{ needs.version-preflight.outputs.version }}",
