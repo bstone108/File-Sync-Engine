@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Optional published release version YYYY.M.D.N (unpadded, America/Chicago date.build). Leave empty to auto-stamp the next N for today's Chicago calendar day. Tag pushes use the tag name.
+        description: Optional published release version YYYY.MM.DD.BB (zero-padded, America/Chicago date.build, never UTC). Leave empty to auto-stamp the next build for today's Chicago calendar day. Tag pushes use the tag name. Existing unpadded tags, including every v2026.8.28.x tag, are never retagged.
         required: false
         type: string
 
@@ -58,18 +58,20 @@ jobs:
               exit 1
             fi
           fi
-          # Historical tags were zero-padded YYYY.MM.DD.NN. Refuse that spelling
-          # of the same date.build so an unpadded stamp cannot collide with it.
+          # New tags are zero-padded vYYYY.MM.DD.BB. Historical unpadded tags
+          # (YYYY.M.D.N), including every v2026.8.28.x tag, must stay in place.
+          # never retag them: refuse the padded twin of an existing unpadded tag.
           IFS=. read -r year month day n <<<"$version"
-          padded_tag="$(printf 'v%d.%02d.%02d.%02d' "$((10#$year))" "$((10#$month))" "$((10#$day))" "$((10#$n))")"
-          if [[ "$padded_tag" != "$tag" ]]; then
-            if gh release view "$padded_tag" >/dev/null 2>&1; then
-              printf 'refusing to build duplicate release version %s: GitHub release %s already exists\n' "$version" "$padded_tag" >&2
+          padded_tag="$tag"
+          unpadded_tag="$(printf 'v%d.%d.%d.%d' "$((10#$year))" "$((10#$month))" "$((10#$day))" "$((10#$n))")"
+          if [[ "$unpadded_tag" != "$padded_tag" ]]; then
+            if gh release view "$unpadded_tag" >/dev/null 2>&1; then
+              printf 'refusing to retag %s as %s: the unpadded tag already exists and must be left in place\n' "$unpadded_tag" "$padded_tag" >&2
               exit 1
             fi
             if [[ "${GITHUB_REF_TYPE:-}" != "tag" ]]; then
-              if git ls-remote --exit-code --tags origin "refs/tags/$padded_tag" >/dev/null 2>&1; then
-                printf 'refusing to build duplicate release version %s: remote tag %s already exists\n' "$version" "$padded_tag" >&2
+              if git ls-remote --exit-code --tags origin "refs/tags/$unpadded_tag" >/dev/null 2>&1; then
+                printf 'refusing to retag %s as %s: the unpadded tag already exists and must be left in place\n' "$unpadded_tag" "$padded_tag" >&2
                 exit 1
               fi
             fi
