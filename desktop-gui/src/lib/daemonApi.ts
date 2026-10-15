@@ -291,6 +291,34 @@ export async function generateIdentityPairingPackage(
   });
 }
 
+export type PairingCodeResponse = { code: string; expiresAt: string };
+export type PairingCodeRedeemResponse = {
+  status: string;
+  message?: string;
+  remoteDiscoveryId?: string;
+  dhtPeerId?: string;
+  certificateSha256?: string;
+  addresses?: Array<{ kind: string; address: string; networkHint?: string }>;
+  relays?: string[];
+};
+
+export async function issuePairingCode(settings: DaemonConnectionSettings): Promise<PairingCodeResponse> {
+  return await daemonAPIRequest<PairingCodeResponse>(settings, '/v1/pair-code', {
+    method: 'POST',
+    body: jsonBody({})
+  });
+}
+
+export async function redeemPairingCode(
+  settings: DaemonConnectionSettings,
+  code: string
+): Promise<PairingCodeRedeemResponse> {
+  return await daemonAPIRequest<PairingCodeRedeemResponse>(settings, '/v1/pair-code/redeem', {
+    method: 'POST',
+    body: jsonBody({ code })
+  });
+}
+
 export async function importIdentityPairingPackage(
   settings: DaemonConnectionSettings,
   identityPackage: IdentityPairingPackage,

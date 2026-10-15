@@ -60,6 +60,34 @@ type SignedHello struct {
 	Signature        string
 }
 
+// Sign returns a base64 signature over payload using the identity private key.
+func Sign(identity Identity, payload []byte) (string, error) {
+	privateKey, err := decodePrivateKey(identity.PrivateKey)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, payload)), nil
+}
+
+// Verify checks a base64 signature against the identity public key.
+func Verify(publicKey, signature string, payload []byte) error {
+	if publicKey == "" {
+		return fmt.Errorf("peer public key is required")
+	}
+	key, err := decodePublicKey(publicKey)
+	if err != nil {
+		return err
+	}
+	sig, err := base64.StdEncoding.DecodeString(signature)
+	if err != nil {
+		return fmt.Errorf("decode signature: %w", err)
+	}
+	if !ed25519.Verify(key, payload, sig) {
+		return fmt.Errorf("peer identity signature verification failed")
+	}
+	return nil
+}
+
 func GenerateIdentity() (Identity, error) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

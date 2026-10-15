@@ -16,6 +16,7 @@ import (
 	"filesyncengine/internal/block"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/foldershare"
+	"filesyncengine/internal/link"
 	"filesyncengine/internal/pairing"
 	"filesyncengine/internal/scanner"
 	"filesyncengine/internal/schemaversion"
@@ -347,21 +348,42 @@ type IdentityImportRequest struct {
 // PairExchangeRequest is the daemon-to-daemon pairing offer. It carries API keys
 // and is never proxied to a browser.
 type PairExchangeRequest struct {
-	GroupID              string `json:"groupId"`
-	BootstrapProofKey    string `json:"bootstrapProofKey"`
-	DiscoveryID          string `json:"discoveryId"`
-	NodeName             string `json:"nodeName"`
-	ReachableAPIURL      string `json:"reachableAPIURL"`
-	APICertificateSHA256 string `json:"apiCertificateSha256"`
-	APIKey               string `json:"apiKey"`
+	GroupID              string       `json:"groupId"`
+	BootstrapProofKey    string       `json:"bootstrapProofKey"`
+	DiscoveryID          string       `json:"discoveryId"`
+	NodeName             string       `json:"nodeName"`
+	ReachableAPIURL      string       `json:"reachableAPIURL"`
+	APICertificateSHA256 string       `json:"apiCertificateSha256"`
+	APIKey               string       `json:"apiKey"`
+	LinkProfile          link.Profile `json:"linkProfile,omitempty"`
 }
 
 // PairExchangeResponse returns this node's API key to the paired daemon.
 type PairExchangeResponse struct {
-	DiscoveryID          string `json:"discoveryId"`
-	NodeName             string `json:"nodeName"`
-	APIKey               string `json:"apiKey"`
-	APICertificateSHA256 string `json:"apiCertificateSha256"`
+	DiscoveryID          string       `json:"discoveryId"`
+	NodeName             string       `json:"nodeName"`
+	APIKey               string       `json:"apiKey"`
+	APICertificateSHA256 string       `json:"apiCertificateSha256"`
+	LinkProfile          link.Profile `json:"linkProfile,omitempty"`
+}
+
+type PairCodeResponse struct {
+	Code      string    `json:"code"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+type PairCodeRedeemRequest struct {
+	Code string `json:"code"`
+}
+
+type PairCodeRedeemResponse struct {
+	Status            string         `json:"status"`
+	Message           string         `json:"message,omitempty"`
+	RemoteDiscoveryID string         `json:"remoteDiscoveryId,omitempty"`
+	DHTPeerID         string         `json:"dhtPeerId,omitempty"`
+	CertificateSHA256 string         `json:"certificateSha256,omitempty"`
+	Addresses         []link.Address `json:"addresses,omitempty"`
+	Relays            []string       `json:"relays,omitempty"`
 }
 
 type IdentityImportResponse struct {
@@ -498,6 +520,11 @@ type WebGUICommandHandler func(context.Context, WebGUICommandRequest) (WebGUICom
 type IdentityPackageHandler func(context.Context, IdentityPackageRequest) (pairing.IdentityPackage, error)
 type IdentityImportHandler func(context.Context, IdentityImportRequest) (IdentityImportResponse, error)
 type PairExchangeHandler func(context.Context, PairExchangeRequest) (PairExchangeResponse, error)
+type PairCodeHandler func(context.Context) (PairCodeResponse, error)
+type PairCodeRedeemHandler func(context.Context, PairCodeRedeemRequest) (PairCodeRedeemResponse, error)
+type PairCodeClaimHandler func(context.Context, link.ClaimRequest) (link.ClaimResponse, error)
+type LinkProfileHandler func(context.Context) (link.Profile, error)
+type LinkProfilePushHandler func(context.Context, link.LinkPush) (link.Profile, error)
 type APITrustHandler func(context.Context) (APITrustResponse, error)
 type APITrustCommandHandler func(context.Context, APITrustCommandRequest) (APITrustCommandResponse, error)
 type MeshSettingsHandler func(context.Context, MeshSettingsRequest) (MeshSettingsResponse, error)
@@ -699,6 +726,11 @@ type Server struct {
 	identityPackageHandler     IdentityPackageHandler
 	identityImportHandler      IdentityImportHandler
 	pairExchangeHandler        PairExchangeHandler
+	pairCodeHandler            PairCodeHandler
+	pairCodeRedeemHandler      PairCodeRedeemHandler
+	pairCodeClaimHandler       PairCodeClaimHandler
+	linkProfileHandler         LinkProfileHandler
+	linkProfilePushHandler     LinkProfilePushHandler
 	apiTrustHandler            APITrustHandler
 	apiTrustCommandHandler     APITrustCommandHandler
 	meshSettingsHandler        MeshSettingsHandler
@@ -746,6 +778,10 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/schema", s.requireKey(s.handleSchema))
 	mux.HandleFunc("/v1/sync-journal", s.requireKey(s.handleSyncJournal))
 	mux.HandleFunc("/v1/pair-exchange", s.handlePairExchange)
+	mux.HandleFunc("/v1/pair-code", s.requireKey(s.handlePairCode))
+	mux.HandleFunc("/v1/pair-code/redeem", s.requireKey(s.handlePairCodeRedeem))
+	mux.HandleFunc("/v1/pair-code/claim", s.handlePairCodeClaim)
+	mux.HandleFunc("/v1/link-profile", s.requireKey(s.handleLinkProfile))
 	mux.HandleFunc("/v1/api/trust", s.requireKey(s.handleAPITrust))
 	mux.HandleFunc("/v1/api/trust-command", s.requireKey(s.handleAPITrustCommand))
 	mux.HandleFunc("/v1/mesh/settings", s.requireKey(s.handleMeshSettings))
@@ -847,6 +883,36 @@ func (s *Server) SetPairExchangeHandler(handler PairExchangeHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pairExchangeHandler = handler
+}
+
+func (s *Server) SetPairCodeHandler(handler PairCodeHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pairCodeHandler = handler
+}
+
+func (s *Server) SetPairCodeRedeemHandler(handler PairCodeRedeemHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pairCodeRedeemHandler = handler
+}
+
+func (s *Server) SetPairCodeClaimHandler(handler PairCodeClaimHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pairCodeClaimHandler = handler
+}
+
+func (s *Server) SetLinkProfileHandler(handler LinkProfileHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.linkProfileHandler = handler
+}
+
+func (s *Server) SetLinkProfilePushHandler(handler LinkProfilePushHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.linkProfilePushHandler = handler
 }
 
 func (s *Server) SetIdentityImportHandler(handler IdentityImportHandler) {
@@ -1553,6 +1619,120 @@ func (s *Server) handlePairExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, response)
+}
+
+func (s *Server) handlePairCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.RLock()
+	handler := s.pairCodeHandler
+	s.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "pairing code handler is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	response, err := handler(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, response)
+}
+
+func (s *Server) handlePairCodeRedeem(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.RLock()
+	handler := s.pairCodeRedeemHandler
+	s.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "pairing code redeem handler is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var req PairCodeRedeemRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "invalid pairing code request", http.StatusBadRequest)
+		return
+	}
+	response, err := handler(r.Context(), req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, response)
+}
+
+func (s *Server) handlePairCodeClaim(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.RLock()
+	handler := s.pairCodeClaimHandler
+	s.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "pairing code claim handler is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var req link.ClaimRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "invalid pairing claim", http.StatusBadRequest)
+		return
+	}
+	response, err := handler(r.Context(), req)
+	if err != nil {
+		status := http.StatusUnauthorized
+		if strings.Contains(err.Error(), "already used") || strings.Contains(err.Error(), "expired") {
+			status = http.StatusGone
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, response)
+}
+
+func (s *Server) handleLinkProfile(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.RLock()
+		handler := s.linkProfileHandler
+		s.mu.RUnlock()
+		if handler == nil {
+			http.Error(w, "link profile handler is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		response, err := handler(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, response)
+	case http.MethodPost:
+		s.mu.RLock()
+		handler := s.linkProfilePushHandler
+		s.mu.RUnlock()
+		if handler == nil {
+			http.Error(w, "link profile handler is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		var req link.LinkPush
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+			http.Error(w, "invalid link profile", http.StatusBadRequest)
+			return
+		}
+		response, err := handler(r.Context(), req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		writeJSON(w, response)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleAPITrust(w http.ResponseWriter, r *http.Request) {

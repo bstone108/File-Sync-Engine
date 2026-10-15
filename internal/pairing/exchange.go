@@ -14,25 +14,29 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"filesyncengine/internal/link"
 )
 
 // PairOffer is the importer's introduction to the node that issued a pairing package.
 type PairOffer struct {
-	GroupID              string `json:"groupId"`
-	BootstrapProofKey    string `json:"bootstrapProofKey"`
-	DiscoveryID          string `json:"discoveryId"`
-	NodeName             string `json:"nodeName"`
-	ReachableAPIURL      string `json:"reachableAPIURL"`
-	APICertificateSHA256 string `json:"apiCertificateSha256"`
-	APIKey               string `json:"apiKey"`
+	GroupID              string       `json:"groupId"`
+	BootstrapProofKey    string       `json:"bootstrapProofKey"`
+	DiscoveryID          string       `json:"discoveryId"`
+	NodeName             string       `json:"nodeName"`
+	ReachableAPIURL      string       `json:"reachableAPIURL"`
+	APICertificateSHA256 string       `json:"apiCertificateSha256"`
+	APIKey               string       `json:"apiKey"`
+	LinkProfile          link.Profile `json:"linkProfile,omitempty"`
 }
 
 // PairAcceptance is the issuing node's API credential, returned only to the paired daemon.
 type PairAcceptance struct {
-	DiscoveryID          string `json:"discoveryId"`
-	NodeName             string `json:"nodeName"`
-	APIKey               string `json:"apiKey"`
-	APICertificateSHA256 string `json:"apiCertificateSha256"`
+	DiscoveryID          string       `json:"discoveryId"`
+	NodeName             string       `json:"nodeName"`
+	APIKey               string       `json:"apiKey"`
+	APICertificateSHA256 string       `json:"apiCertificateSha256"`
+	LinkProfile          link.Profile `json:"linkProfile,omitempty"`
 }
 
 // ExchangePair posts a bootstrap-proof offer to the remote daemon and returns its API credential.

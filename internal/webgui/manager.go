@@ -232,6 +232,8 @@ func dockerProxyRoutes() []proxyRoute {
 		{BrowserPath: "/api/v1/transfer-command", NativePath: "/v1/transfer-command", Methods: post},
 		{BrowserPath: "/api/v1/identity-package", NativePath: "/v1/identity-package", Methods: post},
 		{BrowserPath: "/api/v1/identity-import", NativePath: "/v1/identity-import", Methods: post},
+		{BrowserPath: "/api/v1/pair-code", NativePath: "/v1/pair-code", Methods: post},
+		{BrowserPath: "/api/v1/pair-code/redeem", NativePath: "/v1/pair-code/redeem", Methods: post},
 		{BrowserPath: "/api/v1/maintenance/scrub", NativePath: "/v1/maintenance/scrub", Methods: post},
 		{BrowserPath: "/api/v1/web-gui-command", NativePath: "/v1/web-gui-command", Methods: post},
 		{BrowserPath: "/api/v1/mesh/settings", NativePath: "/v1/mesh/settings", Methods: get, QueryKeys: []string{"nodeId"}},

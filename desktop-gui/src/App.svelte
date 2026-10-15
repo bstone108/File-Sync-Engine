@@ -13,6 +13,8 @@
     fetchRemoteMeshSettings,
     generateIdentityPairingPackage,
     importIdentityPairingPackage,
+    issuePairingCode,
+    redeemPairingCode,
     patchDaemonConfig,
     pinActiveAPICertificate,
     queueRemoteMeshSettingsCommand,
@@ -167,6 +169,8 @@
   let parsedPairingImport: IdentityPairingPackage | null = null;
   let pairingImportSummary = '';
   let pairingMessage = '';
+  let pairingCode = '';
+  let remotePairingCode = '';
   let animatedPairingScanState = createAnimatedPairingScanState();
   let animatedScanProgress: AnimatedPairingScanProgress = animatedPairingScanState.progress;
   let desktopAnimatedPairingScannerScreen: DesktopAnimatedPairingScannerScreenModel = buildDesktopAnimatedPairingScannerScreen(
@@ -737,6 +741,32 @@
       parsedPairingImport = null;
       pairingImportSummary = '';
       pairingMessage = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  async function showPairingCode() {
+    pairingLoading = true;
+    try {
+      const issued = await issuePairingCode(daemonConnectionSettings);
+      pairingCode = issued.code;
+      pairingMessage = `Pairing code ${issued.code} is ready. It expires at ${issued.expiresAt} and can be used once.`;
+    } catch (error) {
+      pairingMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      pairingLoading = false;
+    }
+  }
+
+  async function redeemRemotePairingCode() {
+    pairingLoading = true;
+    try {
+      const response = await redeemPairingCode(daemonConnectionSettings, remotePairingCode);
+      const addresses = (response.addresses ?? []).map((address) => address.address).join(', ');
+      pairingMessage = `${response.message ?? 'Paired by code'}${addresses ? `. Reconnect addresses: ${addresses}` : ''}`;
+    } catch (error) {
+      pairingMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      pairingLoading = false;
     }
   }
 
@@ -1851,8 +1881,17 @@
       <section class="connection-card">
         <h2>Identity pairing export/import</h2>
         <p>
-          This GUI is connected to the local engine automatically. Paste only the remote engine's pairing package. The package still contains identity secret material, so it is never written to logs or generic status events.
+          This GUI is connected to the local engine automatically. Link a remote engine with a short pairing code or by pasting its pairing package. After either method, the engines store every reachable address, DHT identity, relay, and certificate pin, and fail over if the first address dies.
         </p>
+        <button type="button" data-testid="show-pairing-code" on:click={showPairingCode} disabled={pairingLoading}>Show pairing code</button>
+        {#if pairingCode}
+          <p data-testid="pairing-code">Pairing code {pairingCode}. It expires quickly and works once. The other engine looks it up on the DHT.</p>
+        {/if}
+        <label>
+          Remote pairing code
+          <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH" />
+        </label>
+        <button type="button" data-testid="redeem-pairing-code" on:click={redeemRemotePairingCode} disabled={pairingLoading}>Link with pairing code</button>
         <p data-testid="pairing-advertise-url">
           This local engine advertises {status?.advertiseURL || 'its reachable API URL'}. Other engines use that address from the pairing package. You do not enter this engine's URL.
         </p>

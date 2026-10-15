@@ -139,7 +139,7 @@ func peerByDiscoveryID(cfg config.Config, discoveryID string) (config.PeerConfig
 }
 
 func exchangeAndPersistPeer(ctx context.Context, configPath string, cfg config.Config, req api.IdentityImportRequest) error {
-	fingerprint, err := localAPICertificateFingerprint(configPath, cfg)
+	fingerprint, err := localCertificateIfNeeded(configPath, cfg)
 	if err != nil {
 		return err
 	}
@@ -151,16 +151,23 @@ func exchangeAndPersistPeer(ctx context.Context, configPath string, cfg config.C
 		ReachableAPIURL:      strings.TrimSpace(req.LocalReachableAPIURL),
 		APICertificateSHA256: fingerprint,
 		APIKey:               cfg.API.Key,
+		LinkProfile:          gatheredProfile(cfg, fingerprint),
 	})
 	if err != nil {
 		return err
+	}
+	remote := accepted.LinkProfile
+	if remote.CertificateSHA256 == "" {
+		remote.CertificateSHA256 = accepted.APICertificateSHA256
 	}
 	return configops.UpsertPairedPeer(configPath, config.PeerConfig{
 		ID:                   configops.PairedPeerID(accepted.NodeName, accepted.DiscoveryID),
 		APIKey:               accepted.APIKey,
 		APICertificateSHA256: accepted.APICertificateSHA256,
 		IdentityPublicKey:    accepted.DiscoveryID,
-		Endpoints:            []config.EndpointConfig{{Kind: "manual", Address: strings.TrimSpace(req.Package.ReachableAPIURL)}},
+		DHTPeerID:            remote.DHTPeerID,
+		Relays:               remote.Relays,
+		Endpoints:            remote.Endpoints(req.Package.ReachableAPIURL),
 	})
 }
 
@@ -174,7 +181,7 @@ func HandlePairExchange(configPath string, req api.PairExchangeRequest) (api.Pai
 		return api.PairExchangeResponse{}, fmt.Errorf("pair exchange discovery id is invalid")
 	}
 	if existing, ok := peerByDiscoveryID(cfg, req.DiscoveryID); ok && req.APIKey != "" && subtle.ConstantTimeCompare([]byte(existing.APIKey), []byte(req.APIKey)) == 1 {
-		fingerprint, err := localAPICertificateFingerprint(configPath, cfg)
+		fingerprint, err := localCertificateIfNeeded(configPath, cfg)
 		if err != nil {
 			return api.PairExchangeResponse{}, err
 		}
@@ -183,6 +190,7 @@ func HandlePairExchange(configPath string, req api.PairExchangeRequest) (api.Pai
 			NodeName:             cfg.NodeName,
 			APIKey:               cfg.API.Key,
 			APICertificateSHA256: fingerprint,
+			LinkProfile:          gatheredProfile(cfg, fingerprint),
 		}, nil
 	}
 	token, ok := pairing.GroupToken(cfg, req.GroupID)
@@ -192,17 +200,20 @@ func HandlePairExchange(configPath string, req api.PairExchangeRequest) (api.Pai
 	if req.APIKey == "" || req.ReachableAPIURL == "" {
 		return api.PairExchangeResponse{}, fmt.Errorf("pair exchange is missing the caller API address or key")
 	}
+	fingerprint, err := localCertificateIfNeeded(configPath, cfg)
+	if err != nil {
+		return api.PairExchangeResponse{}, err
+	}
+	remote := req.LinkProfile
 	if err := configops.UpsertPairedPeer(configPath, config.PeerConfig{
 		ID:                   configops.PairedPeerID(req.NodeName, req.DiscoveryID),
 		APIKey:               req.APIKey,
 		APICertificateSHA256: req.APICertificateSHA256,
 		IdentityPublicKey:    req.DiscoveryID,
-		Endpoints:            []config.EndpointConfig{{Kind: "manual", Address: strings.TrimSpace(req.ReachableAPIURL)}},
+		DHTPeerID:            remote.DHTPeerID,
+		Relays:               remote.Relays,
+		Endpoints:            remote.Endpoints(req.ReachableAPIURL),
 	}); err != nil {
-		return api.PairExchangeResponse{}, err
-	}
-	fingerprint, err := localAPICertificateFingerprint(configPath, cfg)
-	if err != nil {
 		return api.PairExchangeResponse{}, err
 	}
 	return api.PairExchangeResponse{
@@ -210,7 +221,15 @@ func HandlePairExchange(configPath string, req api.PairExchangeRequest) (api.Pai
 		NodeName:             cfg.NodeName,
 		APIKey:               cfg.API.Key,
 		APICertificateSHA256: fingerprint,
+		LinkProfile:          gatheredProfile(cfg, fingerprint),
 	}, nil
+}
+
+func localCertificateIfNeeded(configPath string, cfg config.Config) (string, error) {
+	if !cfg.API.RequiresTLS() && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.API.AdvertiseURL)), "https://") {
+		return "", nil
+	}
+	return localAPICertificateFingerprint(configPath, cfg)
 }
 
 func localAPICertificateFingerprint(configPath string, cfg config.Config) (string, error) {

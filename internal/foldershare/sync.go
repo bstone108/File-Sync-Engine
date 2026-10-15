@@ -5,12 +5,10 @@
 package foldershare
 
 import (
+	"context"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,9 +16,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/link"
 )
 
 // Entry is one path in a folder's sync journal.
@@ -146,7 +146,6 @@ func absorbLocal(root, origin string, byPath map[string]Entry) error {
 }
 
 func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[string]Entry, remote []Entry) error {
-	base, pin := peerEndpoint(peer)
 	for _, entry := range remote {
 		if !safeRel(entry.Path) {
 			continue
@@ -166,7 +165,7 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 			byPath[entry.Path] = entry
 			continue
 		}
-		if err := downloadFile(base, pin, peer.APIKey, folder.ID, entry, target); err != nil {
+		if err := downloadFile(peer, folder.ID, entry, target); err != nil {
 			return err
 		}
 		byPath[entry.Path] = entry
@@ -233,109 +232,111 @@ func hashFile(path string) (string, int64, error) {
 	return hex.EncodeToString(hash.Sum(nil)), n, nil
 }
 
-func downloadFile(baseURL, pin, apiKey, folderID string, entry Entry, target string) error {
-	endpoint := strings.TrimRight(baseURL, "/") + "/v1/folder-file?folder=" + url.QueryEscape(folderID) + "&path=" + url.QueryEscape(entry.Path)
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-FSE-API-Key", apiKey)
-	client, err := verifyPinnedPeerCertificateClient(endpoint, pin)
-	if err != nil {
-		return err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download %s: %s", entry.Path, resp.Status)
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	tmp := target + ".fse-sync-tmp"
-	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(file, hash), resp.Body); err != nil {
-		_ = file.Close()
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	sum := hex.EncodeToString(hash.Sum(nil))
-	if entry.SHA256 != "" && !strings.EqualFold(sum, entry.SHA256) {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("downloaded %s checksum mismatch", entry.Path)
-	}
-	return os.Rename(tmp, target)
+func downloadFile(peer config.PeerConfig, folderID string, entry Entry, target string) error {
+	_, err := link.Dial(context.Background(), peer, func(ctx context.Context, base string, client *http.Client) error {
+		endpoint := base + "/v1/folder-file?folder=" + url.QueryEscape(folderID) + "&path=" + url.QueryEscape(entry.Path)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("X-FSE-API-Key", peer.APIKey)
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("download %s: %s", entry.Path, resp.Status)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		tmp := target + ".fse-sync-tmp"
+		file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		hash := sha256.New()
+		if _, err := io.Copy(io.MultiWriter(file, hash), resp.Body); err != nil {
+			_ = file.Close()
+			_ = os.Remove(tmp)
+			return err
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		sum := hex.EncodeToString(hash.Sum(nil))
+		if entry.SHA256 != "" && !strings.EqualFold(sum, entry.SHA256) {
+			_ = os.Remove(tmp)
+			return fmt.Errorf("downloaded %s checksum mismatch", entry.Path)
+		}
+		return os.Rename(tmp, target)
+	})
+	return err
 }
 
 func fetchRemoteJournal(peer config.PeerConfig, folderID string) ([]Entry, error) {
-	base, pin := peerEndpoint(peer)
-	if base == "" {
-		return nil, errors.New("peer has no http endpoint")
-	}
-	endpoint := strings.TrimRight(base, "/") + "/v1/sync-journal?folder=" + url.QueryEscape(folderID)
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	var entries []Entry
+	used, err := link.Dial(context.Background(), peer, func(ctx context.Context, base string, client *http.Client) error {
+		endpoint := base + "/v1/sync-journal?folder=" + url.QueryEscape(folderID)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("X-FSE-API-Key", peer.APIKey)
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("sync journal: %s", resp.Status)
+		}
+		var body struct {
+			Entries []Entry `json:"entries"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return err
+		}
+		entries = body.Entries
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-FSE-API-Key", peer.APIKey)
-	client, err := verifyPinnedPeerCertificateClient(endpoint, pin)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("sync journal: %s", resp.Status)
-	}
-	var body struct {
-		Entries []Entry `json:"entries"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, err
-	}
-	return body.Entries, nil
+	noteLinkDial(peer, used)
+	return entries, nil
 }
 
-// verifyPinnedPeerCertificateClient trusts only the pinned leaf certificate.
-// Go requires InsecureSkipVerify so the self-signed daemon certificate can reach
-// VerifyPeerCertificate, which checks the SHA-256 fingerprint.
-func verifyPinnedPeerCertificateClient(endpoint, pin string) (*http.Client, error) {
-	if !strings.HasPrefix(endpoint, "https://") {
-		return &http.Client{Timeout: 30 * time.Second}, nil
+var (
+	linkRefreshMu sync.Mutex
+	linkRefreshFn func(config.PeerConfig, bool)
+	linkRefreshAt = map[string]time.Time{}
+)
+
+// SetLinkRefresher registers a callback that pulls a peer's current addresses
+// after a successful sync dial. Failover refreshes immediately. Quiet links
+// refresh at most every two minutes.
+func SetLinkRefresher(fn func(config.PeerConfig, bool)) {
+	linkRefreshMu.Lock()
+	linkRefreshFn = fn
+	linkRefreshMu.Unlock()
+}
+
+func noteLinkDial(peer config.PeerConfig, used string) {
+	endpoints := link.OrderedEndpoints(peer)
+	failedOver := len(endpoints) > 0 && strings.TrimRight(endpoints[0].Address, "/") != strings.TrimRight(used, "/")
+	linkRefreshMu.Lock()
+	fn := linkRefreshFn
+	last := linkRefreshAt[peer.ID]
+	if fn == nil || (!failedOver && time.Since(last) < 2*time.Minute) {
+		linkRefreshMu.Unlock()
+		return
 	}
-	pin = strings.ToLower(strings.TrimSpace(pin))
-	if len(pin) != 64 {
-		return nil, errors.New("https peer is missing an API certificate fingerprint")
-	}
-	transport := &http.Transport{TLSClientConfig: &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true,
-		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			if len(rawCerts) == 0 {
-				return errors.New("peer presented no certificate")
-			}
-			sum := sha256.Sum256(rawCerts[0])
-			if hex.EncodeToString(sum[:]) != pin {
-				return errors.New("peer API certificate fingerprint mismatch")
-			}
-			return nil
-		},
-	}}
-	return &http.Client{Timeout: 30 * time.Second, Transport: transport}, nil
+	linkRefreshAt[peer.ID] = time.Now()
+	linkRefreshMu.Unlock()
+	fn(peer, failedOver)
 }
 
 func peersFor(cfg config.Config, folder config.FolderConfig) []config.PeerConfig {
@@ -355,21 +356,12 @@ func peersFor(cfg config.Config, folder config.FolderConfig) []config.PeerConfig
 				continue
 			}
 		}
-		if base, _ := peerEndpoint(peer); base == "" {
+		if !link.HasAPIEndpoint(peer) {
 			continue
 		}
 		out = append(out, peer)
 	}
 	return out
-}
-
-func peerEndpoint(peer config.PeerConfig) (string, string) {
-	for _, endpoint := range peer.Endpoints {
-		if strings.HasPrefix(endpoint.Address, "http://") || strings.HasPrefix(endpoint.Address, "https://") {
-			return endpoint.Address, peer.APICertificateSHA256
-		}
-	}
-	return "", ""
 }
 
 func indexEntries(entries []Entry) map[string]Entry {

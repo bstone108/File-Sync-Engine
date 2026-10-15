@@ -306,6 +306,8 @@ type PeerConfig struct {
 	APIKey                string           `json:"apiKey,omitempty"`
 	APICertificateSHA256  string           `json:"apiCertificateSha256,omitempty"`
 	IdentityPublicKey     string           `json:"identityPublicKey,omitempty"`
+	DHTPeerID             string           `json:"dhtPeerId,omitempty"`
+	Relays                []string         `json:"relays,omitempty"`
 	EncryptionLevel       int              `json:"encryptionLevel"`
 	SendBytesPerSecond    int64            `json:"sendBytesPerSecond,omitempty"`
 	ReceiveBytesPerSecond int64            `json:"receiveBytesPerSecond,omitempty"`

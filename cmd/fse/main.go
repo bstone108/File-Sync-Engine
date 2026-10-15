@@ -40,6 +40,7 @@ import (
 	"filesyncengine/internal/discoverycontrol"
 	"filesyncengine/internal/foldershare"
 	"filesyncengine/internal/foldersync"
+	"filesyncengine/internal/link"
 	"filesyncengine/internal/maintenance"
 	"filesyncengine/internal/maintenancecli"
 	"filesyncengine/internal/maintenancecontrol"
@@ -162,6 +163,37 @@ func run(configPath string) {
 	webGUIServer.SetNativeAPI(apiServer.Router(), cfg.API.Key)
 	apiServer.SetPairExchangeHandler(func(ctx context.Context, req api.PairExchangeRequest) (api.PairExchangeResponse, error) {
 		return apicontrol.HandlePairExchange(configPath, req)
+	})
+	pairService := link.NewService(nil)
+	pairService.SetDirectoryFactory(func() (link.Directory, string, error) {
+		router, err := discovery.NewLibp2pDHTRouter(context.Background(), discovery.Libp2pDHTRouterOptions{NodeID: cfg.NodeName})
+		if err != nil {
+			return nil, "", err
+		}
+		return link.NewDHTDirectory(router), router.PeerID(), nil
+	})
+	apicontrol.SetLinkService(pairService)
+	apiServer.SetPairCodeHandler(func(ctx context.Context) (api.PairCodeResponse, error) {
+		return apicontrol.HandleIssuePairCode(configPath)
+	})
+	apiServer.SetPairCodeRedeemHandler(func(ctx context.Context, req api.PairCodeRedeemRequest) (api.PairCodeRedeemResponse, error) {
+		return apicontrol.HandleRedeemPairCode(ctx, configPath, req)
+	})
+	apiServer.SetPairCodeClaimHandler(func(ctx context.Context, req link.ClaimRequest) (link.ClaimResponse, error) {
+		return apicontrol.HandlePairCodeClaim(configPath, req)
+	})
+	apiServer.SetLinkProfileHandler(func(ctx context.Context) (link.Profile, error) {
+		return apicontrol.HandleLinkProfile(configPath)
+	})
+	apiServer.SetLinkProfilePushHandler(func(ctx context.Context, push link.LinkPush) (link.Profile, error) {
+		return apicontrol.HandleLinkProfilePush(configPath, push)
+	})
+	foldershare.SetLinkRefresher(func(peer config.PeerConfig, failedOver bool) {
+		refreshCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := apicontrol.RefreshPeerLink(refreshCtx, configPath, peer); err != nil && failedOver {
+			structuredlog.Event("warn", "link.refresh.failed", "peer address refresh failed after failover", map[string]any{"peer": peer.ID, "error": err.Error()})
+		}
 	})
 	daemonapihandlers.RegisterStatic(apiServer, daemonapihandlers.BuildStaticHandlers(daemonapihandlers.StaticRuntimeDeps{
 		ConfigPath:      configPath,
