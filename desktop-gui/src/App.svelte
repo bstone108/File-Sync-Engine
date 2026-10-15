@@ -789,11 +789,12 @@
   }
 
   function markLocalControlOperationCompleted(area: LocalControlArea, command: string, response: unknown) {
+    const detail = commandResponseDetail(response);
     setLocalControlOperationState(area, {
       phase: 'completed',
       command,
-      summary: `${command} request completed and status was refreshed.`,
-      detail: commandResponseDetail(response)
+      summary: detail ? `${command} request completed. ${detail}` : `${command} request completed and status was refreshed.`,
+      detail
     });
   }
 

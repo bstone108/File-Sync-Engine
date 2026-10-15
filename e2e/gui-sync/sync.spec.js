@@ -29,7 +29,11 @@ async function addSharedFolder(page) {
   await page.getByTestId('folder-id').fill('shared');
   await page.getByTestId('folder-path').fill('/data/shared');
   await page.getByTestId('folder-submit').click();
-  await expect(page.getByText('folder add accepted', { exact: false })).toBeVisible();
+  await expect.poll(async () => {
+    const status = await page.getByLabel('Folder operation status').innerText().catch(() => '');
+    const body = await page.locator('body').innerText().catch(() => '');
+    return `${status}\n${body}`.slice(0, 2000);
+  }, { timeout: 20000 }).toContain('folder add accepted');
 }
 
 function compose(args, capture = false) {
@@ -53,13 +57,13 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await expect(a.getByTestId('device-node-name')).toHaveText('fse-a');
   await expect(b.getByTestId('device-node-name')).toHaveText('fse-b');
 
+  compose(['exec', '-T', '-u', '0', 'fse-a', 'sh', '-c', 'mkdir -p /data/shared && chown -R 99:100 /data && chmod 777 /data /data/shared']);
+  compose(['exec', '-T', '-u', '0', 'fse-b', 'sh', '-c', 'mkdir -p /data/shared && chown -R 99:100 /data && chmod 777 /data /data/shared']);
+
   const exported = await pairFrom(a, 'https://fse-a:22420');
   await importOn(b, 'https://fse-b:22420', exported);
   await addSharedFolder(a);
   await addSharedFolder(b);
-
-  compose(['exec', '-T', '-u', '0', 'fse-a', 'sh', '-c', 'mkdir -p /data/shared && chmod 777 /data /data/shared']);
-  compose(['exec', '-T', '-u', '0', 'fse-b', 'sh', '-c', 'mkdir -p /data/shared && chmod 777 /data /data/shared']);
   compose(['exec', '-T', '-u', '0', 'fse-a', 'sh', '-c', 'echo hello-from-a > /data/shared/note.txt && chmod 666 /data/shared/note.txt']);
 
   await expect.poll(() => compose(['exec', '-T', 'fse-b', 'cat', '/data/shared/note.txt'], true).trim(), { timeout: 45000 }).toBe('hello-from-a');
