@@ -78,7 +78,6 @@ type ServerConfig struct {
 	Folders                      map[string]string
 	Identity                     peeridentity.Identity
 	EncryptionLevel              int
-	AllowWeakerEncryptionLevel   bool
 	TrustedPeerPublicKeys        map[string]string
 	KnownPeers                   []discovery.Peer
 	IdentityGroups               []discovery.IdentityGroupState
@@ -125,7 +124,7 @@ func (s *Server) Serve(ctx context.Context, stream io.ReadWriter) error {
 				}
 				continue
 			}
-			level, err := negotiateEncryptionLevel(s.encryptionLevel(), msg.Hello.EncryptionLevel, s.cfg.AllowWeakerEncryptionLevel)
+			level, err := negotiateEncryptionLevel(s.encryptionLevel(), msg.Hello.EncryptionLevel)
 			if err != nil {
 				return err
 			}
@@ -460,7 +459,6 @@ type PullOptions struct {
 	Identity                             peeridentity.Identity
 	EncryptionLevel                      int
 	PeerPublicKey                        string
-	AllowWeakerEncryptionLevel           bool
 	KnownPeers                           []discovery.Peer
 	IdentityGroups                       []discovery.IdentityGroupState
 	Transfer                             config.TransferConfig
