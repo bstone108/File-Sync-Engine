@@ -14,8 +14,7 @@
     fetchRemoteMeshSettings,
     generateIdentityPairingPackage,
     importIdentityPairingPackage,
-    issuePairingCode,
-    redeemPairingCode,
+    queueOnboarding,
     patchDaemonConfig,
     pinActiveAPICertificate,
     queueConfigSyncEdit,
@@ -89,6 +88,7 @@
     defaultLocalDaemonInstance,
     ensureLocalInstanceFirst,
     formatConnectionStateLabel,
+    formatTransferByteSummary,
     groupDaemonInstances,
     addRemoteDaemonInstance,
     type ManagedDaemonInstance,
@@ -154,6 +154,18 @@
   let remoteBrowseLoading = false;
   let folderFormMode = 'sendrecv';
   let folderFormSharedWith = '';
+  let folderEditor: DaemonFolder | null = null;
+  let folderEditPath = '';
+  let folderEditMode = 'sendrecv';
+  let folderEditIgnore = '';
+  let folderEditSharedPeers: string[] = [];
+  let folderEditPeerDraft = '';
+  let folderEditorMessage = '';
+  let folderEditorRemoveConfirm = false;
+  let folderRowMessage = '';
+  let expandedFolderIds: Record<string, boolean> = {};
+  let addPeerMenuOpen = false;
+  let linkPeerFormOpen = false;
   const dockerGUI = isDockerGUI();
   const guiPlatform = fsePlatform();
   let discoveryFormDisabled = false;
@@ -182,6 +194,7 @@
   let pairingImportSummary = '';
   let pairingMessage = '';
   let pairingCode = '';
+  let onboardingCommands: Array<{ id: string; targetInstanceId: string; action: string; code?: string; expiresAt?: string; status: string; message?: string }> = [];
   let remotePairingCode = '';
   let animatedPairingScanState = createAnimatedPairingScanState();
   let animatedScanProgress: AnimatedPairingScanProgress = animatedPairingScanState.progress;
@@ -250,6 +263,7 @@
   };
 
   let activeView: DesktopUIView = 'overview';
+  let nodeOptionsOpen = false;
   let managedDaemonInstances: ManagedDaemonInstance[] = ensureLocalInstanceFirst([defaultLocalDaemonInstance()]);
   let selectedInstanceID = managedDaemonInstances[0].id;
   let expandedInstanceGroups: Record<string, boolean> = defaultExpandedInstanceGroups(managedDaemonInstances);
@@ -757,12 +771,49 @@
     }
   }
 
+  function applyOnboardingView(view: { instances?: typeof configInstances; onboarding?: typeof onboardingCommands }) {
+    if (view.instances) {
+      configInstances = view.instances;
+    }
+    if (view.onboarding) {
+      onboardingCommands = view.onboarding;
+    }
+  }
+
+  function onboardingStateText(instance: { label: string; local: boolean; online: boolean } | undefined): string {
+    if (!instance) {
+      return 'Select an instance. That peer issues and accepts the one-time pairing code.';
+    }
+    if (instance.local) {
+      return `${instance.label} performs onboarding on this engine. It generates the one-time pairing code and accepts a new device now.`;
+    }
+    if (instance.online) {
+      return `${instance.label} performs onboarding. This engine relays the pairing code and the accept over the mesh, and ${instance.label} runs them while it is online.`;
+    }
+    return `${instance.label} is offline. This engine relays onboarding over the mesh. ${instance.label} generates the pairing code and accepts the new device when it is online.`;
+  }
+
   async function showPairingCode() {
+    const target = selectedSidebarInstance;
+    if (!target || target.instanceId === 'local') {
+      pairingMessage = 'Wait for the linked instances to load, then choose the peer that should issue the code.';
+      return;
+    }
     pairingLoading = true;
     try {
-      const issued = await issuePairingCode(daemonConnectionSettings);
-      pairingCode = issued.code;
-      pairingMessage = `Pairing code ${issued.code} is ready. It expires at ${issued.expiresAt} and can be used once.`;
+      const response = await queueOnboarding(daemonConnectionSettings, { targetInstanceId: target.instanceId, action: 'issue' });
+      applyOnboardingView(response);
+      const command = response.command;
+      if (command?.status === 'done' && command.code) {
+        pairingCode = command.code;
+        pairingMessage = `Pairing code ${command.code} is ready. It expires at ${command.expiresAt ?? 'the configured time'} and can be used once.`;
+      } else if (command?.status === 'pending') {
+        pairingCode = '';
+        pairingMessage = `Queued for ${target.label}. This engine relays it over the mesh. ${target.label} generates the pairing code when it is online.`;
+      } else {
+        pairingCode = '';
+        pairingMessage = command?.message || `Onboarding did not finish on ${target.label}.`;
+      }
     } catch (error) {
       pairingMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -771,11 +822,27 @@
   }
 
   async function redeemRemotePairingCode() {
+    const target = selectedSidebarInstance;
+    if (!target || target.instanceId === 'local') {
+      pairingMessage = 'Wait for the linked instances to load, then choose the peer that should accept the new device.';
+      return;
+    }
     pairingLoading = true;
     try {
-      const response = await redeemPairingCode(daemonConnectionSettings, remotePairingCode);
-      const addresses = (response.addresses ?? []).map((address) => address.address).join(', ');
-      pairingMessage = `${response.message ?? 'Paired by code'}${addresses ? `. Reconnect addresses: ${addresses}` : ''}`;
+      const response = await queueOnboarding(daemonConnectionSettings, {
+        targetInstanceId: target.instanceId,
+        action: 'accept',
+        code: remotePairingCode
+      });
+      applyOnboardingView(response);
+      const command = response.command;
+      if (command?.status === 'done') {
+        pairingMessage = command.message || 'paired by code';
+      } else if (command?.status === 'pending') {
+        pairingMessage = `Queued for ${target.label}. This engine relays the accept over the mesh. ${target.label} links the new device when it is online.`;
+      } else {
+        pairingMessage = command?.message || `Onboarding did not finish on ${target.label}.`;
+      }
     } catch (error) {
       pairingMessage = error instanceof Error ? error.message : String(error);
     } finally {
@@ -964,6 +1031,7 @@
     try {
       const view = await fetchConfigSync(daemonConnectionSettings);
       configInstances = view.instances ?? [];
+      onboardingCommands = view.onboarding ?? [];
       if (!configInstanceTouched) {
         selectedConfigInstanceId = view.localInstanceId;
       }
@@ -973,12 +1041,257 @@
   }
 
   function selectConfigInstance(instanceId: string) {
+    if (!configInstances.some((instance) => instance.instanceId === instanceId)) {
+      return;
+    }
     configInstanceTouched = true;
     selectedConfigInstanceId = instanceId;
+    pairingCode = '';
+    pairingMessage = '';
+    addPeerMenuOpen = false;
+    linkPeerFormOpen = false;
+    expandedFolderIds = {};
+    folderRowMessage = '';
+    if (folderEditor) {
+      folderEditor = null;
+    }
   }
+
+  function closeAddPeerMenu() {
+    addPeerMenuOpen = false;
+    linkPeerFormOpen = false;
+  }
+
+  function toggleAddPeerMenu() {
+    addPeerMenuOpen = !addPeerMenuOpen;
+    if (!addPeerMenuOpen) {
+      linkPeerFormOpen = false;
+    }
+  }
+
+  async function showPairingCodeFromMenu() {
+    closeAddPeerMenu();
+    await showPairingCode();
+  }
+
+  async function redeemPairingCodeFromMenu() {
+    closeAddPeerMenu();
+    await redeemRemotePairingCode();
+  }
+
+  function folderStatusText(folder: DaemonFolder): string {
+    if (folder.enabled === false) {
+      return 'paused';
+    }
+    return folder.status || 'configured';
+  }
+
+  function folderProgressText(folder: DaemonFolder): string {
+    if (typeof folder.progressLabel === 'string' && folder.progressLabel.length > 0) {
+      return folder.progressLabel;
+    }
+    if (folder.enabled === false) {
+      return 'Paused';
+    }
+    if (folder.status === 'syncing') {
+      return 'Syncing';
+    }
+    return folder.status || 'Unknown';
+  }
+
+  function folderSizeText(folder: DaemonFolder): string {
+    if (typeof folder.localBytes === 'number') {
+      return formatTransferByteSummary(folder.localBytes);
+    }
+    return '—';
+  }
+
+  function folderModeLabel(mode: string | undefined): string {
+    if (mode === 'sendonly') {
+      return 'send';
+    }
+    if (mode === 'recvonly') {
+      return 'recv';
+    }
+    return mode || 'sendrecv';
+  }
+
+  function folderShareText(folder: DaemonFolder): string {
+    const peers = folder.sharedWith ?? [];
+    if (peers.length === 0) {
+      return 'Every paired peer';
+    }
+    return peers.join(', ');
+  }
+
+  function toggleFolder(id: string) {
+    expandedFolderIds = { ...expandedFolderIds, [id]: !expandedFolderIds[id] };
+  }
+
+  function formatPeerRate(bytes: number | undefined): string {
+    return `${formatTransferByteSummary(bytes ?? 0)}/s`;
+  }
+
+  function formatPeerPending(bytes: number | undefined): string {
+    return `${formatTransferByteSummary(bytes ?? 0)} pending`;
+  }
+
+  $: sidebarInstances = (configInstances.length > 0 ? configInstances : [{
+    instanceId: 'local',
+    label: status?.nodeName ?? 'Loading',
+    online: localEngineConnectionState === 'online' || localEngineConnectionState === 'paired',
+    pendingChanges: 0,
+    local: true,
+    averageBytesPerSecond: 0,
+    pendingBytes: 0
+  } satisfies ConfigSyncInstance]).map((instance) => ({
+    ...instance,
+    selected: selectedConfigInstanceId ? selectedConfigInstanceId === instance.instanceId : instance.local
+  }));
+  $: selectedSidebarInstance = sidebarInstances.find((instance) => instance.selected) ?? sidebarInstances[0];
+  $: visiblePairingCode = pairingCode || onboardingCommands.reduce((found, command) => (
+    command.targetInstanceId === selectedSidebarInstance?.instanceId && command.action === 'issue' && command.status === 'done' && command.code
+      ? command.code
+      : found
+  ), '');
 
   function toggleTheme() {
     theme = theme === 'dark' ? 'light' : 'dark';
+  }
+
+  function openNodeOptions() {
+    nodeOptionsOpen = true;
+  }
+
+  function closeNodeOptions() {
+    nodeOptionsOpen = false;
+  }
+
+  function openFolderEditor(folder: DaemonFolder) {
+    nodeOptionsOpen = false;
+    folderEditor = folder;
+    folderEditPath = folder.path ?? '';
+    folderEditMode = folder.mode || 'sendrecv';
+    folderEditIgnore = (folder.ignore ?? []).join('\n');
+    folderEditSharedPeers = [...(folder.sharedWith ?? [])];
+    folderEditPeerDraft = '';
+    folderEditorMessage = '';
+    folderEditorRemoveConfirm = false;
+  }
+
+  function addFolderSharedPeer() {
+    const peer = folderEditPeerDraft.trim();
+    if (peer.length === 0 || folderEditSharedPeers.includes(peer)) {
+      folderEditPeerDraft = '';
+      return;
+    }
+    folderEditSharedPeers = [...folderEditSharedPeers, peer];
+    folderEditPeerDraft = '';
+  }
+
+  function removeFolderSharedPeer(peer: string) {
+    folderEditSharedPeers = folderEditSharedPeers.filter((id) => id !== peer);
+  }
+
+  async function runFolderEditor(command: string, action: () => Promise<CommandResponse>) {
+    loading = true;
+    folderEditorMessage = `${command} is pending.`;
+    try {
+      const response = await action();
+      folderEditorMessage = response.message ?? `${command} completed.`;
+      await refreshOperationalState();
+      const current = daemonFolders.find((folder) => folder.id === folderEditor?.id);
+      if (current) {
+        folderEditor = current;
+      }
+    } catch (error) {
+      folderEditorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function saveFolderEditor() {
+    if (!folderEditor) {
+      return;
+    }
+    const id = folderEditor.id;
+    const ignore = folderEditIgnore.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+    await runFolderEditor('folder update', async () => sendFolderCommand(daemonConnectionSettings, {
+      action: 'update',
+      id,
+      path: folderEditPath.trim(),
+      mode: folderEditMode,
+      sharedWith: folderEditSharedPeers,
+      ignore
+    }));
+  }
+
+  async function runFolderRow(folder: DaemonFolder, command: string, action: () => Promise<CommandResponse>) {
+    loading = true;
+    folderRowMessage = `${command} is pending.`;
+    try {
+      const response = await action();
+      folderRowMessage = response.message ?? `${command} completed.`;
+      await refreshOperationalState();
+      const current = daemonFolders.find((item) => item.id === folder.id);
+      if (current && folderEditor?.id === current.id) {
+        folderEditor = current;
+      }
+    } catch (error) {
+      folderRowMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function pauseOrResumeFolderRow(folder: DaemonFolder) {
+    const action: 'pause' | 'resume' = folder.enabled === false ? 'resume' : 'pause';
+    await runFolderRow(folder, `folder ${action}`, async () => {
+      const updated = await sendFolderCommand(daemonConnectionSettings, { action, id: folder.id });
+      try {
+        await sendTransferCommand(daemonConnectionSettings, { action, folderID: folder.id });
+      } catch {
+        return { ...updated, message: `${updated.message ?? ''} In-progress transfers were not updated.`.trim() };
+      }
+      return updated;
+    });
+  }
+
+  async function rescanFolderRow(folder: DaemonFolder) {
+    await runFolderRow(folder, 'folder rescan', () => sendFolderCommand(daemonConnectionSettings, { action: 'rescan', id: folder.id }));
+  }
+
+  async function pauseOrResumeFolder(action: 'pause' | 'resume') {
+    if (!folderEditor) {
+      return;
+    }
+    const id = folderEditor.id;
+    await runFolderEditor(`folder ${action}`, async () => {
+      const updated = await sendFolderCommand(daemonConnectionSettings, { action, id });
+      try {
+        await sendTransferCommand(daemonConnectionSettings, { action, folderID: id });
+      } catch {
+        return { ...updated, message: `${updated.message ?? ''} In-progress transfers were not updated.`.trim() };
+      }
+      return updated;
+    });
+  }
+
+  async function removeFolderFromEditor() {
+    if (!folderEditor) {
+      return;
+    }
+    if (!folderEditorRemoveConfirm) {
+      folderEditorRemoveConfirm = true;
+      return;
+    }
+    const id = folderEditor.id;
+    folderEditorRemoveConfirm = false;
+    await runFolderEditor('folder remove', async () => sendFolderCommand(daemonConnectionSettings, { action: 'remove', id }));
+    if (!folderEditorMessage.toLowerCase().includes('fail') && !folderEditorMessage.toLowerCase().includes('not found')) {
+      folderEditor = null;
+    }
   }
 
   async function submitFolderForm() {
@@ -1427,111 +1740,31 @@
 </script>
 
 <main class="host-scoped-shell" data-theme={theme}>
-  <aside class="host-sidebar" aria-label="Host and view navigation">
-    <section class="host-card">
-      <span class="eyebrow">Selected host</span>
-      <h1>{selectedManagedInstance.label}</h1>
-      <p>{selectedManagedInstance.statusSummary}</p>
-      <small>Local bundled engine; local instance pinned first; selected host scope applies to every view except the top GUI menu.</small>
-    </section>
-    <section class="host-card" aria-label="Managed daemon instances">
-      <span class="eyebrow">Instance registry</span>
-      <p class="instance-note">Expandable left navigation panel for local and remote engines. The local instance remains pinned first and quick switching updates the selected host scope.</p>
-      {#each Object.entries(groupedManagedDaemonInstances) as [groupName, instances]}
-        <div class="instance-group">
-          <button
-            type="button"
-            class="instance-group-toggle"
-            aria-expanded={expandedInstanceGroups[groupName] ?? true}
-            aria-controls={`instance-group-${groupName.replace(/\s+/g, '-').toLowerCase()}`}
-            on:click={() => toggleInstanceGroup(groupName)}
-          >
-            <span>{groupName}</span>
-            <small>{(expandedInstanceGroups[groupName] ?? true) ? 'Collapse' : 'Expand'} · {instances.length} host{instances.length === 1 ? '' : 's'}</small>
-          </button>
-          {#if expandedInstanceGroups[groupName] ?? true}
-            <div class="instance-list" id={`instance-group-${groupName.replace(/\s+/g, '-').toLowerCase()}`}>
-              {#each instances as instance}
-                <button
-                  type="button"
-                  class="quick-switch"
-                  class:active={selectedInstanceID === instance.id}
-                  aria-current={selectedInstanceID === instance.id ? 'true' : undefined}
-                  on:click={() => selectManagedInstance(instance.id)}
-                >
-                  <span>{instance.label}</span>
-                  <strong class="connection-state" data-state={instance.kind === 'local' ? localEngineConnectionState : instance.connectionState} data-testid={instance.kind === 'local' ? 'local-engine-connection' : undefined}>{instance.kind === 'local' ? localEngineConnectionLabel : formatConnectionStateLabel(instance.connectionState)}</strong>
-                  <small>{instance.apiBaseURL}</small>
-                  <p class="peer-pairing-status" aria-label="Peer pairing/negotiation status">
-                    <strong>Peer pairing/negotiation status</strong>: {buildPeerPairingStatusLine(instance)}
-                  </p>
-                  <span class="sr-only">Negotiating identity · Exchanging keys · Waiting on relay/mesh hop · Direct connection established · Revoked identity</span>
-                  <dl class="host-status-metrics" aria-label="Online/offline state, remaining transfer data, and average transfer rates">
-                    {#each buildReadableHostStatusMetrics(instance) as metric}
-                      <div>
-                        <dt>{metric.label}</dt>
-                        <dd>{metric.value}</dd>
-                      </div>
-                    {/each}
-                  </dl>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/each}
-      <p class="instance-note">Remote daemon instances can be added by API endpoint. API keys stay in the OS credential vault, not in this page.</p>
-    </section>
-    <section class="host-card" data-testid="instance-switcher" aria-label="Linked engines">
-      <div class="switcher-head">
-        <span class="eyebrow">Linked engines</span>
-        <button type="button" class="theme-toggle" data-testid="theme-toggle" on:click={toggleTheme}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
-      </div>
-      <p class="instance-note">This GUI opens on the local engine. Choose another linked engine to manage it here. Offline engines keep a pending-change count until they come online.</p>
-      {#if configInstances.length > 0}
-        <label>
-          Engine
-          <select data-testid="instance-dropdown" value={selectedConfigInstanceId} on:change={(event) => selectConfigInstance(event.currentTarget.value)}>
-            {#each configInstances as instance}
-              <option value={instance.instanceId}>{instance.label}</option>
-            {/each}
-          </select>
-        </label>
-        <div class="instance-list">
-          {#each configInstances as instance}
-            <button
-              type="button"
-              class="quick-switch"
-              class:active={selectedConfigInstanceId === instance.instanceId}
-              aria-current={selectedConfigInstanceId === instance.instanceId ? 'true' : undefined}
-              data-testid="instance-option"
-              on:click={() => selectConfigInstance(instance.instanceId)}
-            >
-              <span>{instance.local ? `${instance.label} · local` : instance.label}</span>
-              <strong class="connection-state" data-state={instance.online ? 'online' : 'offline'}>{instance.online ? 'Online' : 'Offline'}</strong>
-              <small>Last seen {instance.lastSeen || 'not yet'}</small>
-              <small data-testid="instance-pending-count">{instance.pendingChanges} pending</small>
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <p class="empty-state">No linked engines are loaded yet. The local engine stays selected.</p>
-      {/if}
-    </section>
-    <nav aria-label="Selected host sections">
-      {#each viewCatalog.filter((view) => !(dockerGUI && view.id === 'desktop-settings')) as view}
+  <aside class="host-sidebar" aria-label="Linked instances" data-testid="instance-switcher">
+    <div class="peer-list" role="listbox" aria-label="Linked engines">
+      {#each sidebarInstances as instance (instance.instanceId)}
         <button
           type="button"
-          class:active={activeView === view.id}
-          aria-current={activeView === view.id ? 'page' : undefined}
-          data-testid={`nav-${view.id}`}
-          on:click={() => activeView = view.id}
+          class="peer-row"
+          class:active={instance.selected}
+          aria-current={instance.selected ? 'page' : undefined}
+          data-testid="instance-option"
+          on:click={() => selectConfigInstance(instance.instanceId)}
         >
-          <span>{view.label}</span>
-          <small>{view.description}</small>
+          <span class="peer-line">
+            <span class="peer-name">
+              {#if instance.local}
+                <span data-testid="device-node-name">{instance.label}</span><span> · local</span>
+              {:else}
+                {instance.label}
+              {/if}
+            </span>
+            <strong class="connection-state" data-state={instance.online ? 'online' : 'offline'} data-testid={instance.local ? 'local-engine-connection' : undefined}>{instance.online ? 'Online' : 'Offline'}</strong>
+          </span>
+          <small class="peer-stats"><span data-testid="instance-average-rate">{formatPeerRate(instance.averageBytesPerSecond)}</span> · <span data-testid="instance-pending-bytes">{formatPeerPending(instance.pendingBytes)}</span></small>
         </button>
       {/each}
-    </nav>
+    </div>
   </aside>
 
   <section class="host-content" aria-live="polite">
@@ -1555,6 +1788,159 @@
         {/if}
       </section>
     {/if}
+    <div class="main-toolbar">
+      <button type="button" data-testid="node-options" on:click={openNodeOptions}>Options</button>
+      <div class="actions-menu">
+        <button type="button" data-testid="add-peer-menu" aria-haspopup="menu" aria-expanded={addPeerMenuOpen ? 'true' : 'false'} on:click={toggleAddPeerMenu}>Add peer</button>
+        {#if addPeerMenuOpen}
+          <div class="actions-menu-panel" role="menu" aria-label="Add peer">
+            <button type="button" role="menuitem" data-testid="show-pairing-code" on:click={showPairingCodeFromMenu} disabled={pairingLoading}>Show pairing code</button>
+            <button type="button" role="menuitem" data-testid="link-peer-form" on:click={() => { linkPeerFormOpen = true; }}>Link with pairing code</button>
+            {#if linkPeerFormOpen}
+              <label>
+                Pairing code
+                <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
+              </label>
+              <button type="button" data-testid="redeem-pairing-code" on:click={redeemPairingCodeFromMenu} disabled={pairingLoading}>Link</button>
+            {/if}
+          </div>
+        {/if}
+      </div>
+      <button type="button" class="theme-toggle" data-testid="theme-toggle" on:click={toggleTheme}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
+    </div>
+    {#if addPeerMenuOpen}
+      <button type="button" class="menu-backdrop" aria-label="Close add peer menu" on:click={closeAddPeerMenu}></button>
+    {/if}
+    <section class="onboarding-compact" aria-label="Onboarding" data-testid="onboarding-panel">
+      <p data-testid="onboarding-state">{onboardingStateText(selectedSidebarInstance)}</p>
+      {#if visiblePairingCode}
+        <p data-testid="pairing-code">Pairing code {visiblePairingCode}. Enter this one code on the other engine. It works once and expires if unused. The other engine looks it up on the DHT.</p>
+      {/if}
+      {#each onboardingCommands.filter((command) => command.targetInstanceId === selectedSidebarInstance?.instanceId && command.status === 'pending') as command (command.id)}
+        <p data-testid="onboarding-pending">{command.action === 'accept' ? 'Accept' : 'Pairing code'} is relayed and waiting for {selectedSidebarInstance?.label} to run it online.</p>
+      {/each}
+      {#if pairingMessage && !nodeOptionsOpen}
+        <p data-testid="pairing-message">{pairingMessage}</p>
+      {/if}
+    </section>
+    {#if folderEditor}
+      <form class="control-form folder-edit-view" data-testid="folder-editor" aria-label="Folder editor" on:submit|preventDefault={saveFolderEditor}>
+        <span class="eyebrow">Folder</span>
+        <h2>Edit {folderEditor.id}</h2>
+        <p>sendrecv exchanges files both ways. send only uploads. recv only downloads. An empty peer list shares with every paired peer. Ignore patterns use one pattern per line.</p>
+        <label>
+          Path
+          <input bind:value={folderEditPath} name="folderEditPath" data-testid="folder-edit-path" autocomplete="off" />
+        </label>
+        <label>
+          Mode
+          <select bind:value={folderEditMode} name="folderEditMode" data-testid="folder-edit-mode">
+            <option value="sendrecv">sendrecv</option>
+            <option value="sendonly">send</option>
+            <option value="recvonly">recv</option>
+          </select>
+        </label>
+        <label>
+          Ignore patterns
+          <textarea bind:value={folderEditIgnore} name="folderEditIgnore" data-testid="folder-edit-ignore" rows="4"></textarea>
+        </label>
+        <div>
+          <p>Shared peers</p>
+          {#if folderEditSharedPeers.length === 0}
+            <p>Every paired peer.</p>
+          {:else}
+            <ul aria-label="Shared peers">
+              {#each folderEditSharedPeers as peer}
+                <li>
+                  <span data-testid="folder-shared-peer">{peer}</span>
+                  <button type="button" data-testid="folder-shared-remove" on:click={() => removeFolderSharedPeer(peer)}>Remove {peer}</button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          <label>
+            Add peer ID
+            <input bind:value={folderEditPeerDraft} name="folderEditPeerDraft" data-testid="folder-shared-add-input" autocomplete="off" />
+          </label>
+          <button type="button" data-testid="folder-shared-add" on:click={addFolderSharedPeer}>Add shared peer</button>
+        </div>
+        <div class="lifecycle-actions">
+          <button type="submit" data-testid="folder-edit-save" disabled={loading || !hasDaemonCredential}>Save folder</button>
+          <button type="button" data-testid="folder-pause" on:click={() => pauseOrResumeFolder('pause')} disabled={loading || !hasDaemonCredential}>Pause folder</button>
+          <button type="button" data-testid="folder-resume" on:click={() => pauseOrResumeFolder('resume')} disabled={loading || !hasDaemonCredential}>Resume folder</button>
+          <button type="button" data-testid="folder-editor-remove" on:click={removeFolderFromEditor} disabled={loading || !hasDaemonCredential}>Remove folder</button>
+          <button type="button" on:click={() => { folderEditor = null; }}>Close</button>
+        </div>
+        {#if folderEditorRemoveConfirm}
+          <div class="confirm-dialog" role="dialog" data-testid="folder-editor-confirm">
+            <p>Stop sharing {folderEditor.id}? Files already on disk stay where they are.</p>
+            <button type="button" data-testid="folder-editor-confirm-remove" on:click={removeFolderFromEditor}>Remove folder</button>
+          </div>
+        {/if}
+        <p class="operation-status" data-testid="folder-edit-status">{folderEditorMessage}</p>
+      </form>
+    {:else}
+      <section class="connection-card" aria-label="Folders">
+        <h2 data-testid="selected-instance-title">{selectedSidebarInstance?.label ?? 'Folders'}</h2>
+        {#if selectedSidebarInstance && selectedSidebarInstance.local === false}
+          <p class="empty-state">This engine's folders stay on that instance. Options holds its settings.</p>
+        {:else if daemonFolders.length === 0}
+          <p class="empty-state">No folders are configured.</p>
+        {:else}
+          <ul class="folder-list" aria-label="Configured folders">
+            {#each daemonFolders as folder (folder.id)}
+              <li class="folder-row">
+                <button type="button" class="folder-summary" data-testid="folder-expand" aria-expanded={expandedFolderIds[folder.id] ? 'true' : 'false'} on:click={() => toggleFolder(folder.id)}>
+                  <span class="folder-chevron" aria-hidden="true">{expandedFolderIds[folder.id] ? '▾' : '▸'}</span>
+                  <span class="folder-name">{folder.id}</span>
+                  <span class="folder-meta">{folderStatusText(folder)}</span>
+                  <span class="folder-meta" data-testid="folder-progress">{folderProgressText(folder)}</span>
+                  <span class="folder-meta" data-testid="folder-size">{folderSizeText(folder)}</span>
+                </button>
+                {#if expandedFolderIds[folder.id]}
+                  <div class="folder-details">
+                    <p>{folder.path || 'No path'}</p>
+                    <p>{folderModeLabel(folder.mode)} · {folderShareText(folder)}</p>
+                    <div class="lifecycle-actions">
+                      <button type="button" data-testid="folder-open" on:click={() => openFolderEditor(folder)}>Edit</button>
+                      <button type="button" data-testid="folder-row-pause" on:click={() => pauseOrResumeFolderRow(folder)} disabled={loading || !hasDaemonCredential}>{folder.enabled === false ? 'Resume' : 'Pause'}</button>
+                      <button type="button" data-testid="folder-rescan" on:click={() => rescanFolderRow(folder)} disabled={loading || !hasDaemonCredential}>Rescan</button>
+                    </div>
+                  </div>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+          {#if folderRowMessage}
+            <p class="operation-status" data-testid="folder-row-status">{folderRowMessage}</p>
+          {/if}
+        {/if}
+      </section>
+    {/if}
+  </section>
+  {#if nodeOptionsOpen}
+    <div class="node-options-dialog" role="dialog" aria-modal="false" aria-label="Node options" data-testid="node-options-dialog">
+      <div class="node-options-bar">
+        <div>
+          <span class="eyebrow">Node options</span>
+          <h2>Options</h2>
+        </div>
+        <button type="button" data-testid="node-options-close" on:click={closeNodeOptions}>Close</button>
+      </div>
+      <nav class="node-options-nav" aria-label="Selected host sections">
+        {#each viewCatalog.filter((view) => !(dockerGUI && view.id === 'desktop-settings')) as view}
+          <button
+            type="button"
+            class:active={activeView === view.id}
+            aria-current={activeView === view.id ? 'page' : undefined}
+            data-testid={`nav-${view.id}`}
+            on:click={() => activeView = view.id}
+          >
+            <span>{view.label}</span>
+            <small>{view.description}</small>
+          </button>
+        {/each}
+      </nav>
     <section class="host-scope-banner" aria-label="Selected host scope">
       <span class="eyebrow">Selected host scope</span>
       <h2>{selectedHostContext.label}</h2>
@@ -1581,7 +1967,7 @@
     {#if dockerGUI}
       <h2>Device identity</h2>
       <dl class="host-status-grid" aria-label="Device identity">
-        <dt>Node</dt><dd data-testid="device-node-name">{status?.nodeName ?? 'Loading'}</dd>
+        <dt>Node</dt><dd>{status?.nodeName ?? 'Loading'}</dd>
         <dt>Identity</dt><dd>{status?.identityPublicKey ?? 'Loading'}</dd>
         <dt>Engine schema</dt><dd>{status?.engineSchemaVersion ?? '—'}</dd>
         <dt>Daemon</dt><dd>{status?.status ?? 'starting'}</dd>
@@ -1796,6 +2182,14 @@
 
     <form class="control-form" on:submit|preventDefault={submitWebGUIForm} aria-label="Web GUI form">
       <h3>Web GUI form</h3>
+      <p data-testid="web-gui-version">Web GUI version {status?.webGUI?.version || 'not installed'}</p>
+      <p data-testid="web-gui-update-check">
+        {#if status?.webGUI?.lastUpdateCheck}
+          Last update check {status.webGUI.lastUpdateCheck}. {status.webGUI.lastUpdateMessage || status.webGUI.lastUpdateResult}
+        {:else}
+          No web GUI update check yet.
+        {/if}
+      </p>
       <label>
         Action
         <select bind:value={webGUIFormAction} name="webGUIFormAction">
@@ -1916,14 +2310,16 @@
     {#if activeView === 'folders'}
       <section class="connection-card">
         <h2>Selected-host folders</h2>
-        <p>Live folder roots and modes from {selectedManagedInstance.label}. Add, update, and remove operations are available under Daemon settings and refresh this list after completion.</p>
+        <p>Folder editing opens in the main view. This list is the same set shown beside Options.</p>
         <button type="button" on:click={refreshOperationalState} disabled={loading || !hasDaemonCredential}>Refresh folders</button>
         {#if daemonFolders.length === 0}
           <p>No folders are configured.</p>
         {:else}
           <ul aria-label="Configured folders">
             {#each daemonFolders as folder}
-              <li><strong>{folder.id}</strong> · {folder.path ?? 'path unavailable'} · {folder.mode ?? 'mode unavailable'} · {folder.status ?? 'configured'}</li>
+              <li data-testid="folder-row">
+                <strong>{folder.id}</strong> · {folder.path ?? 'path unavailable'} · {folder.mode ?? 'mode unavailable'} · {folder.enabled === false ? 'paused' : (folder.status ?? 'configured')}
+              </li>
             {/each}
           </ul>
         {/if}
@@ -2051,17 +2447,8 @@
       <section class="connection-card">
         <h2>Identity pairing export/import</h2>
         <p>
-          This GUI is connected to the local engine automatically. Link a remote engine with a short pairing code or by pasting its pairing package. After either method, the engines store every reachable address, DHT identity, relay, and certificate pin, and fail over if the first address dies.
+          This GUI is connected to the local engine automatically. The instance selected in the list issues and accepts the one-time pairing code from the main panel. A remote or offline selection is relayed over the mesh and runs when that instance is online. Identity packages below are imported and exported by this engine. After either method, the engines store every reachable address, DHT identity, relay, and certificate pin, and fail over if the first address dies.
         </p>
-        <button type="button" data-testid="show-pairing-code" on:click={showPairingCode} disabled={pairingLoading}>Show pairing code</button>
-        {#if pairingCode}
-          <p data-testid="pairing-code">Pairing code {pairingCode}. Enter this one code on the other engine. It works once and expires if unused. The other engine looks it up on the DHT.</p>
-        {/if}
-        <label>
-          Remote pairing code
-          <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
-        </label>
-        <button type="button" data-testid="redeem-pairing-code" on:click={redeemRemotePairingCode} disabled={pairingLoading}>Link with pairing code</button>
         <p data-testid="pairing-advertise-url">
           This local engine advertises {status?.advertiseURL || 'its reachable API URL'}. Other engines use that address from the pairing package. You do not enter this engine's URL.
         </p>
@@ -2129,7 +2516,7 @@
         {#if pairingImportSummary}
           <p class="success">{pairingImportSummary}</p>
         {/if}
-        {#if pairingMessage}
+        {#if pairingMessage && nodeOptionsOpen}
           <p data-testid="pairing-message">{pairingMessage}</p>
         {/if}
       </section>
@@ -2280,7 +2667,8 @@
         </div>
       </section>
     {/if}
-  </section>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -2315,7 +2703,7 @@
   }
   .host-scoped-shell {
     display: grid;
-    grid-template-columns: minmax(17rem, 22rem) minmax(0, 1fr);
+    grid-template-columns: minmax(11rem, 14rem) minmax(0, 1fr);
     align-items: start;
     gap: 1rem;
     padding: 1rem;
@@ -2331,6 +2719,9 @@
       width: auto;
       padding: 1rem;
     }
+    .node-options-dialog {
+      left: 0;
+    }
   }
   .host-sidebar {
     position: sticky;
@@ -2338,65 +2729,11 @@
     display: grid;
     gap: 1rem;
   }
-  .host-card {
-    display: grid;
-    gap: 0.5rem;
-    padding: 1.25rem;
-    border: 1px solid var(--line);
-    border-radius: 1rem;
-    background: var(--surface);
-  }
-  .host-card h1,
-  .host-card p {
-    margin: 0;
-  }
   .eyebrow {
     color: var(--muted);
     font-size: 0.8rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-  }
-  .host-sidebar nav {
-    display: grid;
-    gap: 0.5rem;
-  }
-  .host-sidebar nav button {
-    display: grid;
-    gap: 0.25rem;
-    text-align: left;
-    background: var(--surface);
-    color: inherit;
-  }
-  .host-sidebar nav button.active,
-  .host-sidebar nav button[aria-current='page'] {
-    border-color: var(--accent);
-    background: #202a3d;
-  }
-  .host-sidebar nav small {
-    color: var(--muted);
-    line-height: 1.35;
-  }
-  .instance-group,
-  .instance-list {
-    display: grid;
-    gap: 0.5rem;
-  }
-  .instance-group-toggle,
-  .quick-switch {
-    display: grid;
-    gap: 0.25rem;
-    width: 100%;
-    text-align: left;
-    background: var(--surface-2);
-    color: inherit;
-  }
-  .instance-group-toggle {
-    border-color: #44506a;
-  }
-  .quick-switch.active,
-  .quick-switch[aria-current='true'] {
-    border-color: var(--accent);
-    background: #202a3d;
   }
   .connection-state {
     justify-self: start;
@@ -2406,61 +2743,9 @@
     color: #dbe7ff;
     font-size: 0.8rem;
   }
-  .connection-state[data-state='online'],
-  .connection-state[data-state='paired'] {
+  .connection-state[data-state='online'] {
     background: #1d5033;
     color: #c9ffd8;
-  }
-  .connection-state[data-state='failed'],
-  .connection-state[data-state='revoked'] {
-    background: #5a2525;
-    color: #ffd1d1;
-  }
-  .peer-pairing-status {
-    margin: 0;
-    padding: 0.4rem;
-    border-radius: 0.35rem;
-    background: #121b2a;
-    color: #d8e2f8;
-    line-height: 1.35;
-  }
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-  .host-status-metrics {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.35rem;
-    margin: 0;
-  }
-  .host-status-metrics div {
-    display: grid;
-    gap: 0.1rem;
-    padding: 0.35rem;
-    border-radius: 0.35rem;
-    background: var(--surface-2);
-  }
-  .host-status-metrics dt {
-    color: var(--muted);
-    font-size: 0.72rem;
-    text-transform: uppercase;
-  }
-  .host-status-metrics dd {
-    margin: 0;
-    color: var(--text);
-    font-weight: 700;
-  }
-  .instance-note {
-    color: var(--muted);
-    line-height: 1.4;
   }
   .host-content {
     display: grid;
@@ -2638,12 +2923,6 @@
   .confirm-dialog p {
     margin: 0;
   }
-  .switcher-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.5rem;
-  }
   .theme-toggle {
     background: transparent;
     color: var(--text);
@@ -2662,6 +2941,16 @@
   .connection-card, .host-scope-banner, .update-banner {
     width: min(52rem, 100%);
   }
+  .onboarding-compact {
+    display: grid;
+    gap: 0.35rem;
+    width: min(52rem, 100%);
+  }
+  .onboarding-compact p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
   .host-status-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
@@ -2676,5 +2965,188 @@
   .host-status-grid dd {
     margin: 0 0 0.5rem;
     overflow-wrap: anywhere;
+  }
+  .host-sidebar {
+    gap: 0.35rem;
+  }
+  .peer-list {
+    display: grid;
+    gap: 0.25rem;
+  }
+  .peer-row {
+    display: grid;
+    gap: 0.1rem;
+    width: 100%;
+    padding: 0.35rem 0.45rem;
+    text-align: left;
+    background: transparent;
+    color: inherit;
+    border-radius: 0.4rem;
+  }
+  .peer-row.active,
+  .peer-row[aria-current='true'] {
+    border-color: var(--accent);
+    background: #243028;
+  }
+  main[data-theme='light'] .peer-row.active,
+  main[data-theme='light'] .peer-row[aria-current='true'] {
+    background: #e5f3ea;
+  }
+  .peer-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.35rem;
+    min-width: 0;
+  }
+  .peer-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .peer-stats {
+    color: var(--muted);
+    font-size: 0.75rem;
+    line-height: 1.2;
+  }
+  .main-toolbar {
+    position: relative;
+    z-index: 22;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    width: min(52rem, 100%);
+  }
+  .actions-menu {
+    position: relative;
+  }
+  .menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    background: transparent;
+    border: 0;
+    padding: 0;
+  }
+  .actions-menu-panel {
+    position: absolute;
+    z-index: 21;
+    top: calc(100% + 0.25rem);
+    right: 0;
+    display: grid;
+    gap: 0.4rem;
+    min-width: 16rem;
+    padding: 0.55rem;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 0.45rem;
+  }
+  .actions-menu-panel label {
+    display: grid;
+    gap: 0.25rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .folder-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.25rem;
+  }
+  .folder-row {
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    background: var(--surface);
+  }
+  .folder-summary {
+    display: grid;
+    grid-template-columns: 1rem minmax(0, 1.4fr) minmax(4.5rem, 0.7fr) minmax(5.5rem, 0.7fr) minmax(4rem, 0.6fr);
+    gap: 0.5rem;
+    align-items: baseline;
+    width: 100%;
+    padding: 0.35rem 0.55rem;
+    text-align: left;
+    background: transparent;
+    color: var(--text);
+    border: 0;
+  }
+  .folder-chevron,
+  .folder-meta {
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .folder-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .folder-meta {
+    white-space: nowrap;
+  }
+  .folder-details {
+    display: grid;
+    gap: 0.4rem;
+    padding: 0.35rem 0.55rem 0.55rem;
+    border-top: 1px solid var(--line);
+  }
+  .folder-details p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  .folder-edit-view {
+    width: min(52rem, 100%);
+  }
+  .node-options-dialog {
+    position: fixed;
+    z-index: 40;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 16rem;
+    overflow: auto;
+    padding: 1rem 1.25rem 2rem;
+    background: var(--bg);
+    border-left: 1px solid var(--line);
+    display: grid;
+    align-content: start;
+    gap: 1rem;
+  }
+  .node-options-bar {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.25rem 0 0.75rem;
+    background: var(--bg);
+  }
+  .node-options-bar h2 {
+    margin: 0;
+  }
+  .node-options-nav {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.5rem;
+  }
+  .node-options-nav button {
+    display: grid;
+    gap: 0.25rem;
+    text-align: left;
+    background: var(--surface);
+    color: inherit;
+  }
+  .node-options-nav button.active,
+  .node-options-nav button[aria-current='page'] {
+    border-color: var(--accent);
+  }
+  .node-options-nav small {
+    color: var(--muted);
+    line-height: 1.35;
   }
 </style>

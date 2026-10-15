@@ -12,6 +12,8 @@ umask "${FSE_UMASK:-002}"
 # FSE_WEB_GUI_ENABLED, FSE_WEB_GUI_VERSION, FSE_WEB_GUI_PACKAGE,
 # FSE_WEB_GUI_INSTALL_DIR, FSE_WEB_GUI_LISTEN, FSE_WEB_GUI_CHECKSUM,
 # FSE_WEB_GUI_TLS_ENABLED, FSE_WEB_GUI_HTTPS_LISTEN, FSE_WEB_GUI_SCHEMA_INDEX,
+# FSE_WEB_GUI_AUTO_UPDATE, FSE_WEB_GUI_AUTO_UPDATE_INTERVAL, FSE_WEB_GUI_UPDATE_CATALOG,
+# FSE_WEB_GUI_UPDATE_PUBLIC_KEY,
 # FSE_NODE_NAME, FSE_ADVERTISE_URL, plus identity export
 # controls FSE_IDENTITY_EXPORT_PATH and FSE_IDENTITY_EXPORT_FORCE.
 if [ ! -f "$CONFIG_PATH" ]; then
@@ -28,14 +30,34 @@ if [ "${FSE_RUN_AS_ROOT:-false}" != "true" ]; then
     addgroup -g "$gid" -S fsegroup 2>/dev/null || true
     adduser -S -D -H -u "$uid" -G fsegroup fseuser 2>/dev/null || true
     chown -R "$uid:$gid" /config
-    if [ "${1:-start}" = "start" ]; then
-      exec su-exec "$uid:$gid" fse start "$CONFIG_PATH"
-    fi
-    exec su-exec "$uid:$gid" fse "$@"
   fi
 fi
 
-if [ "${1:-start}" = "start" ]; then
-  exec fse start "$CONFIG_PATH"
+# The shell stays PID 1 for `start` so a child os.Exit is printed even when the
+# process itself wrote nothing. TERM and INT are forwarded to that child.
+supervise_fse() {
+  if [ "$(id -u)" = "0" ] && [ "${FSE_RUN_AS_ROOT:-false}" != "true" ]; then
+    su-exec "$uid:$gid" "$@" &
+  else
+    "$@" &
+  fi
+  child=$!
+  trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT
+  set +e
+  wait "$child"
+  code=$?
+  set -e
+  trap - TERM INT
+  printf 'fse exited with status %s\n' "$code"
+  printf 'fse exited with status %s\n' "$code" >&2
+  exit "$code"
+}
+
+if [ "${1:-start}" != "start" ]; then
+  if [ "$(id -u)" = "0" ] && [ "${FSE_RUN_AS_ROOT:-false}" != "true" ]; then
+    exec su-exec "$uid:$gid" fse "$@"
+  fi
+  exec fse "$@"
 fi
-exec fse "$@"
+
+supervise_fse fse start "$CONFIG_PATH"

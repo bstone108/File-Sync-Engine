@@ -96,20 +96,39 @@ type Replica struct {
 	Records     map[string]InstanceRecord `json:"records,omitempty"`
 	Connections map[string]Connection     `json:"connections,omitempty"`
 	Pending     []Edit                    `json:"pending,omitempty"`
+	Onboarding  []OnboardingCommand       `json:"onboarding,omitempty"`
 	LocalClock  Clock                     `json:"localClock"`
+}
+
+// OnboardingCommand is one side of device onboarding for a single instance.
+// Any replica may carry it. Only the targeted instance generates the pairing
+// code or accepts the new device. Other instances relay it until that peer is
+// online and applies it.
+type OnboardingCommand struct {
+	ID               string `json:"id"`
+	TargetInstanceID string `json:"targetInstanceId"`
+	Action           string `json:"action"`
+	Code             string `json:"code,omitempty"`
+	ExpiresAt        string `json:"expiresAt,omitempty"`
+	Status           string `json:"status"`
+	Message          string `json:"message,omitempty"`
+	Clock            Clock  `json:"clock"`
+	OriginInstanceID string `json:"originInstanceId"`
 }
 
 // InstanceView is the GUI's row for one linked engine, including the stored
 // settings for that engine. Those settings belong to that engine.
 type InstanceView struct {
-	InstanceID     string         `json:"instanceId"`
-	Label          string         `json:"label"`
-	APIURL         string         `json:"apiURL,omitempty"`
-	Online         bool           `json:"online"`
-	LastSeen       string         `json:"lastSeen,omitempty"`
-	PendingChanges int            `json:"pendingChanges"`
-	Local          bool           `json:"local"`
-	Settings       map[string]any `json:"settings,omitempty"`
+	InstanceID            string         `json:"instanceId"`
+	Label                 string         `json:"label"`
+	APIURL                string         `json:"apiURL,omitempty"`
+	Online                bool           `json:"online"`
+	LastSeen              string         `json:"lastSeen,omitempty"`
+	PendingChanges        int            `json:"pendingChanges"`
+	Local                 bool           `json:"local"`
+	AverageBytesPerSecond int64          `json:"averageBytesPerSecond"`
+	PendingBytes          int64          `json:"pendingBytes"`
+	Settings              map[string]any `json:"settings,omitempty"`
 }
 
 // MergeStats reports what a merge changed.
@@ -124,6 +143,12 @@ const (
 	StatusPending    = "pending"
 	StatusApplied    = "applied"
 	StatusSuperseded = "superseded"
+
+	OnboardingIssue   = "issue"
+	OnboardingAccept  = "accept"
+	OnboardingPending = "pending"
+	OnboardingDone    = "done"
+	OnboardingFailed  = "failed"
 )
 
 var instanceIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -257,6 +282,77 @@ func (r *Replica) QueueEdit(target, key string, value any, deleted bool, wall in
 	return edit, nil
 }
 
+// QueueOnboarding records an issue or accept for target. The command stays
+// pending for every replica, including the target. The target's process is
+// what generates the code or accepts the device.
+func (r *Replica) QueueOnboarding(target, action, code string, wall int64) (OnboardingCommand, error) {
+	if err := ValidateInstanceID(target); err != nil {
+		return OnboardingCommand{}, err
+	}
+	switch action {
+	case OnboardingIssue:
+		if strings.TrimSpace(code) != "" {
+			return OnboardingCommand{}, fmt.Errorf("issuing a pairing code does not take a code")
+		}
+	case OnboardingAccept:
+		normalized, err := normalizeOnboardingCode(code)
+		if err != nil {
+			return OnboardingCommand{}, err
+		}
+		code = normalized
+	default:
+		return OnboardingCommand{}, fmt.Errorf("onboarding action must be issue or accept")
+	}
+	clock := r.Tick(wall)
+	command := OnboardingCommand{
+		ID:               fmt.Sprintf("onboard|%s|%s|%d|%d|%s", target, action, clock.Wall, clock.Counter, clock.NodeID),
+		TargetInstanceID: target,
+		Action:           action,
+		Code:             code,
+		Status:           OnboardingPending,
+		Clock:            clock,
+		OriginInstanceID: r.InstanceID,
+	}
+	r.Onboarding = append(r.Onboarding, command)
+	return command, nil
+}
+
+// CompleteOnboarding records the target's result. Relays cannot complete a
+// command aimed at another instance. A finished accept does not keep the
+// one-time code.
+func (r *Replica) CompleteOnboarding(id, status, code, expires, message string, wall int64) (OnboardingCommand, error) {
+	if status != OnboardingDone && status != OnboardingFailed {
+		return OnboardingCommand{}, fmt.Errorf("onboarding status must be done or failed")
+	}
+	for i := range r.Onboarding {
+		command := r.Onboarding[i]
+		if command.ID != id {
+			continue
+		}
+		if command.TargetInstanceID != r.InstanceID {
+			return OnboardingCommand{}, fmt.Errorf("only the selected instance completes its onboarding")
+		}
+		if command.Status != OnboardingPending {
+			return command, nil
+		}
+		command.Status = status
+		command.ExpiresAt = expires
+		command.Message = message
+		command.Code = ""
+		if command.Action == OnboardingIssue && status == OnboardingDone {
+			normalized, err := normalizeOnboardingCode(code)
+			if err != nil {
+				return OnboardingCommand{}, err
+			}
+			command.Code = normalized
+		}
+		command.Clock = r.Tick(wall)
+		r.Onboarding[i] = command
+		return command, nil
+	}
+	return OnboardingCommand{}, fmt.Errorf("onboarding command was not found")
+}
+
 // PublishConnection records how to reach instanceID. API keys are not accepted.
 func (r *Replica) PublishConnection(conn Connection, wall int64) (Connection, error) {
 	if err := ValidateInstanceID(conn.InstanceID); err != nil {
@@ -284,6 +380,37 @@ func (r *Replica) upsertEdit(edit Edit) {
 		}
 	}
 	r.Pending = append(r.Pending, edit)
+}
+
+func (r *Replica) upsertOnboarding(command OnboardingCommand) {
+	for i := range r.Onboarding {
+		if r.Onboarding[i].ID != command.ID {
+			continue
+		}
+		if Compare(command.Clock, r.Onboarding[i].Clock) > 0 {
+			r.Onboarding[i] = command
+		}
+		return
+	}
+	r.Onboarding = append(r.Onboarding, command)
+}
+
+func normalizeOnboardingCode(code string) (string, error) {
+	var compact strings.Builder
+	for _, r := range strings.ToUpper(strings.TrimSpace(code)) {
+		if r == '-' || r == ' ' {
+			continue
+		}
+		if !strings.ContainsRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", r) {
+			return "", fmt.Errorf("pairing code is invalid")
+		}
+		compact.WriteRune(r)
+	}
+	if compact.Len() != 16 {
+		return "", fmt.Errorf("pairing code is invalid")
+	}
+	raw := compact.String()
+	return raw[0:4] + "-" + raw[4:8] + "-" + raw[8:12] + "-" + raw[12:16], nil
 }
 
 // Merge folds remote into a copy of local. The result keeps local's instance
@@ -357,7 +484,23 @@ func Merge(local, remote Replica) (Replica, MergeStats) {
 		}
 		out.upsertEdit(merged)
 	}
+	for _, command := range remote.Onboarding {
+		if ValidateInstanceID(command.TargetInstanceID) != nil {
+			continue
+		}
+		if command.Action != OnboardingIssue && command.Action != OnboardingAccept {
+			continue
+		}
+		if command.Action == OnboardingAccept && command.Code != "" {
+			if _, err := normalizeOnboardingCode(command.Code); err != nil {
+				continue
+			}
+		}
+		out.witness(command.Clock)
+		out.upsertOnboarding(command)
+	}
 	sort.Slice(out.Pending, func(i, j int) bool { return out.Pending[i].ID < out.Pending[j].ID })
+	sort.Slice(out.Onboarding, func(i, j int) bool { return Compare(out.Onboarding[i].Clock, out.Onboarding[j].Clock) < 0 })
 	return out, stats
 }
 
@@ -467,5 +610,6 @@ func cloneReplica(in Replica) Replica {
 		out.Connections[id] = conn
 	}
 	out.Pending = append([]Edit(nil), in.Pending...)
+	out.Onboarding = append([]OnboardingCommand(nil), in.Onboarding...)
 	return out
 }

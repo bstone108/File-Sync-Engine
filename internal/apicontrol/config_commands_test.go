@@ -2,12 +2,15 @@ package apicontrol
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/metadatastore"
+	"filesyncengine/internal/state"
 )
 
 func TestHandlePeerFolderDiscoveryCommandsMutateConfig(t *testing.T) {
@@ -65,6 +68,88 @@ func TestHandlePeerFolderDiscoveryCommandsMutateConfig(t *testing.T) {
 	}
 	if !cfg.Discovery.DHT || !cfg.Discovery.Local || cfg.Discovery.DHTNamespace != "fse-test/v1" || len(cfg.Discovery.NetworkHints.PublishedPortMappings) != 1 {
 		t.Fatalf("discovery command did not persist expected discovery config: %+v", cfg.Discovery)
+	}
+}
+
+func TestFolderCommandEditsIgnorePeersAndPause(t *testing.T) {
+	configPath := writeCommandConfig(t)
+	folderPath := filepath.Join(t.TempDir(), "docs")
+	ignore := []string{"*.tmp", "cache/"}
+	shared := []string{"peer-a", "peer-a", " peer-b "}
+	if _, err := HandleFolderCommand(configPath, api.FolderCommandRequest{
+		Action: "add", ID: "docs", Path: folderPath, Mode: "send", Ignore: &ignore, SharedWith: &shared,
+	}); err != nil {
+		t.Fatalf("add folder: %v", err)
+	}
+	cleared := []string{}
+	if _, err := HandleFolderCommand(configPath, api.FolderCommandRequest{
+		Action: "update", ID: "docs", Mode: "recv", SharedWith: &cleared, Ignore: &ignore,
+	}); err != nil {
+		t.Fatalf("update folder: %v", err)
+	}
+	cfg, err := config.LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	folder := cfg.Folders[0]
+	if folder.Mode != config.ModeReceiveOnly || len(folder.SharedWith) != 0 || len(folder.Ignore) != 2 || folder.Ignore[0] != "*.tmp" {
+		t.Fatalf("folder edit = %+v", folder)
+	}
+	if _, err := HandleFolderCommand(configPath, api.FolderCommandRequest{Action: "pause", ID: "docs"}); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	cfg, err = config.LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("reload paused: %v", err)
+	}
+	if cfg.Folders[0].Enabled {
+		t.Fatal("paused folder is still enabled")
+	}
+	if _, err := HandleFolderCommand(configPath, api.FolderCommandRequest{Action: "resume", ID: "docs"}); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	cfg, err = config.LoadFile(configPath)
+	if err != nil {
+		t.Fatalf("reload resumed: %v", err)
+	}
+	if !cfg.Folders[0].Enabled || cfg.Folders[0].Mode != config.ModeReceiveOnly {
+		t.Fatalf("resume changed the folder: %+v", cfg.Folders[0])
+	}
+}
+
+func TestFolderCommandRescanIndexesTheFolder(t *testing.T) {
+	root := t.TempDir()
+	folderPath := filepath.Join(root, "docs")
+	if err := os.MkdirAll(folderPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folderPath, "seed.txt"), []byte("seed-data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "config.json")
+	cfg := config.Config{
+		NodeName: "node-a",
+		Folders:  []config.FolderConfig{{ID: "docs", Path: folderPath, Mode: config.ModeSendReceive, BlockSize: 4096}},
+	}
+	encoded, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.WriteFileAtomic(configPath, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := HandleFolderCommand(configPath, api.FolderCommandRequest{Action: "rescan", ID: "docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Action != "rescan" || resp.ID != "docs" || resp.Status != "accepted" || resp.Message != "folder rescan accepted" {
+		t.Fatalf("response = %+v", resp)
+	}
+	store := state.NewJSONStore(metadatastore.DefaultStatePath(configPath))
+	defer store.Close()
+	if _, ok, err := store.LoadManifest("docs", "seed.txt"); err != nil || !ok {
+		t.Fatalf("stored manifest missing after rescan: ok=%v err=%v", ok, err)
 	}
 }
 

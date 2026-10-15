@@ -62,6 +62,7 @@ The `backup` object reports whether this node is configured as a backup destinat
   "folders": 2,
   "peers": 3,
   "status": "running",
+  "webGUI": {"enabled": true, "version": "2026.10.15.05", "lastUpdateCheck": "2026-10-15T23:00:00Z", "lastUpdateResult": "current", "lastUpdateMessage": "Web GUI 2026.10.15.05 is already the newest package compatible with this engine.", "autoUpdate": true},
   "maintenance": {"enabled": false},
   "backup": {
     "enabled": true,
@@ -92,7 +93,7 @@ The `backup` object reports whether this node is configured as a backup destinat
 GET /v1/schema
 ```
 
-Returns `{"engineSchemaVersion":1}`. The same value is on `GET /v1/status` as `engineSchemaVersion`. GUI packages declare an inclusive `minEngineSchema`/`maxEngineSchema` range in `schema.json`, and `schema-versions.json` maps each published GUI package to that range. A container that opts into the web GUI installs only the newest package whose range includes this number.
+Returns `{"engineSchemaVersion":1}`. The same value is on `GET /v1/status` as `engineSchemaVersion`. GUI packages declare an inclusive `minEngineSchema`/`maxEngineSchema` range in `schema.json`, and `schema-versions.json` maps each published GUI package to that range. A container that opts into the web GUI installs only the newest package whose range includes this number. `GET /v1/status` also includes `webGUI.version`, `webGUI.lastUpdateCheck`, `webGUI.lastUpdateResult`, and `webGUI.autoUpdate` for the container web package. Those fields are empty when the web GUI environment is unset. Desktop Sparkle, Windows, and AppImage updates stay on their own path.
 
 `GET /v1/sync-journal?folder=<id>` returns the per-path revision journal used for bidirectional folder sync. It requires the daemon API key and is not exposed through the browser proxy. `POST /v1/pair-exchange` is the daemon-to-daemon pairing exchange. It is authenticated by the identity bootstrap proof, returns API keys, and is not proxied to the browser.
 
@@ -192,6 +193,10 @@ Returns configured/runtime folder state records:
     "path": "/data/docs",
     "mode": "sendrecv",
     "status": "configured",
+    "enabled": true,
+    "localBytes": 4096,
+    "syncPercent": 33,
+    "progressLabel": "33%",
     "index": {
       "mode": "lazy-hashing",
       "totalFiles": 3,
@@ -227,7 +232,7 @@ Returns configured/runtime folder state records:
 ]
 ```
 
-The `index` object is read from the prototype metadata store. It exposes quick-metadata/lazy-hashing/verified mode, queued hash work, provisional seeded-file read-only state, known blocks, and pending authoritative date correction counts. The `sync` object exposes local metadata cursor/hash status plus persisted deferred destructive-delete gates. `metadataCatchupPending` is true when at least one deferred delete is waiting for metadata catch-up rather than being ready to apply. The `warnings` object exposes compact locked/inaccessible state: recent scan read/open failures seen by the running daemon and uncommitted locked-apply pending writes persisted in the prototype store. Repair counters are present in the event shape, but full block repair queue execution is still planned.
+`localBytes` is the sum of indexed manifest sizes on this engine. `syncPercent` is the share of indexed files that are verified, and `progressLabel` is `Up to date`, `Paused`, `Not scanned`, or that percent. Paused and unscanned folders do not report up to date. The `index` object is read from the prototype metadata store. It exposes quick-metadata/lazy-hashing/verified mode, queued hash work, provisional seeded-file read-only state, known blocks, and pending authoritative date correction counts. The `sync` object exposes local metadata cursor/hash status plus persisted deferred destructive-delete gates. `metadataCatchupPending` is true when at least one deferred delete is waiting for metadata catch-up rather than being ready to apply. The `warnings` object exposes compact locked/inaccessible state: recent scan read/open failures seen by the running daemon and uncommitted locked-apply pending writes persisted in the prototype store. Repair counters are present in the event shape, but full block repair queue execution is still planned.
 
 ## Peer state
 
@@ -295,6 +300,8 @@ The revocation foundation is currently a prototype planning contract rather than
 
 `reachableAPIURL` and `apiCertificateSha256` are filled from the engine's `api.advertiseURL` (or optional `FSE_ADVERTISE_URL` / `FSE_ADVERTISE_URLS`, otherwise a verified host-reachable address from peer observations, the local GUI host, NAT, published ports, or local detection) when the GUI does not send them. Docker bridge and other container-internal addresses are omitted from the package and from the reconnect profile. The importer uses that same local advertise URL for the callback. When this node has no local group yet, the first import stores the package token so the bootstrap plan can run. An existing group token is not replaced. If the remote discovery id is already a paired peer, import returns `already paired with this engine` and does not exchange again. A repeat `/v1/pair-exchange` from a peer that already presented its stored API key succeeds without rotating keys. The browser response stays redacted.
 
+Authenticated `POST /v1/onboarding` with `targetInstanceId` and `action` of `issue` or `accept` asks that identity-linked instance to perform its side of onboarding. `accept` also sends `code`. The local instance runs the action immediately. A remote or offline target keeps the command pending in the config-sync replica until that instance is online and applies it. Relays store and forward the command and do not generate the code or accept the device themselves. `issue` returns the one-time code on the command once the target has hosted it. A finished `accept` does not keep the code.
+
 Either engine can also mint one pairing code with authenticated `POST /v1/pair-code`. The GUI shows and accepts that single string, shaped `XXXX-XXXX-XXXX-XXXX`. The first two groups are the DHT locator: the DHT namespace is a hash of that half, so the string itself is not the lookup key. The last two groups are the secret. They are never written to the DHT. They decrypt the published record and authenticate the pairing exchange, so knowing the DHT key alone cannot read the profile or pair. Inside the encrypted record, the profile is signed by the publisher identity key and includes the API certificate fingerprint. An unused code expires after `discovery.pairingCodeTTL`, which defaults to 1 hour and can be set up to 24 hours. The first successful redeem consumes the code atomically. A replay is rejected even when the code is still inside its expiry. Redeem and expiry both unpublish the DHT record. `POST /v1/pair-code/redeem` looks the code up and claims it. `POST /v1/pair-code/claim` is daemon-to-daemon, carries API keys, and is not proxied to the browser. A manual package import and a code redeem both exchange every reachable LAN, Tailscale, public, and relay address plus the DHT peer id and certificate pin. Later dials try those addresses in that order and fail over when an earlier address dies. Paired peers refresh the saved set through `POST /v1/link-profile`, which requires a signature by the paired identity key.
 
 ## Peer, folder, discovery, and config commands
@@ -336,10 +343,10 @@ Supported peer actions are `add`, `remove`, and `update`. The response includes 
 POST /v1/folder-command
 Content-Type: application/json
 
-{"action":"add","id":"docs","path":"/data/docs","mode":"sendrecv"}
+{"action":"update","id":"docs","path":"/data/docs","mode":"send","sharedWith":["peer-a"],"ignore":["*.tmp","cache/"]}
 ```
 
-Supported folder actions are `add`, `remove`, and `update`. The response includes only the action, folder id, status, and a compact message:
+`GET /v1/folders` includes `enabled`, `sharedWith`, `ignore`, `localBytes`, `syncPercent`, and `progressLabel` beside the live index. Supported folder actions are `add`, `remove`, `update`, `pause`, `resume`, and `rescan`. `rescan` runs a quick index of that folder and answers `folder rescan accepted`. `mode` accepts `sendrecv`, `sendonly` (`send`), and `recvonly` (`recv`). `sharedWith` and `ignore` replace those lists when present; an empty list clears them. An empty `sharedWith` shares the folder with every paired peer. `pause` sets the folder disabled so sync stays stopped across a restart, and `resume` enables it again. The response includes only the action, folder id, status, and a compact message:
 
 ```json
 {"action":"add","id":"docs","status":"accepted","message":"folder add accepted; daemon hot reload will adopt the config change"}

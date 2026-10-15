@@ -14,6 +14,7 @@ import (
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/guischema"
 	"filesyncengine/internal/schemaversion"
+	"filesyncengine/internal/webguiupdate"
 )
 
 type RuntimeDefaults struct {
@@ -114,6 +115,15 @@ func ReconcileWebGUI(configPath string, cfg config.Config, defaults RuntimeDefau
 			cfg.WebGUI.HTTPSListen = ""
 		}
 		return cfg, writeConfig(configPath, cfg)
+	}
+	if !webguiupdate.AutoUpdateEnabled(os.Getenv(webguiupdate.EnvEnabled), os.Getenv(webguiupdate.EnvAuto)) {
+		if cfg.WebGUI.PackagePath != "" && cfg.WebGUI.Version != "" && cfg.WebGUI.ChecksumSHA256 != "" {
+			cfg.WebGUI.Enabled = true
+			fmt.Fprintln(os.Stderr, "web GUI auto-update is off; keeping the installed package")
+			return cfg, writeConfig(configPath, cfg)
+		}
+		fmt.Fprintln(os.Stderr, "web GUI auto-update is off and no package is configured")
+		return disableWebGUI(configPath, cfg)
 	}
 	index := os.Getenv("FSE_WEB_GUI_SCHEMA_INDEX")
 	if index == "" {

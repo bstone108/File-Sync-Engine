@@ -1,6 +1,7 @@
 package apicontrol
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,9 @@ import (
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/configsync"
+	"filesyncengine/internal/link"
+	"filesyncengine/internal/linkstats"
+	"filesyncengine/internal/peeridentity"
 )
 
 func apiLogging(level config.LogLevel) api.ConfigUpdateRequest {
@@ -55,6 +59,30 @@ func loggingLevel(t *testing.T, configPath string) string {
 		t.Fatal(err)
 	}
 	return string(cfg.Logging.Level)
+}
+
+func TestConfigSyncViewIncludesPeerTransferStats(t *testing.T) {
+	path := writeSyncConfig(t, "engine-stats", "info")
+	linkstats.Default.SetPending("engine-stats", 2048)
+	t.Cleanup(func() { linkstats.Default.SetPending("engine-stats", 0) })
+
+	view, err := HandleConfigSync(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Instances) == 0 || !view.Instances[0].Local {
+		t.Fatalf("instances = %+v", view.Instances)
+	}
+	if view.Instances[0].PendingBytes != 2048 {
+		t.Fatalf("local pending bytes = %d", view.Instances[0].PendingBytes)
+	}
+	raw, err := json.Marshal(view.Instances[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"averageBytesPerSecond"`) || !strings.Contains(string(raw), `"pendingBytes"`) {
+		t.Fatalf("instance json = %s", raw)
+	}
 }
 
 func TestConfigSyncDoesNotAdoptAnotherInstancesSettings(t *testing.T) {
@@ -207,5 +235,73 @@ func TestLocalConfigUpdatePublishesOnlyTheLocalRecord(t *testing.T) {
 	}
 	if value := other.OwnRecord().Fields["logging.level"].Value; value != nil && value != "" {
 		t.Fatalf("engine B own record = %#v", other.OwnRecord())
+	}
+}
+
+func TestOnboardingIssuesLocallyAndRelaysToAnotherInstance(t *testing.T) {
+	identity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{
+		"nodeName":"engine-onboard",
+		"listen":[],
+		"api":{"listen":"127.0.0.1:0","key":"api-secret","advertiseURL":"http://engine-onboard:22420"},
+		"identity":{"privateKey":"` + identity.PrivateKey + `","publicKey":"` + identity.PublicKey + `","encryptionLevel":4},
+		"logging":{"level":"info","output":"stderr"},
+		"discovery":{"disabled":true,"dht":false,"local":false},
+		"peers":[],
+		"folders":[]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	SetLinkService(link.NewService(link.NewMemoryDirectory()))
+	t.Cleanup(func() { SetLinkService(link.NewService(link.UnavailableDirectory{})) })
+
+	view, err := HandleConfigSync(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRaw, err := json.Marshal(map[string]string{"targetInstanceId": view.LocalInstanceID, "action": "issue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := HandleOnboarding(context.Background(), path, localRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.Command.Status != configsync.OnboardingDone || strings.Count(issued.Command.Code, "-") != 3 {
+		t.Fatalf("local issue = %+v", issued.Command)
+	}
+	if !strings.Contains(issued.Command.Message, "is ready") {
+		t.Fatalf("message = %q", issued.Command.Message)
+	}
+
+	remoteID := "44444444-4444-4444-8444-444444444444"
+	remoteRaw, err := json.Marshal(map[string]string{
+		"targetInstanceId": remoteID,
+		"action":           "accept",
+		"code":             "ABCD-EFGH-JKMN-PQRS",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := HandleOnboarding(context.Background(), path, remoteRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.Command.Status != configsync.OnboardingPending || queued.Command.TargetInstanceID != remoteID || queued.Command.Code != "ABCD-EFGH-JKMN-PQRS" {
+		t.Fatalf("remote accept = %+v", queued.Command)
+	}
+	stored := syncReplica(t, path)
+	if stored.InstanceID == remoteID {
+		t.Fatal("relay adopted the target id")
+	}
+	for _, command := range stored.Onboarding {
+		if command.ID == queued.Command.ID && command.Status != configsync.OnboardingPending {
+			t.Fatalf("relay executed another instance's onboarding: %+v", command)
+		}
 	}
 }
