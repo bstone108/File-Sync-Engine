@@ -50,7 +50,7 @@ func ExchangePair(ctx context.Context, remoteAPIURL, remoteCertSHA256 string, of
 		return PairAcceptance{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client, err := pinnedClient(remoteAPIURL, remoteCertSHA256)
+	client, err := verifyPinnedPeerCertificateClient(remoteAPIURL, remoteCertSHA256)
 	if err != nil {
 		return PairAcceptance{}, err
 	}
@@ -76,7 +76,10 @@ func ExchangePair(ctx context.Context, remoteAPIURL, remoteCertSHA256 string, of
 	return accepted, nil
 }
 
-func pinnedClient(endpoint, pin string) (*http.Client, error) {
+// verifyPinnedPeerCertificateClient trusts only the pinned leaf certificate.
+// Go requires InsecureSkipVerify so the self-signed daemon certificate can reach
+// VerifyPeerCertificate, which checks the SHA-256 fingerprint.
+func verifyPinnedPeerCertificateClient(endpoint, pin string) (*http.Client, error) {
 	if !strings.HasPrefix(endpoint, "https://") {
 		return &http.Client{Timeout: 30 * time.Second}, nil
 	}

@@ -1478,10 +1478,10 @@
         <input bind:value={peerFormEndpoint} name="peerFormEndpoint" autocomplete="off" placeholder="tcp://host:port or https://host" />
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit peer command</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('peer').phase} aria-label="Peer operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('peer'))}
-        {#if getLocalControlOperationState('peer').detail}
-          <span>{getLocalControlOperationState('peer').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.peer.phase} aria-label="Peer operation status">
+        {localControlOperationStates.peer.phase}: {localControlOperationStates.peer.summary}
+        {#if localControlOperationStates.peer.detail}
+          <span>{localControlOperationStates.peer.detail}</span>
         {/if}
       </p>
     </form>
@@ -1517,10 +1517,10 @@
         <input bind:value={folderFormSharedWith} name="folderFormSharedWith" data-testid="folder-shared-with" autocomplete="off" placeholder="empty shares with every paired peer" />
       </label>
       <button type="button" data-testid="folder-submit" on:click={submitFolderForm} disabled={loading || !hasDaemonCredential}>Submit folder command</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('folder').phase} aria-label="Folder operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('folder'))}
-        {#if getLocalControlOperationState('folder').detail}
-          <span>{getLocalControlOperationState('folder').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.folder.phase} aria-label="Folder operation status">
+        {localControlOperationStates.folder.phase}: {localControlOperationStates.folder.summary}
+        {#if localControlOperationStates.folder.detail}
+          <span>{localControlOperationStates.folder.detail}</span>
         {/if}
       </p>
     </form>
@@ -1540,10 +1540,10 @@
         Local/LAN discovery enabled
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit discovery update</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('discovery').phase} aria-label="Discovery operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('discovery'))}
-        {#if getLocalControlOperationState('discovery').detail}
-          <span>{getLocalControlOperationState('discovery').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.discovery.phase} aria-label="Discovery operation status">
+        {localControlOperationStates.discovery.phase}: {localControlOperationStates.discovery.summary}
+        {#if localControlOperationStates.discovery.detail}
+          <span>{localControlOperationStates.discovery.detail}</span>
         {/if}
       </p>
     </form>
@@ -1567,10 +1567,10 @@
         <input bind:value={transferFormPeerID} name="transferFormPeerID" autocomplete="off" />
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit transfer command</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('transfer').phase} aria-label="Transfer operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('transfer'))}
-        {#if getLocalControlOperationState('transfer').detail}
-          <span>{getLocalControlOperationState('transfer').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.transfer.phase} aria-label="Transfer operation status">
+        {localControlOperationStates.transfer.phase}: {localControlOperationStates.transfer.summary}
+        {#if localControlOperationStates.transfer.detail}
+          <span>{localControlOperationStates.transfer.detail}</span>
         {/if}
       </p>
     </form>
@@ -1582,10 +1582,10 @@
         <input bind:value={maintenanceFormFolderID} name="maintenanceFormFolderID" autocomplete="off" />
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Run maintenance scrub</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('maintenance').phase} aria-label="Maintenance operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('maintenance'))}
-        {#if getLocalControlOperationState('maintenance').detail}
-          <span>{getLocalControlOperationState('maintenance').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.maintenance.phase} aria-label="Maintenance operation status">
+        {localControlOperationStates.maintenance.phase}: {localControlOperationStates.maintenance.summary}
+        {#if localControlOperationStates.maintenance.detail}
+          <span>{localControlOperationStates.maintenance.detail}</span>
         {/if}
       </p>
     </form>
@@ -1603,10 +1603,10 @@
         </select>
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit web GUI command</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('webGUI').phase} aria-label="Web GUI operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('webGUI'))}
-        {#if getLocalControlOperationState('webGUI').detail}
-          <span>{getLocalControlOperationState('webGUI').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.webGUI.phase} aria-label="Web GUI operation status">
+        {localControlOperationStates.webGUI.phase}: {localControlOperationStates.webGUI.summary}
+        {#if localControlOperationStates.webGUI.detail}
+          <span>{localControlOperationStates.webGUI.detail}</span>
         {/if}
       </p>
     </form>
@@ -1624,10 +1624,10 @@
         </select>
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit non-secret config patch</button>
-      <p class="operation-status" data-phase={getLocalControlOperationState('config').phase} aria-label="Config operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('config'))}
-        {#if getLocalControlOperationState('config').detail}
-          <span>{getLocalControlOperationState('config').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.config.phase} aria-label="Config operation status">
+        {localControlOperationStates.config.phase}: {localControlOperationStates.config.summary}
+        {#if localControlOperationStates.config.detail}
+          <span>{localControlOperationStates.config.detail}</span>
         {/if}
       </p>
     </form>
@@ -1641,10 +1641,10 @@
         <button type="button" on:click={refreshAPITrustStatus} disabled={loading || !hasDaemonCredential}>Fetch API trust status</button>
         <button type="button" on:click={pinActiveAPICertificateForSelectedHost} disabled={loading || !hasDaemonCredential || !apiTrustStatus?.certificateSha256}>Pin active certificate</button>
       </div>
-      <p class="operation-status" data-phase={getLocalControlOperationState('apiTrust').phase} aria-label="API trust operation status">
-        {renderLocalControlOperationSummary(getLocalControlOperationState('apiTrust'))}
-        {#if getLocalControlOperationState('apiTrust').detail}
-          <span>{getLocalControlOperationState('apiTrust').detail}</span>
+      <p class="operation-status" data-phase={localControlOperationStates.apiTrust.phase} aria-label="API trust operation status">
+        {localControlOperationStates.apiTrust.phase}: {localControlOperationStates.apiTrust.summary}
+        {#if localControlOperationStates.apiTrust.detail}
+          <span>{localControlOperationStates.apiTrust.detail}</span>
         {/if}
       </p>
       <p>{apiTrustStatusSummary()}</p>

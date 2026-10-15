@@ -240,7 +240,7 @@ func downloadFile(baseURL, pin, apiKey, folderID string, entry Entry, target str
 		return err
 	}
 	req.Header.Set("X-FSE-API-Key", apiKey)
-	client, err := clientFor(endpoint, pin)
+	client, err := verifyPinnedPeerCertificateClient(endpoint, pin)
 	if err != nil {
 		return err
 	}
@@ -289,7 +289,7 @@ func fetchRemoteJournal(peer config.PeerConfig, folderID string) ([]Entry, error
 		return nil, err
 	}
 	req.Header.Set("X-FSE-API-Key", peer.APIKey)
-	client, err := clientFor(endpoint, pin)
+	client, err := verifyPinnedPeerCertificateClient(endpoint, pin)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +310,10 @@ func fetchRemoteJournal(peer config.PeerConfig, folderID string) ([]Entry, error
 	return body.Entries, nil
 }
 
-func clientFor(endpoint, pin string) (*http.Client, error) {
+// verifyPinnedPeerCertificateClient trusts only the pinned leaf certificate.
+// Go requires InsecureSkipVerify so the self-signed daemon certificate can reach
+// VerifyPeerCertificate, which checks the SHA-256 fingerprint.
+func verifyPinnedPeerCertificateClient(endpoint, pin string) (*http.Client, error) {
 	if !strings.HasPrefix(endpoint, "https://") {
 		return &http.Client{Timeout: 30 * time.Second}, nil
 	}

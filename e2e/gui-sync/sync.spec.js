@@ -28,12 +28,10 @@ async function addSharedFolder(page) {
   await page.getByTestId('nav-daemon-settings').click();
   await page.getByTestId('folder-id').fill('shared');
   await page.getByTestId('folder-path').fill('/data/shared');
-  await page.getByTestId('folder-submit').click();
-  await expect.poll(async () => {
-    const status = await page.getByLabel('Folder operation status').innerText().catch(() => '');
-    const body = await page.locator('body').innerText().catch(() => '');
-    return `${status}\n${body}`.slice(0, 2000);
-  }, { timeout: 20000 }).toContain('folder add accepted');
+  const submit = page.getByTestId('folder-submit');
+  await submit.scrollIntoViewIfNeeded();
+  await submit.click();
+  await expect(page.getByLabel('Folder operation status')).toContainText('folder add accepted');
 }
 
 function compose(args, capture = false) {
