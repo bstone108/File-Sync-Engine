@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/configsync"
 	"filesyncengine/internal/link"
@@ -17,9 +19,10 @@ import (
 
 // ConfigSyncResponse is the redacted view returned to a GUI.
 type ConfigSyncResponse struct {
-	GroupID         string                    `json:"groupId"`
-	LocalInstanceID string                    `json:"localInstanceId"`
-	Instances       []configsync.InstanceView `json:"instances"`
+	GroupID         string                         `json:"groupId"`
+	LocalInstanceID string                         `json:"localInstanceId"`
+	Instances       []configsync.InstanceView      `json:"instances"`
+	Onboarding      []configsync.OnboardingCommand `json:"onboarding,omitempty"`
 }
 
 // ConfigSyncMergeResponse is exchanged between engines. It carries the replica
@@ -40,10 +43,26 @@ type configSyncMergeRequest struct {
 	Replica configsync.Replica `json:"replica"`
 }
 
+type onboardingRequest struct {
+	TargetInstanceID string `json:"targetInstanceId"`
+	Action           string `json:"action"`
+	Code             string `json:"code"`
+}
+
+// OnboardingResponse is the GUI view after queueing or finishing one
+// onboarding action for the selected instance.
+type OnboardingResponse struct {
+	ConfigSyncResponse
+	Command configsync.OnboardingCommand `json:"command"`
+}
+
 // HandleConfigSync returns linked instances for the GUI. The local engine is first.
 func HandleConfigSync(configPath string) (ConfigSyncResponse, error) {
 	store, replica, err := loadPublishedReplica(configPath)
 	if err != nil {
+		return ConfigSyncResponse{}, err
+	}
+	if err := executePendingOnboarding(context.Background(), configPath, &replica); err != nil {
 		return ConfigSyncResponse{}, err
 	}
 	if err := store.Save(replica); err != nil {
@@ -100,6 +119,9 @@ func HandleConfigSyncMerge(configPath string, raw json.RawMessage) (ConfigSyncMe
 			return ConfigSyncMergeResponse{}, err
 		}
 	}
+	if err := executePendingOnboarding(context.Background(), configPath, &merged); err != nil {
+		return ConfigSyncMergeResponse{}, err
+	}
 	if err := store.Save(merged); err != nil {
 		return ConfigSyncMergeResponse{}, err
 	}
@@ -128,7 +150,70 @@ func ExchangeConfigSync(ctx context.Context, configPath string, peer config.Peer
 		return err
 	}
 	merged, _ := configsync.Merge(local, remote.Replica)
+	if err := executePendingOnboarding(ctx, configPath, &merged); err != nil {
+		return err
+	}
 	return store.Save(merged)
+}
+
+func executePendingOnboarding(ctx context.Context, configPath string, replica *configsync.Replica) error {
+	pending := make([]string, 0)
+	for _, command := range replica.Onboarding {
+		if command.TargetInstanceID == replica.InstanceID && command.Status == configsync.OnboardingPending {
+			pending = append(pending, command.ID)
+		}
+	}
+	now := time.Now().UnixMilli()
+	for _, id := range pending {
+		command, ok := onboardingByID(*replica, id)
+		if !ok {
+			continue
+		}
+		var err error
+		switch command.Action {
+		case configsync.OnboardingIssue:
+			issued, issueErr := HandleIssuePairCode(configPath)
+			if issueErr != nil {
+				_, err = replica.CompleteOnboarding(id, configsync.OnboardingFailed, "", "", onboardingFailure(issueErr, command.Code), now)
+			} else {
+				_, err = replica.CompleteOnboarding(id, configsync.OnboardingDone, issued.Code, issued.ExpiresAt.UTC().Format(time.RFC3339), "Pairing code is ready. It can be used once.", now)
+			}
+		case configsync.OnboardingAccept:
+			response, redeemErr := HandleRedeemPairCode(ctx, configPath, api.PairCodeRedeemRequest{Code: command.Code})
+			if redeemErr != nil {
+				_, err = replica.CompleteOnboarding(id, configsync.OnboardingFailed, "", "", onboardingFailure(redeemErr, command.Code), now)
+			} else {
+				message := response.Message
+				if message == "" {
+					message = "paired by code"
+				}
+				_, err = replica.CompleteOnboarding(id, configsync.OnboardingDone, "", "", message, now)
+			}
+		default:
+			_, err = replica.CompleteOnboarding(id, configsync.OnboardingFailed, "", "", "unsupported onboarding action", now)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func onboardingByID(replica configsync.Replica, id string) (configsync.OnboardingCommand, bool) {
+	for _, command := range replica.Onboarding {
+		if command.ID == id {
+			return command, true
+		}
+	}
+	return configsync.OnboardingCommand{}, false
+}
+
+func onboardingFailure(err error, code string) string {
+	message := err.Error()
+	if code != "" {
+		message = strings.ReplaceAll(message, code, "the pairing code")
+	}
+	return message
 }
 
 func responseFrom(replica configsync.Replica) ConfigSyncResponse {
@@ -151,7 +236,43 @@ func responseFrom(replica configsync.Replica) ConfigSyncResponse {
 		GroupID:         replica.GroupID,
 		LocalInstanceID: replica.InstanceID,
 		Instances:       views,
+		Onboarding:      append([]configsync.OnboardingCommand(nil), replica.Onboarding...),
 	}
+}
+
+// HandleOnboarding queues pairing-code issue or accept for one linked instance.
+// The local instance runs it immediately. Any other instance keeps the command
+// pending so the mesh can deliver it, and that instance runs it when it is online.
+func HandleOnboarding(ctx context.Context, configPath string, raw json.RawMessage) (OnboardingResponse, error) {
+	var req onboardingRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return OnboardingResponse{}, fmt.Errorf("invalid onboarding request")
+	}
+	store, err := openStore(configPath)
+	if err != nil {
+		return OnboardingResponse{}, err
+	}
+	replica, err := store.Update(func(replica *configsync.Replica) error {
+		_, err := replica.QueueOnboarding(req.TargetInstanceID, req.Action, req.Code, time.Now().UnixMilli())
+		return err
+	})
+	if err != nil {
+		return OnboardingResponse{}, err
+	}
+	commandID := replica.Onboarding[len(replica.Onboarding)-1].ID
+	if req.TargetInstanceID == replica.InstanceID {
+		replica, err = store.Update(func(replica *configsync.Replica) error {
+			return executePendingOnboarding(ctx, configPath, replica)
+		})
+		if err != nil {
+			return OnboardingResponse{}, err
+		}
+	}
+	command, ok := onboardingByID(replica, commandID)
+	if !ok {
+		return OnboardingResponse{}, fmt.Errorf("onboarding command was not found")
+	}
+	return OnboardingResponse{ConfigSyncResponse: responseFrom(replica), Command: command}, nil
 }
 
 func openStore(configPath string) (*configsync.Store, error) {

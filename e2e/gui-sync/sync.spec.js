@@ -141,8 +141,10 @@ async function showDefaultPairingCode(page, service) {
   const cfg = JSON.parse(raw);
   const peers = cfg.discovery && cfg.discovery.dhtBootstrapPeers;
   expect(peers).toEqual(['/dnsaddr/bootstrap.libp2p.io']);
-  await openNodeOptions(page);
-  await page.getByTestId('nav-peers').click();
+  const close = page.getByTestId('node-options-close');
+  if (await close.isVisible().catch(() => false)) {
+    await close.click();
+  }
   await page.getByTestId('show-pairing-code').click();
   const code = page.getByTestId('pairing-code');
   await expect.poll(async () => {

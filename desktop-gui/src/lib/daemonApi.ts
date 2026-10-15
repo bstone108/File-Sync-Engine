@@ -288,14 +288,39 @@ export type ConfigSyncInstance = {
   settings?: Record<string, unknown>;
 };
 
+export type OnboardingCommand = {
+  id: string;
+  targetInstanceId: string;
+  action: 'issue' | 'accept' | string;
+  code?: string;
+  expiresAt?: string;
+  status: 'pending' | 'done' | 'failed' | string;
+  message?: string;
+};
+
 export type ConfigSyncView = {
   groupId: string;
   localInstanceId: string;
   instances: ConfigSyncInstance[];
+  onboarding?: OnboardingCommand[];
+};
+
+export type OnboardingResponse = ConfigSyncView & {
+  command: OnboardingCommand;
 };
 
 export async function fetchConfigSync(settings: DaemonConnectionSettings): Promise<ConfigSyncView> {
   return await daemonAPIRequest<ConfigSyncView>(settings, '/v1/config-sync');
+}
+
+export async function queueOnboarding(
+  settings: DaemonConnectionSettings,
+  request: { targetInstanceId: string; action: 'issue' | 'accept'; code?: string }
+): Promise<OnboardingResponse> {
+  return await daemonAPIRequest<OnboardingResponse>(settings, '/v1/onboarding', {
+    method: 'POST',
+    body: jsonBody(request)
+  });
 }
 
 export async function queueConfigSyncEdit(settings: DaemonConnectionSettings, edit: { targetInstanceId: string; path: string; value: unknown }): Promise<ConfigSyncView> {

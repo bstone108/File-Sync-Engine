@@ -16,6 +16,9 @@ type ConfigSyncEditHandler func(context.Context, json.RawMessage) (any, error)
 // returns the merged replica so the peer can carry edits for offline engines.
 type ConfigSyncMergeHandler func(context.Context, json.RawMessage) (any, error)
 
+// OnboardingHandler queues or runs pairing-code onboarding for one instance.
+type OnboardingHandler func(context.Context, json.RawMessage) (any, error)
+
 func (s *Server) handleConfigSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -34,6 +37,13 @@ func (s *Server) handleConfigSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, response)
+}
+
+func (s *Server) handleOnboarding(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	handler := s.onboardingHandler
+	s.mu.RUnlock()
+	s.handleConfigSyncPost(w, r, handler)
 }
 
 func (s *Server) handleConfigSyncEdit(w http.ResponseWriter, r *http.Request) {

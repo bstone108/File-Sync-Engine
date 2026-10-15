@@ -748,6 +748,7 @@ type Server struct {
 	configSyncGetHandler       ConfigSyncGetHandler
 	configSyncEditHandler      ConfigSyncEditHandler
 	configSyncMergeHandler     ConfigSyncMergeHandler
+	onboardingHandler          OnboardingHandler
 	filesystemBrowseHandler    FilesystemBrowseHandler
 	configReadHandler          ConfigReadHandler
 	configUpdateHandler        ConfigUpdateHandler
@@ -802,6 +803,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/config-sync", s.requireKey(s.handleConfigSync))
 	mux.HandleFunc("/v1/config-sync/edit", s.requireKey(s.handleConfigSyncEdit))
 	mux.HandleFunc("/v1/config-sync/merge", s.requireKey(s.handleConfigSyncMerge))
+	mux.HandleFunc("/v1/onboarding", s.requireKey(s.handleOnboarding))
 	mux.HandleFunc("/v1/filesystem/browse", s.requireKey(s.handleFilesystemBrowse))
 	mux.HandleFunc("/v1/config", s.requireKey(s.handleConfig))
 	mux.HandleFunc("/v1/stop", s.requireKey(s.handleStop))
@@ -971,6 +973,12 @@ func (s *Server) SetConfigSyncEditHandler(handler ConfigSyncEditHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.configSyncEditHandler = handler
+}
+
+func (s *Server) SetOnboardingHandler(handler OnboardingHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onboardingHandler = handler
 }
 
 func (s *Server) SetConfigSyncMergeHandler(handler ConfigSyncMergeHandler) {
