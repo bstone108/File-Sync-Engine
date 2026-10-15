@@ -46,6 +46,10 @@ async function addSharedFolder(page) {
 
 async function changeLogLevel(page) {
   await page.getByTestId('nav-daemon-settings').click();
+  const localEngine = page.getByTestId('instance-option').filter({ hasText: '· local' });
+  if (await localEngine.count()) {
+    await localEngine.first().click();
+  }
   const select = page.locator('form[aria-label="Config patch form"] select[name="configPatchLoggingLevel"]');
   await select.scrollIntoViewIfNeeded();
   await select.selectOption('debug');
@@ -53,12 +57,16 @@ async function changeLogLevel(page) {
   await submit.scrollIntoViewIfNeeded();
   await submit.click();
   const status = page.getByLabel('Config operation status');
-  await expect(status).toContainText('config patch');
+  const accepted = 'config update accepted; daemon hot reload will adopt the config change';
+  await expect(status).toContainText('config patch request completed');
+  await expect(status).toContainText(accepted);
   await expect(status).not.toContainText('No config command has run yet');
   await expect(status).not.toContainText('idle:');
   const statusText = await status.innerText();
-  const accepted = 'config update accepted; daemon hot reload will adopt the config change';
-  expect(statusText.split(accepted).length - 1).toBe(1);
+  const copies = statusText.split(accepted).length - 1;
+  if (copies !== 1) {
+    throw new Error(`expected the config acceptance once, saw ${copies}: ${statusText}`);
+  }
 }
 
 async function pageShowsFolderError(page) {
