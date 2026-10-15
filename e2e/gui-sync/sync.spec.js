@@ -46,7 +46,8 @@ async function editSharedFolder(page) {
   if (await close.isVisible().catch(() => false)) {
     await close.click();
   }
-  await page.getByTestId('folder-open').filter({ hasText: 'shared' }).click();
+  await page.getByTestId('folder-expand').filter({ hasText: 'shared' }).click();
+  await page.getByTestId('folder-open').click();
   await expect(page.getByTestId('folder-editor')).toBeVisible();
   await page.getByTestId('folder-edit-mode').selectOption('sendonly');
   await page.getByTestId('folder-edit-ignore').fill('*.tmp\ncache/');
@@ -145,6 +146,7 @@ async function showDefaultPairingCode(page, service) {
   if (await close.isVisible().catch(() => false)) {
     await close.click();
   }
+  await page.getByTestId('add-peer-menu').click();
   await page.getByTestId('show-pairing-code').click();
   const code = page.getByTestId('pairing-code');
   await expect.poll(async () => {

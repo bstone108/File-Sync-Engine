@@ -192,6 +192,10 @@ Returns configured/runtime folder state records:
     "path": "/data/docs",
     "mode": "sendrecv",
     "status": "configured",
+    "enabled": true,
+    "localBytes": 4096,
+    "syncPercent": 33,
+    "progressLabel": "33%",
     "index": {
       "mode": "lazy-hashing",
       "totalFiles": 3,
@@ -227,7 +231,7 @@ Returns configured/runtime folder state records:
 ]
 ```
 
-The `index` object is read from the prototype metadata store. It exposes quick-metadata/lazy-hashing/verified mode, queued hash work, provisional seeded-file read-only state, known blocks, and pending authoritative date correction counts. The `sync` object exposes local metadata cursor/hash status plus persisted deferred destructive-delete gates. `metadataCatchupPending` is true when at least one deferred delete is waiting for metadata catch-up rather than being ready to apply. The `warnings` object exposes compact locked/inaccessible state: recent scan read/open failures seen by the running daemon and uncommitted locked-apply pending writes persisted in the prototype store. Repair counters are present in the event shape, but full block repair queue execution is still planned.
+`localBytes` is the sum of indexed manifest sizes on this engine. `syncPercent` is the share of indexed files that are verified, and `progressLabel` is `Up to date`, `Paused`, `Not scanned`, or that percent. Paused and unscanned folders do not report up to date. The `index` object is read from the prototype metadata store. It exposes quick-metadata/lazy-hashing/verified mode, queued hash work, provisional seeded-file read-only state, known blocks, and pending authoritative date correction counts. The `sync` object exposes local metadata cursor/hash status plus persisted deferred destructive-delete gates. `metadataCatchupPending` is true when at least one deferred delete is waiting for metadata catch-up rather than being ready to apply. The `warnings` object exposes compact locked/inaccessible state: recent scan read/open failures seen by the running daemon and uncommitted locked-apply pending writes persisted in the prototype store. Repair counters are present in the event shape, but full block repair queue execution is still planned.
 
 ## Peer state
 
@@ -341,7 +345,7 @@ Content-Type: application/json
 {"action":"update","id":"docs","path":"/data/docs","mode":"send","sharedWith":["peer-a"],"ignore":["*.tmp","cache/"]}
 ```
 
-`GET /v1/folders` includes `enabled`, `sharedWith`, and `ignore` beside the live index. Supported folder actions are `add`, `remove`, `update`, `pause`, and `resume`. `mode` accepts `sendrecv`, `sendonly` (`send`), and `recvonly` (`recv`). `sharedWith` and `ignore` replace those lists when present; an empty list clears them. An empty `sharedWith` shares the folder with every paired peer. `pause` sets the folder disabled so sync stays stopped across a restart, and `resume` enables it again. The response includes only the action, folder id, status, and a compact message:
+`GET /v1/folders` includes `enabled`, `sharedWith`, `ignore`, `localBytes`, `syncPercent`, and `progressLabel` beside the live index. Supported folder actions are `add`, `remove`, `update`, `pause`, `resume`, and `rescan`. `rescan` runs a quick index of that folder and answers `folder rescan accepted`. `mode` accepts `sendrecv`, `sendonly` (`send`), and `recvonly` (`recv`). `sharedWith` and `ignore` replace those lists when present; an empty list clears them. An empty `sharedWith` shares the folder with every paired peer. `pause` sets the folder disabled so sync stays stopped across a restart, and `resume` enables it again. The response includes only the action, folder id, status, and a compact message:
 
 ```json
 {"action":"add","id":"docs","status":"accepted","message":"folder add accepted; daemon hot reload will adopt the config change"}

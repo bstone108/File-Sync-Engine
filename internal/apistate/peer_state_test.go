@@ -4,11 +4,39 @@ import (
 	"path/filepath"
 	"testing"
 
+	"filesyncengine/internal/api"
 	"filesyncengine/internal/backup"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/linkstats"
 	"filesyncengine/internal/state"
 )
+
+func TestFolderProgressLabelsPausedUnscannedAndVerifiedShare(t *testing.T) {
+	cases := []struct {
+		name    string
+		enabled bool
+		index   api.FolderIndexState
+		sync    api.FolderSyncState
+		bytes   int64
+		percent int
+		label   string
+	}{
+		{name: "paused", enabled: false, index: api.FolderIndexState{TotalFiles: 2, VerifiedFiles: 2}, bytes: 10, label: "Paused"},
+		{name: "unscanned", enabled: true, label: "Not scanned"},
+		{name: "current", enabled: true, index: api.FolderIndexState{TotalFiles: 4, VerifiedFiles: 4}, bytes: 100, percent: 100, label: "Up to date"},
+		{name: "half", enabled: true, index: api.FolderIndexState{TotalFiles: 4, VerifiedFiles: 2}, bytes: 100, percent: 50, label: "50%"},
+		{name: "pending cap", enabled: true, index: api.FolderIndexState{TotalFiles: 4, VerifiedFiles: 4, UnknownFiles: 1}, bytes: 100, percent: 99, label: "99%"},
+		{name: "deferred", enabled: true, index: api.FolderIndexState{TotalFiles: 4, VerifiedFiles: 4}, sync: api.FolderSyncState{DeferredDeletes: 1}, bytes: 100, percent: 99, label: "99%"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			percent, label := FolderProgress(tc.enabled, tc.index, tc.sync, tc.bytes)
+			if percent != tc.percent || label != tc.label {
+				t.Fatalf("progress = %d %q, want %d %q", percent, label, tc.percent, tc.label)
+			}
+		})
+	}
+}
 
 func TestBuildPeerStateCopiesLinkStats(t *testing.T) {
 	linkstats.Default.SetPending("stats-peer", 4096)

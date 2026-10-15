@@ -2,12 +2,15 @@ package apicontrol
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/metadatastore"
+	"filesyncengine/internal/state"
 )
 
 func TestHandlePeerFolderDiscoveryCommandsMutateConfig(t *testing.T) {
@@ -111,6 +114,42 @@ func TestFolderCommandEditsIgnorePeersAndPause(t *testing.T) {
 	}
 	if !cfg.Folders[0].Enabled || cfg.Folders[0].Mode != config.ModeReceiveOnly {
 		t.Fatalf("resume changed the folder: %+v", cfg.Folders[0])
+	}
+}
+
+func TestFolderCommandRescanIndexesTheFolder(t *testing.T) {
+	root := t.TempDir()
+	folderPath := filepath.Join(root, "docs")
+	if err := os.MkdirAll(folderPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folderPath, "seed.txt"), []byte("seed-data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "config.json")
+	cfg := config.Config{
+		NodeName: "node-a",
+		Folders:  []config.FolderConfig{{ID: "docs", Path: folderPath, Mode: config.ModeSendReceive, BlockSize: 4096}},
+	}
+	encoded, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.WriteFileAtomic(configPath, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := HandleFolderCommand(configPath, api.FolderCommandRequest{Action: "rescan", ID: "docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Action != "rescan" || resp.ID != "docs" || resp.Status != "accepted" || resp.Message != "folder rescan accepted" {
+		t.Fatalf("response = %+v", resp)
+	}
+	store := state.NewJSONStore(metadatastore.DefaultStatePath(configPath))
+	defer store.Close()
+	if _, ok, err := store.LoadManifest("docs", "seed.txt"); err != nil || !ok {
+		t.Fatalf("stored manifest missing after rescan: ok=%v err=%v", ok, err)
 	}
 }
 
