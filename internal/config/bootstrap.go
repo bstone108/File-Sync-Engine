@@ -37,21 +37,6 @@ func EnsureFile(path string) (Config, bool, error) {
 		Discovery:   DiscoveryConfig{DHT: false, Local: true, DHTNamespace: "filesyncengine/v1", DHTBootstrapPeers: []string{"/dnsaddr/bootstrap.libp2p.io"}},
 		Metadata:    MetadataConfig{Backend: MetadataBackendJSON},
 		Maintenance: MaintenanceConfig{Enabled: false, Frequency: "6h", IdleOnly: true, MaxFilesPerRun: 100, MaxBytesPerRun: 104857600, AutoRepair: false},
-		Peers: []PeerConfig{{
-			ID:        "peer-example",
-			Endpoints: []EndpointConfig{{Kind: "manual", Address: "/ip4/192.0.2.10/tcp/22000/p2p/example"}, {Kind: "pipe", Address: "stdio"}},
-		}},
-		Folders: []FolderConfig{{
-			ID:        "docs",
-			Path:      "./docs",
-			Mode:      ModeSendReceive,
-			BlockSize: DefaultBlockSize,
-			Ignore:    []string{"*.tmp"},
-			Permissions: PermissionPolicy{
-				Mode: PermissionIgnore,
-			},
-			Maintenance: MaintenanceConfig{Enabled: false},
-		}},
 	}
 	if err := WriteFileAtomic(path, []byte(Skeleton(cfg)), 0o600); err != nil {
 		return Config{}, false, err
@@ -133,18 +118,17 @@ func Skeleton(cfg Config) string {
   // scrubMode can be "light-metadata", "sampled-blocks", or "full-blocks"; sampled mode uses sampleEveryNBlocks.
   // autoRepair defaults false: scrub detects and reports corruption, but engine-managed moves/replacements require explicit opt-in.
   "maintenance": {"enabled": false, "frequency": "6h", "idleOnly": true, "maxFilesPerRun": 100, "maxBytesPerRun": 104857600, "maxFilesPerDay": 1000, "maxBytesPerDay": 1073741824, "scrubMode": "light-metadata", "sampleEveryNBlocks": 16, "autoRepair": false},
-  // peers are authorized computers/devices. endpoints may be manual, relay, proxy, vpn, or pipe.
+  // peers are authorized computers/devices. A fresh install starts with none.
+  // endpoints may be manual, relay, proxy, vpn, or pipe.
   // Per-peer sendBytesPerSecond/receiveBytesPerSecond override the global cap when non-zero.
-  "peers": [
-    {"id": "peer-example", "sendBytesPerSecond": 0, "receiveBytesPerSecond": 0, "endpoints": [{"kind": "manual", "address": "/ip4/192.0.2.10/tcp/22000/p2p/example"}, {"kind": "pipe", "address": "stdio"}]}
-  ],
-  // folders define synchronized libraries. mode is sendrecv, sendonly, or recvonly.
+  "peers": [],
+  // folders define synchronized libraries. A fresh install starts with none.
+  // mode is sendrecv, sendonly, or recvonly.
   // permissions.mode is ignore, sync, default, or fixed. ignore lets OS defaults/umask decide.
-  "folders": [
-    {"id": "docs", "path": "./docs", "mode": "sendrecv", "blockSize": %d, "ignore": ["*.tmp"], "permissions": {"mode": "ignore"}, "maintenance": {"enabled": false, "frequency": "6h", "idleOnly": true, "maxFilesPerRun": 100, "maxBytesPerRun": 104857600, "scrubMode": "light-metadata", "sampleEveryNBlocks": 16}}
-  ]
+  // Example folder permissions: "permissions": {"mode": "ignore"}
+  "folders": []
 }
-`, cfg.NodeName, cfg.API.Listen, cfg.API.Key, cfg.Identity.PrivateKey, cfg.Identity.PublicKey, cfg.Identity.EncryptionLevel, cfg.Discovery.DHTNamespace, DefaultBlockSize)
+`, cfg.NodeName, cfg.API.Listen, cfg.API.Key, cfg.Identity.PrivateKey, cfg.Identity.PublicKey, cfg.Identity.EncryptionLevel, cfg.Discovery.DHTNamespace)
 }
 
 func stripJSONComments(data []byte) []byte {

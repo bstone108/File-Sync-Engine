@@ -3,8 +3,10 @@ package apicontrol
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/state"
@@ -57,6 +59,16 @@ func loadPatchedConfig(configPath string, req api.ConfigUpdateRequest) (config.C
 	if req.API != nil {
 		if req.API.Listen != nil {
 			cfg.API.Listen = *req.API.Listen
+		}
+		if req.API.AdvertiseURL != nil {
+			cfg.API.AdvertiseURL = strings.TrimSpace(*req.API.AdvertiseURL)
+			if cfg.API.AdvertiseURL != "" {
+				normalized, err := advertise.Normalize(cfg.API.AdvertiseURL, cfg)
+				if err != nil {
+					return config.Config{}, err
+				}
+				cfg.API.AdvertiseURL = normalized
+			}
 		}
 		if req.API.Encryption != nil {
 			cfg.API.Encryption = *req.API.Encryption
@@ -119,6 +131,9 @@ func localSettingsDocumentPatch(req api.ConfigUpdateRequest, cfg config.Config) 
 	if req.API != nil {
 		if req.API.Listen != nil {
 			settings["api.listen"] = cfg.API.Listen
+		}
+		if req.API.AdvertiseURL != nil {
+			settings["api.advertiseURL"] = cfg.API.AdvertiseURL
 		}
 		if req.API.Encryption != nil {
 			settings["api.encryption"] = cfg.API.Encryption

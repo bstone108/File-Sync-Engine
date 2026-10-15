@@ -105,6 +105,7 @@ func BuildState(opts StateBuildOptions) api.State {
 		NodeName:            opts.Config.NodeName,
 		EngineSchemaVersion: schemaversion.Engine,
 		IdentityPublicKey:   opts.Config.Identity.PublicKey,
+		AdvertiseURL:        opts.Config.API.AdvertiseURL,
 		StartedAt:           startedAt,
 		ConfigPath:          opts.ConfigPath,
 		Folders:             len(opts.Config.Folders),

@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/apicontrol"
 	"filesyncengine/internal/apistate"
@@ -129,6 +130,14 @@ func run(configPath string) {
 	cfg, _, err := config.EnsureAPIKey(configPath)
 	if err != nil {
 		exitCLIF("ensure api key: %v", err)
+	}
+	if ensured, advErr := advertise.Ensure(configPath); advErr != nil {
+		fmt.Fprintf(os.Stderr, "reachable API URL not configured: %v\n", advErr)
+	} else {
+		cfg = ensured
+		if cfg.API.AdvertiseURL != "" {
+			fmt.Fprintf(os.Stderr, "reachable API URL %s\n", cfg.API.AdvertiseURL)
+		}
 	}
 	if err := daemonlogging.Configure(cfg, configPath); err != nil {
 		exitCLIF("configure logging: %v", err)

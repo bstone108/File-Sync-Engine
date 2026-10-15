@@ -26,6 +26,7 @@ type State struct {
 	NodeName            string           `json:"nodeName"`
 	EngineSchemaVersion int              `json:"engineSchemaVersion,omitempty"`
 	IdentityPublicKey   string           `json:"identityPublicKey,omitempty"`
+	AdvertiseURL        string           `json:"advertiseURL,omitempty"`
 	StartedAt           time.Time        `json:"startedAt"`
 	ConfigPath          string           `json:"configPath"`
 	ConfigVersion       uint64           `json:"configVersion"`
@@ -413,8 +414,9 @@ type ConfigUpdateRequest struct {
 }
 
 type ConfigAPIUpdate struct {
-	Listen     *string                     `json:"listen,omitempty"`
-	Encryption *config.APIEncryptionConfig `json:"encryption,omitempty"`
+	Listen       *string                     `json:"listen,omitempty"`
+	AdvertiseURL *string                     `json:"advertiseURL,omitempty"`
+	Encryption   *config.APIEncryptionConfig `json:"encryption,omitempty"`
 }
 
 func rejectSecretConfigPatchFields(body []byte) error {

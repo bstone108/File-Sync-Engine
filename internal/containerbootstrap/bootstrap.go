@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/guischema"
 	"filesyncengine/internal/schemaversion"
@@ -69,6 +70,11 @@ func RunFromEnvironment(configPath string) error {
 		if err := writeConfig(configPath, cfg); err != nil {
 			return err
 		}
+	}
+	if err := advertise.Apply(&cfg, os.Getenv(advertise.EnvVar)); err != nil {
+		fmt.Fprintf(os.Stderr, "reachable API URL not configured: %v\n", err)
+	} else if cfg.API.AdvertiseURL != "" {
+		fmt.Fprintf(os.Stderr, "reachable API URL %s\n", cfg.API.AdvertiseURL)
 	}
 	cfg, err = ReconcileWebGUI(configPath, cfg, DefaultsFromEnvironment())
 	if err != nil {

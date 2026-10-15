@@ -156,8 +156,7 @@
   let configPatchLoggingLevel = 'info';
   const primaryIdentityPackageID = 'primary';
   const pairingGroupID = primaryIdentityPackageID;
-  let pairingReachableAPIURL = '';
-  let pairingLocalReachableAPIURL = '';
+  let advertiseOverride = '';
   let pairingPackage: IdentityPairingPackage | null = null;
   let pairingExportText = '';
   let pairingDownloadFilename = '';
@@ -190,6 +189,14 @@
     config: { phase: 'idle', command: 'config', summary: 'No config command has run yet.' },
     apiTrust: { phase: 'idle', command: 'API certificate trust', summary: 'API certificate trust status has not been checked yet.' }
   };
+  let peerOperationStatusText = 'idle: No peer command has run yet.';
+  let folderOperationStatusText = 'idle: No folder command has run yet.';
+  let discoveryOperationStatusText = 'idle: No discovery command has run yet.';
+  let transferOperationStatusText = 'idle: No transfer command has run yet.';
+  let maintenanceOperationStatusText = 'idle: No maintenance command has run yet.';
+  let webGUIOperationStatusText = 'idle: No web GUI command has run yet.';
+  let configOperationStatusText = 'idle: No config command has run yet.';
+  let apiTrustOperationStatusText = 'idle: API certificate trust status has not been checked yet.';
   type DesktopUIView =
     | 'overview'
     | 'folders'
@@ -547,11 +554,27 @@
   }
 
   async function refreshOperationalState() {
-    [status, daemonFolders, daemonPeers] = await Promise.all([
-      fetchDaemonStatus(daemonConnectionSettings),
-      fetchDaemonFolders(daemonConnectionSettings),
-      fetchDaemonPeers(daemonConnectionSettings)
-    ]);
+    try {
+      [status, daemonFolders, daemonPeers] = await Promise.all([
+        fetchDaemonStatus(daemonConnectionSettings),
+        fetchDaemonFolders(daemonConnectionSettings),
+        fetchDaemonPeers(daemonConnectionSettings)
+      ]);
+      const liveName = status?.nodeName || 'Local engine';
+      managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
+        ...instance,
+        connectionState: 'online',
+        statusSummary: `${liveName} is live through the local engine API.`
+      } : instance);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
+        ...instance,
+        connectionState: 'failed',
+        statusSummary: message
+      } : instance);
+      throw error;
+    }
   }
 
   async function connectToDaemon() {
@@ -681,7 +704,7 @@
     pairingLoading = true;
     pairingMessage = '';
     try {
-      pairingPackage = await generateIdentityPairingPackage(daemonConnectionSettings, pairingGroupID, pairingReachableAPIURL.trim());
+      pairingPackage = await generateIdentityPairingPackage(daemonConnectionSettings, pairingGroupID);
       pairingExportText = exportIdentityPackageAsCopyableText(pairingPackage);
       const download = buildIdentityPackageDownload(pairingPackage);
       pairingDownloadFilename = download.filename;
@@ -722,7 +745,7 @@
     try {
       const imported = parsedPairingImport ?? parseImportedIdentityPackageText(pairingImportText);
       parsedPairingImport = imported;
-      const response = await importIdentityPairingPackage(daemonConnectionSettings, imported, pairingLocalReachableAPIURL.trim());
+      const response = await importIdentityPairingPackage(daemonConnectionSettings, imported);
       pairingImportSummary = `Imported identity package for group ${response.groupId} from ${response.remoteDiscoveryId}; peer-pair key ${response.keyId ?? 'pending'} prepared at level ${response.peerPairEncryptionLevel}.`;
       pairingMessage = response.message ?? 'Identity package import accepted by daemon-owned import execution.';
     } catch (error) {
@@ -742,8 +765,28 @@
     parsePairingImportText();
   }
 
+  function publishOperationStatusText(area: LocalControlArea, state: LocalControlOperationState) {
+    const text = `${state.phase}: ${state.summary}${state.detail ? ` ${state.detail}` : ''}`;
+    if (area === 'peer') peerOperationStatusText = text;
+    else if (area === 'folder') folderOperationStatusText = text;
+    else if (area === 'discovery') discoveryOperationStatusText = text;
+    else if (area === 'transfer') transferOperationStatusText = text;
+    else if (area === 'maintenance') maintenanceOperationStatusText = text;
+    else if (area === 'webGUI') webGUIOperationStatusText = text;
+    else if (area === 'config') configOperationStatusText = text;
+    else apiTrustOperationStatusText = text;
+  }
+
   function setLocalControlOperationState(area: LocalControlArea, state: LocalControlOperationState) {
     localControlOperationStates = { ...localControlOperationStates, [area]: state };
+    publishOperationStatusText(area, state);
+  }
+
+  async function saveAdvertiseOverride() {
+    const value = advertiseOverride.trim();
+    await runControlCommand('config', 'advertise URL', async () => patchDaemonConfig(daemonConnectionSettings, { api: { advertiseURL: value } }));
+    advertiseOverride = '';
+    await refreshOperationalState();
   }
 
   function getLocalControlOperationState(area: LocalControlArea): LocalControlOperationState {
@@ -1478,12 +1521,7 @@
         <input bind:value={peerFormEndpoint} name="peerFormEndpoint" autocomplete="off" placeholder="tcp://host:port or https://host" />
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit peer command</button>
-      <p class="operation-status" data-phase={localControlOperationStates.peer.phase} aria-label="Peer operation status">
-        {localControlOperationStates.peer.phase}: {localControlOperationStates.peer.summary}
-        {#if localControlOperationStates.peer.detail}
-          <span>{localControlOperationStates.peer.detail}</span>
-        {/if}
-      </p>
+      <p class="operation-status" data-phase={localControlOperationStates.peer.phase} aria-label="Peer operation status">{peerOperationStatusText}</p>
     </form>
 
     <form class="control-form" on:submit|preventDefault={submitFolderForm} aria-label="Daemon settings folder form">
@@ -1517,12 +1555,7 @@
         <input bind:value={folderFormSharedWith} name="folderFormSharedWith" data-testid="folder-shared-with" autocomplete="off" placeholder="empty shares with every paired peer" />
       </label>
       <button type="button" data-testid="folder-submit" on:click={submitFolderForm} disabled={loading || !hasDaemonCredential}>Submit folder command</button>
-      <p class="operation-status" data-phase={localControlOperationStates.folder.phase} aria-label="Folder operation status">
-        {localControlOperationStates.folder.phase}: {localControlOperationStates.folder.summary}
-        {#if localControlOperationStates.folder.detail}
-          <span>{localControlOperationStates.folder.detail}</span>
-        {/if}
-      </p>
+      <p class="operation-status" data-phase={localControlOperationStates.folder.phase} aria-label="Folder operation status">{folderOperationStatusText}</p>
     </form>
 
     <form class="control-form" on:submit|preventDefault={submitDiscoveryForm} aria-label="Discovery form">
@@ -1540,12 +1573,7 @@
         Local/LAN discovery enabled
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit discovery update</button>
-      <p class="operation-status" data-phase={localControlOperationStates.discovery.phase} aria-label="Discovery operation status">
-        {localControlOperationStates.discovery.phase}: {localControlOperationStates.discovery.summary}
-        {#if localControlOperationStates.discovery.detail}
-          <span>{localControlOperationStates.discovery.detail}</span>
-        {/if}
-      </p>
+      <p class="operation-status" data-phase={localControlOperationStates.discovery.phase} aria-label="Discovery operation status">{discoveryOperationStatusText}</p>
     </form>
 
     <form class="control-form" on:submit|preventDefault={submitTransferForm} aria-label="Transfer form">
@@ -1567,12 +1595,7 @@
         <input bind:value={transferFormPeerID} name="transferFormPeerID" autocomplete="off" />
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit transfer command</button>
-      <p class="operation-status" data-phase={localControlOperationStates.transfer.phase} aria-label="Transfer operation status">
-        {localControlOperationStates.transfer.phase}: {localControlOperationStates.transfer.summary}
-        {#if localControlOperationStates.transfer.detail}
-          <span>{localControlOperationStates.transfer.detail}</span>
-        {/if}
-      </p>
+      <p class="operation-status" data-phase={localControlOperationStates.transfer.phase} aria-label="Transfer operation status">{transferOperationStatusText}</p>
     </form>
 
     <form class="control-form" on:submit|preventDefault={submitMaintenanceForm} aria-label="Maintenance form">
@@ -1582,12 +1605,7 @@
         <input bind:value={maintenanceFormFolderID} name="maintenanceFormFolderID" autocomplete="off" />
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Run maintenance scrub</button>
-      <p class="operation-status" data-phase={localControlOperationStates.maintenance.phase} aria-label="Maintenance operation status">
-        {localControlOperationStates.maintenance.phase}: {localControlOperationStates.maintenance.summary}
-        {#if localControlOperationStates.maintenance.detail}
-          <span>{localControlOperationStates.maintenance.detail}</span>
-        {/if}
-      </p>
+      <p class="operation-status" data-phase={localControlOperationStates.maintenance.phase} aria-label="Maintenance operation status">{maintenanceOperationStatusText}</p>
     </form>
 
     <form class="control-form" on:submit|preventDefault={submitWebGUIForm} aria-label="Web GUI form">
@@ -1603,12 +1621,7 @@
         </select>
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit web GUI command</button>
-      <p class="operation-status" data-phase={localControlOperationStates.webGUI.phase} aria-label="Web GUI operation status">
-        {localControlOperationStates.webGUI.phase}: {localControlOperationStates.webGUI.summary}
-        {#if localControlOperationStates.webGUI.detail}
-          <span>{localControlOperationStates.webGUI.detail}</span>
-        {/if}
-      </p>
+      <p class="operation-status" data-phase={localControlOperationStates.webGUI.phase} aria-label="Web GUI operation status">{webGUIOperationStatusText}</p>
     </form>
 
     <form class="control-form" on:submit|preventDefault={submitConfigPatchForm} aria-label="Config patch form">
@@ -1624,12 +1637,7 @@
         </select>
       </label>
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit non-secret config patch</button>
-      <p class="operation-status" data-phase={localControlOperationStates.config.phase} aria-label="Config operation status">
-        {localControlOperationStates.config.phase}: {localControlOperationStates.config.summary}
-        {#if localControlOperationStates.config.detail}
-          <span>{localControlOperationStates.config.detail}</span>
-        {/if}
-      </p>
+      <p class="operation-status" data-phase={localControlOperationStates.config.phase} aria-label="Config operation status">{configOperationStatusText}</p>
     </form>
 
     <section class="control-form" aria-label="API certificate trust">
@@ -1641,12 +1649,7 @@
         <button type="button" on:click={refreshAPITrustStatus} disabled={loading || !hasDaemonCredential}>Fetch API trust status</button>
         <button type="button" on:click={pinActiveAPICertificateForSelectedHost} disabled={loading || !hasDaemonCredential || !apiTrustStatus?.certificateSha256}>Pin active certificate</button>
       </div>
-      <p class="operation-status" data-phase={localControlOperationStates.apiTrust.phase} aria-label="API trust operation status">
-        {localControlOperationStates.apiTrust.phase}: {localControlOperationStates.apiTrust.summary}
-        {#if localControlOperationStates.apiTrust.detail}
-          <span>{localControlOperationStates.apiTrust.detail}</span>
-        {/if}
-      </p>
+      <p class="operation-status" data-phase={localControlOperationStates.apiTrust.phase} aria-label="API trust operation status">{apiTrustOperationStatusText}</p>
       <p>{apiTrustStatusSummary()}</p>
       {#if apiTrustStatus}
         <dl class="host-status-grid" aria-label="API certificate trust details">
@@ -1848,16 +1851,20 @@
       <section class="connection-card">
         <h2>Identity pairing export/import</h2>
         <p>
-          This exports this engine's single identity for pairing. The package still contains identity secret material, so it is never written to logs or generic status events.
+          This GUI is connected to the local engine automatically. Paste only the remote engine's pairing package. The package still contains identity secret material, so it is never written to logs or generic status events.
         </p>
-        <label>
-          Reachable API URL for other devices
-          <input data-testid="pairing-reachable-url" bind:value={pairingReachableAPIURL} autocomplete="off" placeholder="https://this-host:22420" />
-        </label>
-        <label>
-          This device's reachable API URL
-          <input data-testid="pairing-local-url" bind:value={pairingLocalReachableAPIURL} autocomplete="off" placeholder="https://this-host:22420" />
-        </label>
+        <p data-testid="pairing-advertise-url">
+          This local engine advertises {status?.advertiseURL || 'its reachable API URL'}. Other engines use that address from the pairing package. You do not enter this engine's URL.
+        </p>
+        <details data-testid="pairing-advertise-advanced">
+          <summary>Advanced: override advertised API URL</summary>
+          <p>Use this only when auto-detection picked an address other engines cannot reach. FSE_ADVERTISE_URL at install does the same thing. Pairing does not ask for the local URL.</p>
+          <label>
+            Advertised API URL override
+            <input data-testid="pairing-advertise-override" bind:value={advertiseOverride} autocomplete="off" placeholder="https://lan-host:22420" />
+          </label>
+          <button type="button" on:click={saveAdvertiseOverride} disabled={loading || !hasDaemonCredential}>Save advertised URL</button>
+        </details>
         <button type="button" data-testid="generate-pairing" on:click={generatePairingPackage} disabled={pairingLoading}>
           Generate pairing package
         </button>
@@ -2338,9 +2345,6 @@
   }
   .operation-status[data-phase='failed'] {
     border-color: #ff8a8a;
-  }
-  .operation-status span {
-    color: #bac7df;
   }
   .settings-grid {
     display: grid;

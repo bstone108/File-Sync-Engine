@@ -565,11 +565,27 @@ jobs:
           push: true
           tags: |
             ${{ steps.image-ref.outputs.repository }}:${{ needs.version-preflight.outputs.version }}
+            ${{ steps.image-ref.outputs.repository }}:v${{ needs.version-preflight.outputs.version }}
             ${{ steps.image-ref.outputs.repository }}:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.version=${{ needs.version-preflight.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
           platforms: linux/amd64,linux/arm64,linux/arm/v7
+      - name: Verify Unraid template image tag was published
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="${{ steps.image-ref.outputs.repository }}"
+          version="${{ needs.version-preflight.outputs.version }}"
+          ref="$(sed -n 's:.*<Repository>\(.*\)</Repository>.*:\1:p' unraid/file-sync-engine.xml | head -n 1)"
+          case "$ref" in
+            "$repo:$version"|"$repo:v$version") ;;
+            *)
+              printf 'Unraid template repository %s is not a tag published by this release (%s:%s or %s:v%s)\n' "$ref" "$repo" "$version" "$repo" "$version" >&2
+              exit 1
+              ;;
+          esac
+          docker buildx imagetools inspect "$ref"
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
       - name: Sign image digest

@@ -33,6 +33,12 @@ func TestEnsureFileCreatesSkeletonWithGeneratedAPIKey(t *testing.T) {
 	if !strings.Contains(text, `"dhtNamespace": "filesyncengine/v1"`) || !strings.Contains(text, `"dhtBootstrapPeers"`) {
 		t.Fatalf("skeleton lacks public DHT defaults:\n%s", text)
 	}
+	if strings.Contains(text, "peer-example") || strings.Contains(text, "192.0.2.10") || strings.Contains(text, `"./docs"`) {
+		t.Fatalf("fresh install must not ship example peers or folders:\n%s", text)
+	}
+	if len(cfg.Peers) != 0 || len(cfg.Folders) != 0 {
+		t.Fatalf("fresh install peers=%d folders=%d", len(cfg.Peers), len(cfg.Folders))
+	}
 }
 
 func TestEnsureAPIKeyPersistsKeyWhenMissing(t *testing.T) {

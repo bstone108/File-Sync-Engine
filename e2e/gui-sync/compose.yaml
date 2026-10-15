@@ -5,6 +5,7 @@ services:
     hostname: fse-a
     environment:
       FSE_NODE_NAME: fse-a
+      FSE_ADVERTISE_URL: https://fse-a:22420
       FSE_WEB_GUI_ENABLED: "true"
       FSE_WEB_GUI_VERSION: ${FSE_WEB_GUI_VERSION:-0.0.0-dev}
       FSE_WEB_GUI_PACKAGE: /opt/fse/web-package/fse-web-gui.zip
@@ -24,6 +25,7 @@ services:
     hostname: fse-b
     environment:
       FSE_NODE_NAME: fse-b
+      FSE_ADVERTISE_URL: https://fse-b:22420
       FSE_WEB_GUI_ENABLED: "true"
       FSE_WEB_GUI_VERSION: ${FSE_WEB_GUI_VERSION:-0.0.0-dev}
       FSE_WEB_GUI_PACKAGE: /opt/fse/web-package/fse-web-gui.zip
