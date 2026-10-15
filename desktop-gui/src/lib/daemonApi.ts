@@ -256,6 +256,34 @@ export async function fetchDaemonPeers(settings: DaemonConnectionSettings): Prom
   return await daemonAPIRequest<DaemonPeer[]>(settings, '/v1/peers');
 }
 
+export type ConfigSyncInstance = {
+  instanceId: string;
+  label: string;
+  apiURL?: string;
+  online: boolean;
+  lastSeen?: string;
+  pendingChanges: number;
+  local: boolean;
+  settings?: Record<string, unknown>;
+};
+
+export type ConfigSyncView = {
+  groupId: string;
+  localInstanceId: string;
+  instances: ConfigSyncInstance[];
+};
+
+export async function fetchConfigSync(settings: DaemonConnectionSettings): Promise<ConfigSyncView> {
+  return await daemonAPIRequest<ConfigSyncView>(settings, '/v1/config-sync');
+}
+
+export async function queueConfigSyncEdit(settings: DaemonConnectionSettings, edit: { targetInstanceId: string; path: string; value: unknown }): Promise<ConfigSyncView> {
+  return await daemonAPIRequest<ConfigSyncView>(settings, '/v1/config-sync/edit', {
+    method: 'POST',
+    body: jsonBody(edit)
+  });
+}
+
 export async function readDaemonConfig(settings: DaemonConnectionSettings): Promise<DaemonConfig> {
   return await daemonAPIRequest<DaemonConfig>(settings, '/v1/config');
 }

@@ -65,6 +65,7 @@ async function pageShowsFolderError(page) {
   const submit = page.getByTestId('folder-submit');
   await submit.scrollIntoViewIfNeeded();
   await submit.click();
+  await page.getByTestId('confirm-destructive').click();
   const status = page.getByLabel('Folder operation status');
   await expect(status).toContainText('not found');
   await expect(status).not.toContainText('No folder command has run yet');
@@ -148,4 +149,10 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await expect(b.locator('aside strong.connection-state').first()).toHaveText('Online');
   await expect(a.getByTestId('local-engine-connection')).toHaveText('Online');
   await expect(b.getByTestId('local-engine-connection')).toHaveText('Online');
+  await expect(a.getByTestId('instance-switcher')).toBeVisible();
+  await a.getByTestId('nav-overview').click();
+  await a.setViewportSize({ width: 1280, height: 800 });
+  await a.screenshot({ path: 'screenshots/desktop-overview.png', fullPage: true });
+  await a.setViewportSize({ width: 390, height: 844 });
+  await a.screenshot({ path: 'screenshots/mobile-overview.png', fullPage: true });
 });

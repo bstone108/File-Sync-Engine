@@ -24,6 +24,9 @@ func HandleConfigUpdate(configPath string, req api.ConfigUpdateRequest) (api.Con
 	if err := writePatchedConfig(configPath, cfg); err != nil {
 		return api.ConfigUpdateResponse{}, err
 	}
+	if err := recordOwnSettings(configPath, cfg); err != nil {
+		return api.ConfigUpdateResponse{}, err
+	}
 	return api.ConfigUpdateResponse{Status: "accepted", Message: configUpdateAcceptedMessage}, nil
 }
 
@@ -40,6 +43,9 @@ func HandleConfigUpdateWithStore(configPath string, store state.JSONStore, req a
 		return api.ConfigUpdateResponse{}, err
 	}
 	if err := saveLocalSettingsDocument(store, cfg, req); err != nil {
+		return api.ConfigUpdateResponse{}, err
+	}
+	if err := recordOwnSettings(configPath, cfg); err != nil {
 		return api.ConfigUpdateResponse{}, err
 	}
 	return api.ConfigUpdateResponse{Status: "accepted", Message: configUpdateAcceptedMessage}, nil
