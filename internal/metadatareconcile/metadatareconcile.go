@@ -150,13 +150,12 @@ func ProcessCatchup(ctx context.Context, opts CatchupOptions) CatchupResult {
 			}
 			result.Started++
 			catchup, err := streamsync.MetadataCatchupOnly(ctx, stream, streamsync.PullOptions{
-				NodeID:                     opts.Config.NodeName,
-				FolderID:                   folder.ID,
-				Identity:                   peeridentity.Identity{PrivateKey: opts.Config.Identity.PrivateKey, PublicKey: opts.Config.Identity.PublicKey},
-				EncryptionLevel:            opts.Config.Identity.EncryptionLevel,
-				PeerPublicKey:              peer.IdentityPublicKey,
-				MetadataStore:              opts.Store,
-				AllowWeakerEncryptionLevel: false,
+				NodeID:          opts.Config.NodeName,
+				FolderID:        folder.ID,
+				Identity:        peeridentity.Identity{PrivateKey: opts.Config.Identity.PrivateKey, PublicKey: opts.Config.Identity.PublicKey},
+				EncryptionLevel: opts.Config.Identity.EncryptionLevel,
+				PeerPublicKey:   peer.IdentityPublicKey,
+				MetadataStore:   opts.Store,
 			}, peer.ID)
 			closeErr := stream.Close()
 			if err != nil {

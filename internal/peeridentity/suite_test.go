@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -110,18 +111,32 @@ func TestMissingStrongerMaterialDoesNotSilentlyDowngrade(t *testing.T) {
 	}
 }
 
-func TestNegotiateSessionLevelUsesMaxUnlessExplicit(t *testing.T) {
-	got, err := NegotiateSessionLevel(4, 8, false)
-	if err != nil || got != 8 {
-		t.Fatalf("max(4, 8) = %d %v", got, err)
+func TestNegotiateSessionLevelUsesTheHigherConfiguredLevel(t *testing.T) {
+	got, err := NegotiateSessionLevel(4, 6)
+	if err != nil || got != 6 {
+		t.Fatalf("max(4, 6) = %d %v", got, err)
 	}
-	got, err = NegotiateSessionLevel(8, 4, false)
-	if err != nil || got != 8 {
-		t.Fatalf("max(8, 4) = %d %v", got, err)
+	got, err = NegotiateSessionLevel(6, 4)
+	if err != nil || got != 6 {
+		t.Fatalf("max(6, 4) = %d %v", got, err)
 	}
-	got, err = NegotiateSessionLevel(1, 8, true)
-	if err != nil || got != 1 {
-		t.Fatalf("explicit weaker local level = %d %v", got, err)
+	got, err = NegotiateSessionLevel(6, 6)
+	if err != nil || got != 6 {
+		t.Fatalf("max(6, 6) = %d %v", got, err)
+	}
+}
+
+func TestFinishRejectsPeerOfferBelowLocalLevel(t *testing.T) {
+	client, err := BeginInitiator(6, "client-nonce", "client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower, err := BeginInitiator(4, "forged-nonce", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Finish(lower.Material()); err == nil || !strings.Contains(err.Error(), "weaker encryption level") {
+		t.Fatalf("expected lower offer rejection, got %v", err)
 	}
 }
 

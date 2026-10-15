@@ -47,19 +47,15 @@ func ParseRetryLevel(message string) (int, bool) {
 	return level, true
 }
 
-// NegotiateSessionLevel is the stream policy. The session uses the higher
-// requested level, which is also the higher policy minimum. allowWeaker is
-// the only downgrade: that side offers its own level even when the peer asked
-// for more, and the peer must opt in as well or reject the weaker hello.
-func NegotiateSessionLevel(localLevel, peerLevel int, allowWeaker bool) (int, error) {
+// NegotiateSessionLevel is the stream policy. The session level is the higher
+// of the two configured levels. A peer never accepts a session below its own
+// level, and there is no weaker-policy override.
+func NegotiateSessionLevel(localLevel, peerLevel int) (int, error) {
 	if err := ValidateEncryptionLevel(localLevel); err != nil {
 		return 0, err
 	}
 	if err := ValidateEncryptionLevel(peerLevel); err != nil {
 		return 0, err
-	}
-	if allowWeaker {
-		return localLevel, nil
 	}
 	if peerLevel > localLevel {
 		return peerLevel, nil
@@ -447,6 +443,9 @@ func AssessMaterial(level int, peer PeerMaterial) error {
 func (p *PendingHandshake) Finish(peer PeerMaterial) (SessionCipher, error) {
 	sessionLevel := p.level
 	if p.initiator {
+		if peer.Level < p.level {
+			return SessionCipher{}, fmt.Errorf("peer negotiated weaker encryption level %d below local level %d", peer.Level, p.level)
+		}
 		sessionLevel = peer.Level
 	}
 	if err := ValidateEncryptionLevel(sessionLevel); err != nil {

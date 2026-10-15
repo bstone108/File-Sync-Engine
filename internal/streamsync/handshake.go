@@ -10,8 +10,15 @@ import (
 	"filesyncengine/internal/protocol"
 )
 
-func negotiateEncryptionLevel(localLevel, peerLevel int, allowWeaker bool) (int, error) {
-	return peeridentity.NegotiateSessionLevel(localLevel, peerLevel, allowWeaker)
+func negotiateEncryptionLevel(localLevel, peerLevel int) (int, error) {
+	level, err := peeridentity.NegotiateSessionLevel(localLevel, peerLevel)
+	if err != nil {
+		return 0, err
+	}
+	if level < localLevel {
+		return 0, fmt.Errorf("peer negotiated weaker encryption level %d below local level %d", level, localLevel)
+	}
+	return level, nil
 }
 
 func signedProtocolHello(nodeID string, identity peeridentity.Identity, encryptionLevel int, nonce string, transfer *protocol.TransferLimits) (*protocol.Hello, error) {
@@ -224,7 +231,7 @@ func clientHandshake(stream io.ReadWriter, opts PullOptions, peerPublicKey strin
 		if err := verifyServerHello(msg.Hello, peerPublicKey, msg.Hello.Nonce); err != nil {
 			return nil, nil, err
 		}
-		if msg.Hello.EncryptionLevel < opts.EncryptionLevel && !opts.AllowWeakerEncryptionLevel {
+		if msg.Hello.EncryptionLevel < opts.EncryptionLevel {
 			return nil, nil, fmt.Errorf("peer negotiated weaker encryption level %d below local level %d", msg.Hello.EncryptionLevel, opts.EncryptionLevel)
 		}
 		if err := peeridentity.ValidateEncryptionLevel(msg.Hello.EncryptionLevel); err != nil {

@@ -533,45 +533,53 @@ func TestPullFolderRetriesWhenPeerRequiresAStrongerSuite(t *testing.T) {
 	}
 }
 
-func TestPullFolderRejectsWeakerNegotiatedEncryptionWithoutOverride(t *testing.T) {
-	remoteRoot := t.TempDir()
-	localRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(remoteRoot, "doc.txt"), []byte("weak negotiation"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	serverIdentity, err := peeridentity.GenerateIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientIdentity, err := peeridentity.GenerateIdentity()
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestPullFolderSessionLevelIsTheHigherConfiguredLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		clientLevel int
+		serverLevel int
+		want        int
+	}{
+		{name: "client-higher", clientLevel: 6, serverLevel: 4, want: 6},
+		{name: "server-higher", clientLevel: 4, serverLevel: 6, want: 6},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			remoteRoot := t.TempDir()
+			localRoot := t.TempDir()
+			if err := os.WriteFile(filepath.Join(remoteRoot, "doc.txt"), []byte("highest level"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			serverIdentity, err := peeridentity.GenerateIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			clientIdentity, err := peeridentity.GenerateIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			clientConn, serverConn := net.Pipe()
+			defer clientConn.Close()
+			server := NewServer(ServerConfig{NodeID: "node-a", BlockSize: 8, Folders: map[string]string{"docs": remoteRoot}, Identity: serverIdentity, EncryptionLevel: tc.serverLevel, TrustedPeerPublicKeys: map[string]string{"node-b": clientIdentity.PublicKey}})
+			serverErr := make(chan error, 1)
+			go func() { serverErr <- server.Serve(context.Background(), serverConn) }()
 
-	clientConn, serverConn := net.Pipe()
-	defer clientConn.Close()
-	server := NewServer(ServerConfig{NodeID: "node-a", BlockSize: 8, Folders: map[string]string{"docs": remoteRoot}, Identity: serverIdentity, EncryptionLevel: 1, AllowWeakerEncryptionLevel: true, TrustedPeerPublicKeys: map[string]string{"node-b": clientIdentity.PublicKey}})
-	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- server.Serve(context.Background(), serverConn)
-	}()
-
-	_, err = PullFolder(context.Background(), clientConn, PullOptions{NodeID: "node-b", FolderID: "docs", LocalRoot: localRoot, Identity: clientIdentity, EncryptionLevel: 8, PeerPublicKey: serverIdentity.PublicKey})
-	if err == nil || !strings.Contains(err.Error(), "weaker encryption level") {
-		t.Fatalf("expected weaker encryption rejection, got %v", err)
-	}
-	clientConn.Close()
-	if err := <-serverErr; err != nil {
-		t.Fatalf("server should stop after client rejects weaker level: %v", err)
+			result, err := PullFolder(context.Background(), clientConn, PullOptions{NodeID: "node-b", FolderID: "docs", LocalRoot: localRoot, Identity: clientIdentity, EncryptionLevel: tc.clientLevel, PeerPublicKey: serverIdentity.PublicKey})
+			if err != nil {
+				t.Fatalf("PullFolder: %v", err)
+			}
+			if result.NegotiatedEncryptionLevel != tc.want {
+				t.Fatalf("negotiated encryption level = %d, want %d", result.NegotiatedEncryptionLevel, tc.want)
+			}
+			clientConn.Close()
+			if err := <-serverErr; err != nil {
+				t.Fatalf("server: %v", err)
+			}
+		})
 	}
 }
 
-func TestPullFolderAcceptsExplicitWeakerEncryptionOverride(t *testing.T) {
-	remoteRoot := t.TempDir()
+func TestPullFolderRejectsForgedLowerEncryptionOffer(t *testing.T) {
 	localRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(remoteRoot, "doc.txt"), []byte("lawful compatibility"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	serverIdentity, err := peeridentity.GenerateIdentity()
 	if err != nil {
 		t.Fatal(err)
@@ -580,24 +588,124 @@ func TestPullFolderAcceptsExplicitWeakerEncryptionOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
-	server := NewServer(ServerConfig{NodeID: "node-a", BlockSize: 8, Folders: map[string]string{"docs": remoteRoot}, Identity: serverIdentity, EncryptionLevel: 1, AllowWeakerEncryptionLevel: true, TrustedPeerPublicKeys: map[string]string{"node-b": clientIdentity.PublicKey}})
 	serverErr := make(chan error, 1)
 	go func() {
-		serverErr <- server.Serve(context.Background(), serverConn)
+		defer serverConn.Close()
+		codec := protocol.NewCodec(serverConn, serverConn)
+		if _, err := codec.Read(); err != nil {
+			serverErr <- err
+			return
+		}
+		nonce, err := newNonce()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		// A valid signature at level 4 is still a downgrade when the receiver is configured at 6.
+		hello, _, err := signedInitiatorHello("node-a", serverIdentity, 4, nonce, nil, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		serverErr <- codec.Write(protocol.Message{Type: protocol.MessageHello, Hello: hello})
 	}()
 
-	result, err := PullFolder(context.Background(), clientConn, PullOptions{NodeID: "node-b", FolderID: "docs", LocalRoot: localRoot, Identity: clientIdentity, EncryptionLevel: 8, PeerPublicKey: serverIdentity.PublicKey, AllowWeakerEncryptionLevel: true})
-	if err != nil {
-		t.Fatalf("PullFolder: %v", err)
+	_, err = PullFolder(context.Background(), clientConn, PullOptions{NodeID: "node-b", FolderID: "docs", LocalRoot: localRoot, Identity: clientIdentity, EncryptionLevel: 6, PeerPublicKey: serverIdentity.PublicKey})
+	if err == nil || !strings.Contains(err.Error(), "weaker encryption level 4 below local level 6") {
+		t.Fatalf("expected forged lower offer rejection, got %v", err)
 	}
-	if result.NegotiatedEncryptionLevel != 1 {
-		t.Fatalf("negotiated encryption level = %d", result.NegotiatedEncryptionLevel)
+	if _, statErr := os.Stat(filepath.Join(localRoot, "doc.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("forged lower offer wrote local data: %v", statErr)
 	}
 	clientConn.Close()
 	if err := <-serverErr; err != nil {
+		t.Fatalf("forged peer: %v", err)
+	}
+}
+
+func TestPullFolderRejectsTamperedLowerEncryptionOffer(t *testing.T) {
+	localRoot := t.TempDir()
+	serverIdentity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientIdentity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	serverErr := make(chan error, 1)
+	go func() {
+		defer serverConn.Close()
+		codec := protocol.NewCodec(serverConn, serverConn)
+		if _, err := codec.Read(); err != nil {
+			serverErr <- err
+			return
+		}
+		nonce, err := newNonce()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		hello, _, err := signedInitiatorHello("node-a", serverIdentity, 6, nonce, nil, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		hello.EncryptionLevel = 4
+		serverErr <- codec.Write(protocol.Message{Type: protocol.MessageHello, Hello: hello})
+	}()
+
+	_, err = PullFolder(context.Background(), clientConn, PullOptions{NodeID: "node-b", FolderID: "docs", LocalRoot: localRoot, Identity: clientIdentity, EncryptionLevel: 6, PeerPublicKey: serverIdentity.PublicKey})
+	if err == nil || !strings.Contains(err.Error(), "signature verification failed") {
+		t.Fatalf("expected tampered level to fail signature verification, got %v", err)
+	}
+	clientConn.Close()
+	if err := <-serverErr; err != nil {
+		t.Fatalf("forged peer: %v", err)
+	}
+}
+
+func TestServerRejectsTamperedLowerClientOffer(t *testing.T) {
+	serverIdentity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientIdentity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	server := NewServer(ServerConfig{NodeID: "node-a", BlockSize: 8, Folders: map[string]string{"docs": t.TempDir()}, Identity: serverIdentity, EncryptionLevel: 6, TrustedPeerPublicKeys: map[string]string{"node-b": clientIdentity.PublicKey}})
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Serve(context.Background(), serverConn) }()
+
+	codec := protocol.NewCodec(clientConn, clientConn)
+	nonce, err := newNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello, _, err := signedInitiatorHello("node-b", clientIdentity, 6, nonce, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello.EncryptionLevel = 4
+	if err := codec.Write(protocol.Message{Type: protocol.MessageHello, Hello: hello}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := codec.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Type != protocol.MessageError || msg.Error == nil || msg.Error.Code != "peer_auth" || !strings.Contains(msg.Error.Message, "signature verification failed") {
+		t.Fatalf("server accepted tampered lower offer: %+v", msg)
+	}
+	clientConn.Close()
+	if err := <-serverErr; err != nil && !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("server: %v", err)
 	}
 }

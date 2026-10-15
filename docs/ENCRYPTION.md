@@ -28,12 +28,12 @@ Level 10 is the absurdly strong end of the scale. Handshake time and memory are 
 
 ## How a session is chosen
 
-Each peer has a configured level. That level is its policy minimum.
+Each peer has a configured level. The session level is always the higher of the two. Peer A at 6 and peer B at 4 finish at 6, in either direction.
 
-- The session level is the higher of the two requested levels.
-- The peer that offered less material retries the hello once at that higher level. The error code is `encryption_retry` and the message is `retry handshake at encryption level N`.
+- A peer never completes a session below its own configured level. There is no weaker-policy override.
+- A signed hello that offers a lower level is rejected. Changing the level on a signed hello fails the signature check, because the level is inside `fse-peer-hello-v2`.
+- The peer that offered less material retries the hello once at the higher level. The error code is `encryption_retry` and the message is `retry handshake at encryption level N`.
 - Missing KEM, classical, or signature material never falls back to a weaker suite. A level-8 session without ML-KEM is a failed handshake, not a quiet X25519 session.
-- `AllowWeakerEncryptionLevel` is the only downgrade. The side that sets it offers its own level even when the peer asked for more. The other side must set it too, or it rejects the weaker hello. Nothing downgrades silently.
 
 Identity introduction stays at level 10 even when `identity.encryptionLevel` is 4. After pairing, normal peer traffic uses the negotiated data level.
 
