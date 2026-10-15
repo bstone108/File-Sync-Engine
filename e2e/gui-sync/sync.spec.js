@@ -41,6 +41,15 @@ function compose(args, capture = false) {
   });
 }
 
+function readShared(service) {
+  try {
+    return compose(['exec', '-T', service, 'cat', '/data/shared/note.txt'], true).trim();
+  } catch (error) {
+    const stderr = error && error.stderr ? String(error.stderr).trim() : '';
+    return stderr ? `missing: ${stderr}` : 'missing';
+  }
+}
+
 test('two containers pair in the GUI and sync both ways', async ({ browser }) => {
   const a = await browser.newPage();
   const b = await browser.newPage();
@@ -62,14 +71,14 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await importOn(b, 'https://fse-b:22420', exported);
   await addSharedFolder(a);
   await addSharedFolder(b);
-  compose(['exec', '-T', '-u', '0', 'fse-a', 'sh', '-c', 'echo hello-from-a > /data/shared/note.txt && chmod 666 /data/shared/note.txt']);
+  compose(['exec', '-T', '-u', '99:100', 'fse-a', 'sh', '-c', 'echo hello-from-a > /data/shared/note.txt']);
 
-  await expect.poll(() => compose(['exec', '-T', 'fse-b', 'cat', '/data/shared/note.txt'], true).trim(), { timeout: 45000 }).toBe('hello-from-a');
+  await expect.poll(() => readShared('fse-b'), { timeout: 45000 }).toBe('hello-from-a');
 
-  compose(['exec', '-T', '-u', '0', 'fse-b', 'sh', '-c', 'echo hello-from-b > /data/shared/note.txt && chmod 666 /data/shared/note.txt']);
-  await expect.poll(() => compose(['exec', '-T', 'fse-a', 'cat', '/data/shared/note.txt'], true).trim(), { timeout: 45000 }).toBe('hello-from-b');
+  compose(['exec', '-T', '-u', '99:100', 'fse-b', 'sh', '-c', 'echo hello-from-b > /data/shared/note.txt']);
+  await expect.poll(() => readShared('fse-a'), { timeout: 45000 }).toBe('hello-from-b');
 
-  compose(['exec', '-T', '-u', '0', 'fse-a', 'rm', '-f', '/data/shared/note.txt']);
+  compose(['exec', '-T', '-u', '99:100', 'fse-a', 'rm', '-f', '/data/shared/note.txt']);
   await expect.poll(() => {
     try {
       compose(['exec', '-T', 'fse-b', 'sh', '-c', 'test ! -f /data/shared/note.txt'], true);
