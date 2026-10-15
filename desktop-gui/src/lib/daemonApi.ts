@@ -38,6 +38,8 @@ export type DaemonPeer = {
   sendRemainingBytes?: number;
   averageReceiveBytesPerSecond?: number;
   averageSendBytesPerSecond?: number;
+  averageBytesPerSecond?: number;
+  pendingBytes?: number;
   [key: string]: unknown
 };
 
@@ -287,6 +289,8 @@ export type ConfigSyncInstance = {
   lastSeen?: string;
   pendingChanges: number;
   local: boolean;
+  averageBytesPerSecond?: number;
+  pendingBytes?: number;
   settings?: Record<string, unknown>;
 };
 

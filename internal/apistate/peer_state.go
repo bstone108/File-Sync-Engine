@@ -9,6 +9,7 @@ import (
 	"filesyncengine/internal/backup"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/engine"
+	"filesyncengine/internal/linkstats"
 	"filesyncengine/internal/metadatastore"
 	"filesyncengine/internal/nat"
 	"filesyncengine/internal/routing"
@@ -145,6 +146,7 @@ func BuildPeerState(cfg config.Config, peer config.PeerConfig, store state.JSONS
 		endpoint = endpoints[0]
 	}
 	progress := transferprogress.Get(peer.ID)
+	sample := linkstats.Default.Get(peer.ID)
 	peerState := api.PeerState{
 		ID:                           peer.ID,
 		Status:                       "configured",
@@ -153,6 +155,8 @@ func BuildPeerState(cfg config.Config, peer config.PeerConfig, store state.JSONS
 		ConnectionPath:               peerConnectionPath(peer),
 		ReceiveRemainingBytes:        progress.RemainingBytes,
 		AverageReceiveBytesPerSecond: progress.BytesPerSecond,
+		AverageBytesPerSecond:        sample.AverageBytesPerSecond,
+		PendingBytes:                 sample.PendingBytes,
 		Transfer:                     PeerTransferState(cfg.Transfer, peer),
 		NetworkDiagnostics:           PeerNetworkDiagnostics(peer, cfg),
 	}

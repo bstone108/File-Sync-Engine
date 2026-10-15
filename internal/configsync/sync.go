@@ -107,14 +107,16 @@ type Replica struct {
 // InstanceView is the GUI's row for one linked engine, including the stored
 // settings for that engine. Those settings belong to that engine.
 type InstanceView struct {
-	InstanceID     string         `json:"instanceId"`
-	Label          string         `json:"label"`
-	APIURL         string         `json:"apiURL,omitempty"`
-	Online         bool           `json:"online"`
-	LastSeen       string         `json:"lastSeen,omitempty"`
-	PendingChanges int            `json:"pendingChanges"`
-	Local          bool           `json:"local"`
-	Settings       map[string]any `json:"settings,omitempty"`
+	InstanceID            string         `json:"instanceId"`
+	Label                 string         `json:"label"`
+	APIURL                string         `json:"apiURL,omitempty"`
+	Online                bool           `json:"online"`
+	LastSeen              string         `json:"lastSeen,omitempty"`
+	PendingChanges        int            `json:"pendingChanges"`
+	Local                 bool           `json:"local"`
+	AverageBytesPerSecond int64          `json:"averageBytesPerSecond"`
+	PendingBytes          int64          `json:"pendingBytes"`
+	Settings              map[string]any `json:"settings,omitempty"`
 }
 
 // MergeStats reports what a merge changed.

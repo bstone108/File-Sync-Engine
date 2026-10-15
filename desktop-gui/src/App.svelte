@@ -92,6 +92,7 @@
     defaultLocalDaemonInstance,
     ensureLocalInstanceFirst,
     formatConnectionStateLabel,
+    formatTransferByteSummary,
     groupDaemonInstances,
     addRemoteDaemonInstance,
     type ManagedDaemonInstance,
@@ -1056,9 +1057,37 @@
   }
 
   function selectConfigInstance(instanceId: string) {
+    if (!configInstances.some((instance) => instance.instanceId === instanceId)) {
+      return;
+    }
     configInstanceTouched = true;
     selectedConfigInstanceId = instanceId;
+    if (folderEditor) {
+      folderEditor = null;
+    }
   }
+
+  function formatPeerRate(bytes: number | undefined): string {
+    return `${formatTransferByteSummary(bytes ?? 0)}/s`;
+  }
+
+  function formatPeerPending(bytes: number | undefined): string {
+    return `${formatTransferByteSummary(bytes ?? 0)} pending`;
+  }
+
+  $: sidebarInstances = (configInstances.length > 0 ? configInstances : [{
+    instanceId: 'local',
+    label: status?.nodeName ?? 'Loading',
+    online: localEngineConnectionState === 'online' || localEngineConnectionState === 'paired',
+    pendingChanges: 0,
+    local: true,
+    averageBytesPerSecond: 0,
+    pendingBytes: 0
+  } satisfies ConfigSyncInstance]).map((instance) => ({
+    ...instance,
+    selected: selectedConfigInstanceId ? selectedConfigInstanceId === instance.instanceId : instance.local
+  }));
+  $: selectedSidebarInstance = sidebarInstances.find((instance) => instance.selected) ?? sidebarInstances[0];
 
   function toggleTheme() {
     theme = theme === 'dark' ? 'light' : 'dark';
@@ -1618,72 +1647,31 @@
 </script>
 
 <main class="host-scoped-shell" data-theme={theme}>
-  <aside class="host-sidebar" aria-label="Host and view navigation">
-    <section class="host-card slim-node">
-      <div class="switcher-head">
-        <span class="eyebrow">This node</span>
-        <button type="button" class="theme-toggle" data-testid="theme-toggle" on:click={toggleTheme}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
-      </div>
-      <h1 data-testid="device-node-name">{status?.nodeName ?? 'Loading'}</h1>
-      <strong class="connection-state" data-state={localEngineConnectionState} data-testid="local-engine-connection">{localEngineConnectionLabel}</strong>
-      <p class="instance-note">{daemonFolders.length} folder{daemonFolders.length === 1 ? '' : 's'} · {daemonPeers.length} peer{daemonPeers.length === 1 ? '' : 's'}</p>
-      <button type="button" data-testid="node-options" on:click={openNodeOptions}>Options</button>
-    </section>
-    <section class="host-card" data-testid="instance-switcher" aria-label="Linked engines">
-      <span class="eyebrow">Instance</span>
-      <p class="instance-note">Local by default. Choose a linked engine to manage that node.</p>
-      {#if configInstances.length > 0}
-        <label>
-          Engine
-          <select data-testid="instance-dropdown" value={selectedConfigInstanceId} on:change={(event) => selectConfigInstance(event.currentTarget.value)}>
-            {#each configInstances as instance}
-              <option value={instance.instanceId}>{instance.label}</option>
-            {/each}
-          </select>
-        </label>
-        <div class="instance-list">
-          {#each configInstances as instance}
-            <button
-              type="button"
-              class="quick-switch"
-              class:active={selectedConfigInstanceId === instance.instanceId}
-              aria-current={selectedConfigInstanceId === instance.instanceId ? 'true' : undefined}
-              data-testid="instance-option"
-              on:click={() => selectConfigInstance(instance.instanceId)}
-            >
-              <span>{instance.local ? `${instance.label} · local` : instance.label}</span>
-              <small>{instance.online ? 'Online' : 'Offline'} · <span data-testid="instance-pending-count">{instance.pendingChanges} pending</span></small>
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <p class="empty-state">No linked engines are loaded yet. The local engine stays selected.</p>
-      {/if}
-    </section>
-    <section class="host-card" aria-label="Folders">
-      <span class="eyebrow">Folders</span>
-      {#if daemonFolders.length === 0}
-        <p class="empty-state">No folders are configured.</p>
-      {:else}
-        <ul class="folder-nav" aria-label="Configured folders">
-          {#each daemonFolders as folder}
-            <li>
-              <button
-                type="button"
-                class="quick-switch"
-                class:active={folderEditor?.id === folder.id}
-                aria-current={folderEditor?.id === folder.id ? 'true' : undefined}
-                data-testid="folder-open"
-                on:click={() => openFolderEditor(folder)}
-              >
-                <span>{folder.id}</span>
-                <small>{folder.enabled === false ? 'paused' : (folder.mode ?? 'sendrecv')}</small>
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
+  <aside class="host-sidebar" aria-label="Linked instances" data-testid="instance-switcher">
+    <div class="peer-list" role="listbox" aria-label="Linked engines">
+      {#each sidebarInstances as instance (instance.instanceId)}
+        <button
+          type="button"
+          class="peer-row"
+          class:active={instance.selected}
+          aria-current={instance.selected ? 'page' : undefined}
+          data-testid="instance-option"
+          on:click={() => selectConfigInstance(instance.instanceId)}
+        >
+          <span class="peer-line">
+            <span class="peer-name">
+              {#if instance.local}
+                <span data-testid="device-node-name">{instance.label}</span><span> · local</span>
+              {:else}
+                {instance.label}
+              {/if}
+            </span>
+            <strong class="connection-state" data-state={instance.online ? 'online' : 'offline'} data-testid={instance.local ? 'local-engine-connection' : undefined}>{instance.online ? 'Online' : 'Offline'}</strong>
+          </span>
+          <small class="peer-stats"><span data-testid="instance-average-rate">{formatPeerRate(instance.averageBytesPerSecond)}</span> · <span data-testid="instance-pending-bytes">{formatPeerPending(instance.pendingBytes)}</span></small>
+        </button>
+      {/each}
+    </div>
   </aside>
 
   <section class="host-content" aria-live="polite">
@@ -1707,6 +1695,10 @@
         {/if}
       </section>
     {/if}
+    <div class="main-toolbar">
+      <button type="button" data-testid="node-options" on:click={openNodeOptions}>Options</button>
+      <button type="button" class="theme-toggle" data-testid="theme-toggle" on:click={toggleTheme}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
+    </div>
     {#if folderEditor}
       <form class="control-form folder-edit-view" data-testid="folder-editor" aria-label="Folder editor" on:submit|preventDefault={saveFolderEditor}>
         <span class="eyebrow">Folder</span>
@@ -1764,10 +1756,26 @@
         <p class="operation-status" data-testid="folder-edit-status">{folderEditorMessage}</p>
       </form>
     {:else}
-      <section class="connection-card" aria-label="Folder edit">
-        <span class="eyebrow">Folder</span>
-        <h2>Select a folder</h2>
-        <p>Folders for this node are listed in the panel. Open one to change its path, mode, shared peers, and ignore patterns, or to pause, resume, and remove it. Settings, encryption, pairing, and connection details are in Options.</p>
+      <section class="connection-card" aria-label="Folders">
+        <h2 data-testid="selected-instance-title">{selectedSidebarInstance?.label ?? 'Folders'}</h2>
+        {#if selectedSidebarInstance && selectedSidebarInstance.local === false}
+          <p class="empty-state">This engine's folders stay on that instance. Options holds its settings.</p>
+        {:else if daemonFolders.length === 0}
+          <p class="empty-state">No folders are configured.</p>
+        {:else}
+          <ul class="folder-nav" aria-label="Configured folders">
+            {#each daemonFolders as folder}
+              <li>
+                <button type="button" class="peer-row" data-testid="folder-open" on:click={() => openFolderEditor(folder)}>
+                  <span class="peer-line">
+                    <span>{folder.id}</span>
+                    <small>{folder.enabled === false ? 'paused' : (folder.mode ?? 'sendrecv')}</small>
+                  </span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </section>
     {/if}
   </section>
@@ -1776,57 +1784,10 @@
       <div class="node-options-bar">
         <div>
           <span class="eyebrow">Node options</span>
-          <h2>{configInstances.find((instance) => instance.instanceId === selectedConfigInstanceId)?.label ?? selectedManagedInstance.label}</h2>
+          <h2>Options</h2>
         </div>
         <button type="button" data-testid="node-options-close" on:click={closeNodeOptions}>Close</button>
       </div>
-      <section class="host-card" aria-label="Managed daemon instances">
-        <span class="eyebrow">Instance registry</span>
-        <p class="instance-note">Local and remote engines. The local instance remains pinned first. API keys stay in the OS credential vault, not in this page.</p>
-        {#each Object.entries(groupedManagedDaemonInstances) as [groupName, instances]}
-          <div class="instance-group">
-            <button
-              type="button"
-              class="instance-group-toggle"
-              aria-expanded={expandedInstanceGroups[groupName] ?? true}
-              aria-controls={`instance-group-${groupName.replace(/\s+/g, '-').toLowerCase()}`}
-              on:click={() => toggleInstanceGroup(groupName)}
-            >
-              <span>{groupName}</span>
-              <small>{(expandedInstanceGroups[groupName] ?? true) ? 'Collapse' : 'Expand'} · {instances.length} host{instances.length === 1 ? '' : 's'}</small>
-            </button>
-            {#if expandedInstanceGroups[groupName] ?? true}
-              <div class="instance-list" id={`instance-group-${groupName.replace(/\s+/g, '-').toLowerCase()}`}>
-                {#each instances as instance}
-                  <button
-                    type="button"
-                    class="quick-switch"
-                    class:active={selectedInstanceID === instance.id}
-                    aria-current={selectedInstanceID === instance.id ? 'true' : undefined}
-                    on:click={() => selectManagedInstance(instance.id)}
-                  >
-                    <span>{instance.label}</span>
-                    <strong class="connection-state" data-state={instance.kind === 'local' ? localEngineConnectionState : instance.connectionState}>{instance.kind === 'local' ? localEngineConnectionLabel : formatConnectionStateLabel(instance.connectionState)}</strong>
-                    <small>{instance.apiBaseURL}</small>
-                    <p class="peer-pairing-status" aria-label="Peer pairing/negotiation status">
-                      <strong>Peer pairing/negotiation status</strong>: {buildPeerPairingStatusLine(instance)}
-                    </p>
-                    <span class="sr-only">Negotiating identity · Exchanging keys · Waiting on relay/mesh hop · Direct connection established · Revoked identity</span>
-                    <dl class="host-status-metrics" aria-label="Online/offline state, remaining transfer data, and average transfer rates">
-                      {#each buildReadableHostStatusMetrics(instance) as metric}
-                        <div>
-                          <dt>{metric.label}</dt>
-                          <dd>{metric.value}</dd>
-                        </div>
-                      {/each}
-                    </dl>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/each}
-      </section>
       <nav class="node-options-nav" aria-label="Selected host sections">
         {#each viewCatalog.filter((view) => !(dockerGUI && view.id === 'desktop-settings')) as view}
           <button
@@ -2631,7 +2592,7 @@
   }
   .host-scoped-shell {
     display: grid;
-    grid-template-columns: minmax(12.5rem, 16rem) minmax(0, 1fr);
+    grid-template-columns: minmax(11rem, 14rem) minmax(0, 1fr);
     align-items: start;
     gap: 1rem;
     padding: 1rem;
@@ -2661,45 +2622,11 @@
     overflow: auto;
     overflow-wrap: anywhere;
   }
-  .host-card {
-    display: grid;
-    gap: 0.5rem;
-    padding: 1.25rem;
-    border: 1px solid var(--line);
-    border-radius: 1rem;
-    background: var(--surface);
-  }
-  .host-card h1,
-  .host-card p {
-    margin: 0;
-  }
   .eyebrow {
     color: var(--muted);
     font-size: 0.8rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-  }
-  .instance-group,
-  .instance-list {
-    display: grid;
-    gap: 0.5rem;
-  }
-  .instance-group-toggle,
-  .quick-switch {
-    display: grid;
-    gap: 0.25rem;
-    width: 100%;
-    text-align: left;
-    background: var(--surface-2);
-    color: inherit;
-  }
-  .instance-group-toggle {
-    border-color: #44506a;
-  }
-  .quick-switch.active,
-  .quick-switch[aria-current='true'] {
-    border-color: var(--accent);
-    background: #202a3d;
   }
   .connection-state {
     justify-self: start;
@@ -2709,61 +2636,9 @@
     color: #dbe7ff;
     font-size: 0.8rem;
   }
-  .connection-state[data-state='online'],
-  .connection-state[data-state='paired'] {
+  .connection-state[data-state='online'] {
     background: #1d5033;
     color: #c9ffd8;
-  }
-  .connection-state[data-state='failed'],
-  .connection-state[data-state='revoked'] {
-    background: #5a2525;
-    color: #ffd1d1;
-  }
-  .peer-pairing-status {
-    margin: 0;
-    padding: 0.4rem;
-    border-radius: 0.35rem;
-    background: #121b2a;
-    color: #d8e2f8;
-    line-height: 1.35;
-  }
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-  .host-status-metrics {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.35rem;
-    margin: 0;
-  }
-  .host-status-metrics div {
-    display: grid;
-    gap: 0.1rem;
-    padding: 0.35rem;
-    border-radius: 0.35rem;
-    background: var(--surface-2);
-  }
-  .host-status-metrics dt {
-    color: var(--muted);
-    font-size: 0.72rem;
-    text-transform: uppercase;
-  }
-  .host-status-metrics dd {
-    margin: 0;
-    color: var(--text);
-    font-weight: 700;
-  }
-  .instance-note {
-    color: var(--muted);
-    line-height: 1.4;
   }
   .host-content {
     display: grid;
@@ -2953,12 +2828,6 @@
   .confirm-dialog p {
     margin: 0;
   }
-  .switcher-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.5rem;
-  }
   .theme-toggle {
     background: transparent;
     color: var(--text);
@@ -2992,17 +2861,53 @@
     margin: 0 0 0.5rem;
     overflow-wrap: anywhere;
   }
-  .host-sidebar .host-card {
-    padding: 0.75rem;
-    gap: 0.4rem;
+  .host-sidebar {
+    gap: 0.35rem;
   }
-  .host-sidebar h1 {
-    margin: 0;
-    font-size: 1.15rem;
-    overflow-wrap: anywhere;
+  .peer-list {
+    display: grid;
+    gap: 0.25rem;
   }
-  .slim-node > button {
+  .peer-row {
+    display: grid;
+    gap: 0.1rem;
     width: 100%;
+    padding: 0.35rem 0.45rem;
+    text-align: left;
+    background: transparent;
+    color: inherit;
+    border-radius: 0.4rem;
+  }
+  .peer-row.active,
+  .peer-row[aria-current='true'] {
+    border-color: var(--accent);
+    background: #243028;
+  }
+  main[data-theme='light'] .peer-row.active,
+  main[data-theme='light'] .peer-row[aria-current='true'] {
+    background: #e5f3ea;
+  }
+  .peer-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.35rem;
+    min-width: 0;
+  }
+  .peer-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .peer-stats {
+    color: var(--muted);
+    font-size: 0.75rem;
+    line-height: 1.2;
+  }
+  .main-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
   }
   .folder-nav {
     list-style: none;
@@ -3020,7 +2925,7 @@
     top: 0;
     right: 0;
     bottom: 0;
-    left: 18rem;
+    left: 16rem;
     overflow: auto;
     padding: 1rem 1.25rem 2rem;
     background: var(--bg);

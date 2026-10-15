@@ -13,6 +13,7 @@ import (
 	"filesyncengine/internal/configsync"
 	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/link"
+	"filesyncengine/internal/linkstats"
 )
 
 // ConfigSyncResponse is the redacted view returned to a GUI.
@@ -132,10 +133,25 @@ func ExchangeConfigSync(ctx context.Context, configPath string, peer config.Peer
 }
 
 func responseFrom(replica configsync.Replica) ConfigSyncResponse {
+	views := replica.Instances()
+	total := linkstats.Default.Total()
+	for i := range views {
+		if views[i].Local {
+			views[i].AverageBytesPerSecond = total.AverageBytesPerSecond
+			views[i].PendingBytes = total.PendingBytes
+			continue
+		}
+		sample := linkstats.Default.Get(views[i].InstanceID)
+		if sample == (linkstats.Sample{}) {
+			sample = linkstats.Default.Get(views[i].Label)
+		}
+		views[i].AverageBytesPerSecond = sample.AverageBytesPerSecond
+		views[i].PendingBytes = sample.PendingBytes
+	}
 	return ConfigSyncResponse{
 		GroupID:         replica.GroupID,
 		LocalInstanceID: replica.InstanceID,
-		Instances:       replica.Instances(),
+		Instances:       views,
 	}
 }
 

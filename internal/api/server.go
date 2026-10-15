@@ -661,6 +661,8 @@ type PeerState struct {
 	SendRemainingBytes           int64                   `json:"sendRemainingBytes,omitempty"`
 	AverageReceiveBytesPerSecond int64                   `json:"averageReceiveBytesPerSecond,omitempty"`
 	AverageSendBytesPerSecond    int64                   `json:"averageSendBytesPerSecond,omitempty"`
+	AverageBytesPerSecond        int64                   `json:"averageBytesPerSecond"`
+	PendingBytes                 int64                   `json:"pendingBytes"`
 	Transfer                     PeerTransferState       `json:"transfer,omitempty"`
 	Metadata                     PeerMetadataState       `json:"metadata,omitempty"`
 	NetworkDiagnostics           []PeerNetworkDiagnostic `json:"networkDiagnostics,omitempty"`
