@@ -221,6 +221,7 @@
     | 'warnings'
     | 'maintenance'
     | 'daemon-settings'
+    | 'security'
     | 'desktop-settings'
     | 'help';
 
