@@ -11,11 +11,12 @@ import (
 )
 
 type issuedCode struct {
-	code    string
-	record  Record
-	payload []byte
-	expires time.Time
-	used    bool
+	code        string
+	record      Record
+	payload     []byte
+	expires     time.Time
+	used        bool
+	unpublished bool
 }
 
 // Service issues and redeems short-lived single-use pairing codes.
@@ -71,8 +72,20 @@ func (s *Service) Relays() []string {
 	return append([]string(nil), s.relays...)
 }
 
+// SetTTL overrides how long an unused code remains redeemable.
+// A non-positive duration keeps the one-hour default.
+func (s *Service) SetTTL(ttl time.Duration) {
+	if s == nil || ttl <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ttl = ttl
+}
+
 // Issue publishes a code-bound record and remembers it until it is redeemed or expires.
 func (s *Service) Issue(ctx context.Context, identity peeridentity.Identity, profile Profile) (string, time.Time, error) {
+	s.Sweep(ctx)
 	dir, err := s.directory(ctx)
 	if err != nil {
 		return "", time.Time{}, err
@@ -81,7 +94,10 @@ func (s *Service) Issue(ctx context.Context, identity peeridentity.Identity, pro
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	expires := s.now().UTC().Add(s.ttl).Truncate(time.Second)
+	s.mu.Lock()
+	ttl := s.ttl
+	s.mu.Unlock()
+	expires := s.now().UTC().Add(ttl).Truncate(time.Second)
 	if profile.DHTPeerID == "" {
 		profile.DHTPeerID = s.PeerID()
 	}
@@ -134,7 +150,9 @@ func (s *Service) Lookup(ctx context.Context, code string) (Record, error) {
 	return Record{}, errors.New("pairing code was not found")
 }
 
-// Claim burns a code and returns the published record. A second claim fails.
+// Claim burns a code and returns the published record. The burn happens
+// before the record is returned, so a second claim is rejected even while
+// the code is still inside its expiry. An expired code is unpublished too.
 func (s *Service) Claim(ctx context.Context, claim ClaimRequest) (Record, error) {
 	if err := VerifyClaim(claim); err != nil {
 		return Record{}, err
@@ -153,21 +171,62 @@ func (s *Service) Claim(ctx context.Context, claim ClaimRequest) (Record, error)
 		s.mu.Unlock()
 		return Record{}, errors.New("pairing code was not found")
 	}
+	if !s.now().Before(issued.expires) {
+		issued.used = true
+		s.mu.Unlock()
+		s.unpublishCode(ctx, normalized)
+		return Record{}, errors.New("pairing code expired")
+	}
 	if issued.used {
 		s.mu.Unlock()
 		return Record{}, errors.New("pairing code already used")
 	}
-	if !s.now().Before(issued.expires) {
-		s.mu.Unlock()
-		return Record{}, errors.New("pairing code expired")
-	}
 	issued.used = true
 	record := issued.record
 	s.mu.Unlock()
-	if dir, err := s.directory(ctx); err == nil {
-		_ = dir.Unpublish(ctx, Namespace(normalized))
-	}
+	s.unpublishCode(ctx, normalized)
 	return record, nil
+}
+
+// Sweep unpublishes codes that were redeemed or reached their expiry.
+// A failed unpublish is retried on the next sweep.
+func (s *Service) Sweep(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	now := s.now()
+	pending := make([]string, 0)
+	for _, issued := range s.codes {
+		if issued == nil || issued.unpublished {
+			continue
+		}
+		if issued.used || !now.Before(issued.expires) {
+			if !now.Before(issued.expires) {
+				issued.used = true
+			}
+			pending = append(pending, issued.code)
+		}
+	}
+	s.mu.Unlock()
+	for _, code := range pending {
+		s.unpublishCode(ctx, code)
+	}
+}
+
+func (s *Service) unpublishCode(ctx context.Context, code string) {
+	dir, err := s.directory(ctx)
+	if err != nil {
+		return
+	}
+	if err := dir.Unpublish(ctx, Namespace(code)); err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if issued := s.codes[NormalizeCode(code)]; issued != nil {
+		issued.unpublished = true
+	}
 }
 
 func (s *Service) directory(ctx context.Context) (Directory, error) {

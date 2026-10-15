@@ -104,7 +104,7 @@ async function showDefaultPairingCode(page, service) {
     const message = await page.getByTestId('pairing-message').textContent().catch(() => '');
     return `${await code.count()} code element(s); ${(message || '').trim() || 'pending'}`;
   }, { timeout: 60000 }).toBe('shown');
-  await expect(code).toContainText(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
+  await expect(code).toContainText(/[A-Z0-9]{4}(-[A-Z0-9]{4}){3}/);
   await expect(page.getByTestId('pairing-message')).toContainText('is ready');
   await expect(page.getByTestId('pairing-message')).not.toContainText('invalid p2p multiaddr');
 }

@@ -7,8 +7,9 @@ import (
 )
 
 // Directory stores pairing records for lookup. The public DHT adapter publishes
-// the MAC-bound record under Namespace(code). Callers still have to Open the
-// payload with the code before trusting it.
+// the encrypted record under Namespace(code). Namespace uses only the locator
+// half. Callers still have to Open the payload with the full code before
+// trusting it.
 type Directory interface {
 	Publish(ctx context.Context, namespace string, payload []byte) error
 	Lookup(ctx context.Context, namespace string) ([][]byte, error)

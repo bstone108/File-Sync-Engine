@@ -294,6 +294,7 @@ func run(configPath string) {
 			structuredlog.Event(stopProjection.LogLevel, stopProjection.LogEvent, stopProjection.LogMessage, stopProjection.LogFields)
 			return
 		case <-ticker.C:
+			apicontrol.SweepPairingCodes(detectCtx)
 		}
 		now := time.Now()
 		if fresh, loadErr := config.LoadFile(configPath); loadErr == nil {

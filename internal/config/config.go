@@ -281,7 +281,23 @@ type DiscoveryConfig struct {
 	Local             bool               `json:"local"`
 	DHTNamespace      string             `json:"dhtNamespace,omitempty"`
 	DHTBootstrapPeers []string           `json:"dhtBootstrapPeers,omitempty"`
+	PairingCodeTTL    string             `json:"pairingCodeTTL,omitempty"`
 	NetworkHints      NetworkHintsConfig `json:"networkHints,omitempty"`
+}
+
+// PairingCodeLifetime is how long an unused pairing code stays redeemable.
+// An empty value uses the one-hour default. A configured value must be a
+// positive Go duration no longer than 24 hours.
+func (d DiscoveryConfig) PairingCodeLifetime() (time.Duration, error) {
+	raw := strings.TrimSpace(d.PairingCodeTTL)
+	if raw == "" {
+		return time.Hour, nil
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 || parsed > 24*time.Hour {
+		return 0, fmt.Errorf("discovery.pairingCodeTTL must be a positive duration up to 24h")
+	}
+	return parsed, nil
 }
 
 type NetworkHintsConfig struct {
@@ -436,6 +452,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Metadata.PerFolder && c.Metadata.Backend != MetadataBackendBadger {
 		return errors.New("metadata.perFolder requires metadata.backend to be badger")
+	}
+	if _, err := c.Discovery.PairingCodeLifetime(); err != nil {
+		return err
 	}
 	for i, peer := range c.Discovery.DHTBootstrapPeers {
 		if peer == "" {

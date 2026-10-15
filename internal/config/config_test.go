@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadConfigAcceptsManualPeersAndFolderModes(t *testing.T) {
@@ -907,5 +908,22 @@ func TestManagerReloadIfChangedKeepsLastGoodConfigOnInvalidUpdate(t *testing.T) 
 	}
 	if mgr.Current().Folders[0].Mode != ModeSendReceive {
 		t.Fatalf("last good config was not preserved")
+	}
+}
+
+func TestPairingCodeLifetimeDefaultsToOneHour(t *testing.T) {
+	got, err := (DiscoveryConfig{}).PairingCodeLifetime()
+	if err != nil || got != time.Hour {
+		t.Fatalf("default = %s err=%v", got, err)
+	}
+	got, err = (DiscoveryConfig{PairingCodeTTL: "45m"}).PairingCodeLifetime()
+	if err != nil || got != 45*time.Minute {
+		t.Fatalf("configured = %s err=%v", got, err)
+	}
+	if _, err := (DiscoveryConfig{PairingCodeTTL: "0s"}).PairingCodeLifetime(); err == nil {
+		t.Fatal("zero ttl was accepted")
+	}
+	if _, err := (DiscoveryConfig{PairingCodeTTL: "48h"}).PairingCodeLifetime(); err == nil {
+		t.Fatal("ttl above 24h was accepted")
 	}
 }

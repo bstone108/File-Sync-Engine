@@ -2055,11 +2055,11 @@
         </p>
         <button type="button" data-testid="show-pairing-code" on:click={showPairingCode} disabled={pairingLoading}>Show pairing code</button>
         {#if pairingCode}
-          <p data-testid="pairing-code">Pairing code {pairingCode}. It expires quickly and works once. The other engine looks it up on the DHT.</p>
+          <p data-testid="pairing-code">Pairing code {pairingCode}. Enter this one code on the other engine. It works once and expires if unused. The other engine looks it up on the DHT.</p>
         {/if}
         <label>
           Remote pairing code
-          <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH" />
+          <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
         </label>
         <button type="button" data-testid="redeem-pairing-code" on:click={redeemRemotePairingCode} disabled={pairingLoading}>Link with pairing code</button>
         <p data-testid="pairing-advertise-url">

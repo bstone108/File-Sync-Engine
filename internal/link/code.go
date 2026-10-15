@@ -1,6 +1,8 @@
 package link
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,20 +17,23 @@ import (
 )
 
 const (
-	CodeVersion = "fse-pair-code-v1"
-	// CodeTTL is how long a pairing code can be redeemed.
-	CodeTTL = 10 * time.Minute
+	CodeVersion = "fse-pair-code-v2"
+	// CodeTTL is how long an unused pairing code can be redeemed.
+	// discovery.pairingCodeTTL overrides it; the default is one hour.
+	CodeTTL = time.Hour
 	// CodeNamespacePrefix is the DHT provider namespace for one pairing code.
-	// The rest of the namespace is a hash of the code, so the code itself is
-	// not published.
+	// The rest of the namespace is a hash of the locator half only.
 	CodeNamespacePrefix = "filesyncengine/pair/v1/"
+	codeLen             = 16
+	locatorLen          = 8
 )
 
 const codeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-// Record is the DHT payload for a pairing code. The code is not inside it.
-// A MAC binds the payload to the code, and a signature binds it to the
-// publisher identity key, so a lookup attacker cannot substitute another peer.
+// Record is the pairing profile sealed inside the DHT payload. The published
+// bytes are an encrypted envelope. The locator half of the code derives the
+// DHT key. The secret half decrypts and authenticates the envelope and is
+// never published.
 type Record struct {
 	Version           string    `json:"version"`
 	DiscoveryID       string    `json:"discoveryId"`
@@ -55,28 +60,57 @@ func (r Record) Profile() Profile {
 	}
 }
 
-// Namespace is the DHT lookup key for a code. It is not reversible to the code.
+// Namespace is the DHT lookup key for a code. It is derived from the locator
+// half only, so the secret half is not published and cannot be recovered from
+// the DHT key.
 func Namespace(code string) string {
-	sum := sha256.Sum256([]byte(CodeVersion + ":" + NormalizeCode(code)))
+	sum := sha256.Sum256([]byte(CodeVersion + ":locator:" + Locator(code)))
 	return CodeNamespacePrefix + hex.EncodeToString(sum[:])
 }
 
-// NewCode returns a short single-use pairing code, displayed as XXXX-XXXX.
-func NewCode() (string, error) {
-	buf := make([]byte, 5)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
+// Locator is the first half of a pairing code, displayed as the first two
+// groups. It is the only input to the DHT lookup key.
+func Locator(code string) string {
+	normalized := NormalizeCode(code)
+	if len(normalized) < locatorLen {
+		return normalized
 	}
-	acc := uint64(buf[0])<<32 | uint64(buf[1])<<24 | uint64(buf[2])<<16 | uint64(buf[3])<<8 | uint64(buf[4])
-	chars := make([]byte, 8)
-	for i := 7; i >= 0; i-- {
-		chars[i] = codeAlphabet[acc&31]
-		acc >>= 5
-	}
-	return string(chars[:4]) + "-" + string(chars[4:]), nil
+	return normalized[:locatorLen]
 }
 
-// NormalizeCode strips separators and rejects anything that is not 8 alphabet characters.
+// Secret is the second half of a pairing code. It decrypts the DHT record and
+// authenticates the pairing exchange. It is not part of the DHT key.
+func Secret(code string) string {
+	normalized := NormalizeCode(code)
+	if len(normalized) != codeLen {
+		return ""
+	}
+	return normalized[locatorLen:]
+}
+
+// NewCode returns one single-use pairing code, displayed as
+// XXXX-XXXX-XXXX-XXXX. The first two groups are the DHT locator. The last two
+// groups are the secret.
+func NewCode() (string, error) {
+	chars := make([]byte, codeLen)
+	var scratch [32]byte
+	filled := 0
+	for filled < codeLen {
+		if _, err := rand.Read(scratch[:]); err != nil {
+			return "", err
+		}
+		for _, b := range scratch {
+			chars[filled] = codeAlphabet[b&31]
+			filled++
+			if filled == codeLen {
+				break
+			}
+		}
+	}
+	return string(chars[0:4]) + "-" + string(chars[4:8]) + "-" + string(chars[8:12]) + "-" + string(chars[12:16]), nil
+}
+
+// NormalizeCode strips separators. A valid code is 16 alphabet characters.
 func NormalizeCode(code string) string {
 	var b strings.Builder
 	for _, r := range strings.ToUpper(strings.TrimSpace(code)) {
@@ -89,7 +123,7 @@ func NormalizeCode(code string) string {
 }
 
 func validCode(code string) bool {
-	if len(code) != 8 {
+	if len(code) != codeLen {
 		return false
 	}
 	for _, r := range code {
@@ -133,10 +167,10 @@ func Seal(code string, identity peeridentity.Identity, profile Profile, expires 
 	if err := signRecord(&record, identity); err != nil {
 		return Record{}, nil, err
 	}
-	if err := macRecord(&record, normalized); err != nil {
+	if err := macRecord(&record, Secret(normalized)); err != nil {
 		return Record{}, nil, err
 	}
-	payload, err := json.Marshal(record)
+	payload, err := encryptRecord(record, Secret(normalized))
 	if err != nil {
 		return Record{}, nil, err
 	}
@@ -150,14 +184,14 @@ func Open(code string, payload []byte, now time.Time) (Record, error) {
 	if !validCode(normalized) {
 		return Record{}, errors.New("pairing code is invalid")
 	}
-	var record Record
-	if err := json.Unmarshal(payload, &record); err != nil {
-		return Record{}, errors.New("pairing record failed key verification")
+	record, err := decryptRecord(payload, Secret(normalized))
+	if err != nil {
+		return Record{}, err
 	}
 	if record.Version != CodeVersion || record.DiscoveryID == "" || record.Signature == "" || record.MAC == "" {
 		return Record{}, errors.New("pairing record failed key verification")
 	}
-	if err := verifyMAC(record, normalized); err != nil {
+	if err := verifyMAC(record, Secret(normalized)); err != nil {
 		return Record{}, err
 	}
 	body, err := record.signedBody()
@@ -172,6 +206,74 @@ func Open(code string, payload []byte, now time.Time) (Record, error) {
 	}
 	if err := validateCertificatePin(record); err != nil {
 		return Record{}, err
+	}
+	return record, nil
+}
+
+type codeEnvelope struct {
+	Version    string `json:"version"`
+	Nonce      string `json:"nonce"`
+	Ciphertext string `json:"ciphertext"`
+}
+
+func secretKey(secret string) []byte {
+	sum := sha256.Sum256([]byte(CodeVersion + ":secret:" + secret))
+	return sum[:]
+}
+
+func encryptRecord(record Record, secret string) ([]byte, error) {
+	plain, err := json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(secretKey(secret))
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	ciphertext := aead.Seal(nil, nonce, plain, []byte(CodeVersion))
+	return json.Marshal(codeEnvelope{
+		Version:    CodeVersion,
+		Nonce:      hex.EncodeToString(nonce),
+		Ciphertext: hex.EncodeToString(ciphertext),
+	})
+}
+
+func decryptRecord(payload []byte, secret string) (Record, error) {
+	var envelope codeEnvelope
+	if err := json.Unmarshal(payload, &envelope); err != nil || envelope.Version != CodeVersion || secret == "" {
+		return Record{}, errors.New("pairing record failed key verification")
+	}
+	nonce, err := hex.DecodeString(envelope.Nonce)
+	if err != nil {
+		return Record{}, errors.New("pairing record failed key verification")
+	}
+	ciphertext, err := hex.DecodeString(envelope.Ciphertext)
+	if err != nil {
+		return Record{}, errors.New("pairing record failed key verification")
+	}
+	block, err := aes.NewCipher(secretKey(secret))
+	if err != nil {
+		return Record{}, errors.New("pairing record failed key verification")
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return Record{}, errors.New("pairing record failed key verification")
+	}
+	plain, err := aead.Open(nil, nonce, ciphertext, []byte(CodeVersion))
+	if err != nil {
+		return Record{}, errors.New("pairing record failed key verification")
+	}
+	var record Record
+	if err := json.Unmarshal(plain, &record); err != nil {
+		return Record{}, errors.New("pairing record failed key verification")
 	}
 	return record, nil
 }
