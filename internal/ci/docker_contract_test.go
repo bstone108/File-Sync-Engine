@@ -46,6 +46,7 @@ func TestDockerDistributionDefaultsRootPersistentStateAtConfig(t *testing.T) {
 		"fse config init \"$CONFIG_PATH\"",
 		"FSE_CONTAINER_FIRST_RUN=true fse container-bootstrap \"$CONFIG_PATH\"",
 		"fse start \"$CONFIG_PATH\"",
+		"fse exited with status",
 	} {
 		if !strings.Contains(entrypoint, want) {
 			t.Fatalf("container entrypoint missing %q:\n%s", want, entrypoint)
