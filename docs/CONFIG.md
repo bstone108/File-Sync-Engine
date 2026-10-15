@@ -31,7 +31,7 @@ An explicit path always wins.
   "identity": {
     "privateKey": "local-node-secret",
     "publicKey": "share-with-peers",
-    "encryptionLevel": 5,
+    "encryptionLevel": 4,
     "groups": [
       {"id": "family-sync", "token": "explicit-high-entropy-token-created-by-user", "enabled": true}
     ]
@@ -98,13 +98,13 @@ The backup planner now has tested mode semantics for which snapshot blocks need 
 
 - `identity.privateKey` is the local Ed25519 signing private key and must stay secret.
 - `identity.publicKey` is safe to share with trusted peers for stream hello verification.
-- `identity.encryptionLevel` accepts `0` through `10`; generated configs default to `5`.
+- `identity.encryptionLevel` accepts `0` through `10` and is the operating level for peer data sessions. Generated configs default to `4`. Level `0` is plaintext. Identity exchange, negotiation, and pairing stay at level `10`. The suite for each level is documented in `docs/ENCRYPTION.md`.
 - `identity.groups` is optional and only exists when explicitly configured. Each enabled group needs an `id` and a resettable high-entropy `token` of at least 64 characters. The token is a secret group membership credential; do not publish it.
 - Engines in the same identity group keep a replica of each instance's non-secret configuration and connection details, keyed by instance UUID, so any linked GUI can view and manage every instance. Each instance owns its settings. A change on one instance is stored as that instance's record and is never applied on another instance. Queued edits apply only on the instance they target. The clocks and relay rules are in `docs/CONFIG-SYNC.md`. API keys and group tokens stay out of that database and out of the browser.
 - `identity.revoked` records persist revoked identity material using `groupId`, optional `discoveryId`, and a non-secret `bootstrapProofKeyHash`. Import/pairing code rejects a package whose group/discovery/proof hash matches a revoked record, so a compromised identity file cannot silently re-establish trust after global revocation; generate and manually import a new identity instead.
 - `fse config show` redacts `api.key`, peer `apiKey`, and the local identity private key.
 
-The current stream prototype can sign and verify peer hello messages when the caller supplies expected public keys. The stream handshake negotiates the session encryption level by defaulting to the highest level requested by either side; explicit lower-strength compatibility must be allowed by the stream caller. The 0-10 encryption profile mapping is defined in `docs/PEER_PROTOCOL.md`; payload encryption that enforces the selected profile is still planned.
+Stream peers sign hello messages when the caller supplies expected public keys. The handshake uses the higher requested level, and payload bytes then use that suite. See `docs/ENCRYPTION.md`.
 
 ## Discovery
 
@@ -144,7 +144,7 @@ NAT traversal is on unless `discovery.nat.disabled` is true. The stack is AutoNA
   "id": "peer-b",
   "apiKey": "peer-api-key-for-prototype-http-pulls",
   "identityPublicKey": "peer-public-key-for-stream-auth",
-  "encryptionLevel": 5,
+  "encryptionLevel": 4,
   "sendBytesPerSecond": 0,
   "receiveBytesPerSecond": 0,
   "addresses": ["/ip4/192.0.2.10/tcp/22000/p2p/peer-b"],
@@ -167,7 +167,7 @@ For the prototype peer path, a manual endpoint may point at another node's contr
 
 A `recvonly` or `sendrecv` folder scan can pull the same folder ID from peers with a manual HTTP endpoint and `apiKey`. Optional endpoint `networkHint` values (`local`, `wan`, `vpn_overlay`, or `container_bridge`) let an embedding/container runtime override conservative address classification for manual HTTP routing when it has already proven the topology. The broader `discovery.networkHints.localContainerGatewayIPs` list can promote exact Docker host-gateway/container bridge IPs for all unhinted manual HTTP endpoints, `discovery.networkHints.localCIDRs` can promote deployment-proven local CIDR ranges such as published-port container networks, and `discovery.networkHints.publishedPortMappings` can promote only exact published `hostIP:hostPort` endpoints. `sidecar` endpoints are accepted as direct candidate observations from a trusted container/helper process; daemon-scheduled manual HTTP peer pulls and stream metadata dialing now select from generated endpoint candidates for configured endpoints plus live sidecar/helper observations gathered during daemon discovery polling, preserve explicit endpoint/observation network hints, and filter control-plane-only rendezvous helpers out of data-transfer pulls. This lets a trusted sidecar/helper route such as a Docker host-gateway/published-port HTTP or TCP endpoint beat a configured WAN endpoint when hints prove it is the better true-local path. Relay/proxy endpoints are still treated as relay/WAN data paths. `/v1/status` peer entries include `networkDiagnostics` when configured candidates look degraded; for example, a Docker bridge address that is not promoted to true local is reported with `code: "container_bridge_isolated"`, `network: "container_bridge"`, and guidance to publish the daemon port, add published-port/gateway/CIDR hints, or provide trusted sidecar/helper observations before falling back to relay/mesh.
 
-Implemented peer encryption setting foundation: peer identity signing now supports the 0-10 `encryptionLevel` field for authenticated stream hello messages. Level `0` means no encryption for debugging/inspection, `1` means minimal/permissive mode for jurisdictions or deployments that cannot use strong encryption, `4`-`5` are ordinary strong/bank-grade defaults, and `10` means maximum available protection even if it costs more CPU/memory. When two stream peers specify different levels, the session defaults to the highest level set by either peer unless an explicit lawful-compatibility/drop-in weaker mode is allowed by parameter. The level-to-profile policy table is defined in `docs/PEER_PROTOCOL.md`; payload encryption that enforces the selected profile is still planned.
+Peer data sessions encrypt with the negotiated 0-10 suite from `docs/ENCRYPTION.md`. Level `0` is plaintext and is warned in the GUI. Level `4` is the bank-level default (X25519, HKDF-SHA256, AES-256-GCM and ChaCha20-Poly1305). Level `10` is the identity-exchange suite and is much more expensive. When two peers specify different levels, the session uses the higher level. A peer missing material for that level retries once; it does not silently keep the weaker cipher. An explicit weaker level requires `AllowWeakerEncryptionLevel` on both sides.
 
 Endpoint kinds:
 

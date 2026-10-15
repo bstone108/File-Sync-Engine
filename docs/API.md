@@ -307,7 +307,9 @@ The daemon exposes authenticated command endpoints so GUI, web, and automation c
 GET /v1/config
 ```
 
-`PATCH /v1/config` updates only non-secret top-level settings: `nodeName`, `listen`, `api.listen`, `api.encryption`, `logging`, `transfer`, `backup`, `discovery`, `metadata`, and `maintenance`. Nested objects merge. A patch that sets only `logging.level` keeps `logging.output`. An empty `logging.output` is restored to `FSE_LOG_OUTPUT`, or to `/config/logs/fse.jsonl` when `/config` is a directory, or to `stderr`. It rejects secret-bearing fields such as `api.key`, identity private/group tokens, peer API keys, peers, and folders instead of silently accepting or echoing them; peer/folder/discovery-specific command endpoints remain the preferred path for those records. Existing on-disk generated API keys remain preserved during non-secret patches and continue to authenticate clients through `X-FSE-API-Key`.
+`GET /v1/encryption-profiles` returns the level 0-10 suite table from `docs/ENCRYPTION.md`, including an explanation for each level, `dataLevel` (4), and `identityExchangeLevel` (10).
+
+`PATCH /v1/config` updates only non-secret top-level settings: `nodeName`, `listen`, `api.listen`, `api.encryption`, `logging`, `transfer`, `backup`, `discovery`, `metadata`, `maintenance`, and `encryptionLevel`. `encryptionLevel` sets `identity.encryptionLevel` (0 through 10, including an explicit 0) and does not replace identity keys or group tokens. Nested objects merge. A patch that sets only `logging.level` keeps `logging.output`. An empty `logging.output` is restored to `FSE_LOG_OUTPUT`, or to `/config/logs/fse.jsonl` when `/config` is a directory, or to `stderr`. It rejects secret-bearing fields such as `api.key`, the `identity` object, peer API keys, peers, and folders instead of silently accepting or echoing them; peer/folder/discovery-specific command endpoints remain the preferred path for those records. Existing on-disk generated API keys remain preserved during non-secret patches and continue to authenticate clients through `X-FSE-API-Key`.
 
 ```http
 PATCH /v1/config

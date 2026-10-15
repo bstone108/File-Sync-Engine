@@ -15,8 +15,8 @@ import (
 )
 
 const IdentityPackageVersion = "fse-identity-package-v1"
-const IdentityBootstrapEncryptionLevel = 10
-const DefaultPeerPairEncryptionLevel = 4
+const IdentityBootstrapEncryptionLevel = peeridentity.IdentityExchangeEncryptionLevel
+const DefaultPeerPairEncryptionLevel = peeridentity.DefaultEncryptionLevel
 const DefaultPeerPairRotationInterval = 90 * 24 * time.Hour
 
 // IdentityPackage is the authenticated export/import payload GUI clients can

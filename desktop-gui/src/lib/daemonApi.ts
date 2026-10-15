@@ -295,6 +295,33 @@ export async function queueConfigSyncEdit(settings: DaemonConnectionSettings, ed
   });
 }
 
+export type EncryptionProfile = {
+  level: number;
+  name: string;
+  description: string;
+  explanation: string;
+  plaintext: boolean;
+  keyAgreement: string;
+  kdf: string;
+  aead: string;
+  mac: string;
+  signatures: string;
+  rekeyEveryMiB: number;
+  memoryCostMiB: number;
+  iterations: number;
+  compatibilityNote?: string;
+};
+
+export type EncryptionCatalog = {
+  profiles: EncryptionProfile[];
+  dataLevel: number;
+  identityExchangeLevel: number;
+};
+
+export async function fetchEncryptionProfiles(settings: DaemonConnectionSettings): Promise<EncryptionCatalog> {
+  return await daemonAPIRequest<EncryptionCatalog>(settings, '/v1/encryption-profiles');
+}
+
 export async function readDaemonConfig(settings: DaemonConnectionSettings): Promise<DaemonConfig> {
   return await daemonAPIRequest<DaemonConfig>(settings, '/v1/config');
 }
