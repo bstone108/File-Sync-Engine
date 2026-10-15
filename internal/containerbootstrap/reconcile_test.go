@@ -51,6 +51,32 @@ func TestReconcileWebGUISkipsWhenNoneCompatible(t *testing.T) {
 	}
 }
 
+func TestReconcileWebGUIDoesNotDownloadWhenAutoUpdateIsOff(t *testing.T) {
+	t.Setenv("FSE_WEB_GUI_ENABLED", "true")
+	t.Setenv("FSE_WEB_GUI_AUTO_UPDATE", "false")
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	catalog := filepath.Join(dir, "schema-versions.json")
+	body := `{"schema":"fse-gui-schema-catalog-v1","packages":[{"guiVersion":"2026.10.15.02","minEngineSchema":1,"maxEngineSchema":1,"downloadURL":"` + server.URL + `/gui.zip","checksumSHA256":"` + strings.Repeat("ab", 32) + `"}]}`
+	if err := os.WriteFile(catalog, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FSE_WEB_GUI_SCHEMA_INDEX", catalog)
+	path := filepath.Join(dir, "config.json")
+	updated, err := ReconcileWebGUI(path, config.Config{NodeName: "node-a"}, DefaultsFromEnvironment())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.WebGUI.Enabled || updated.WebGUI.PackagePath != "" || hits != 0 {
+		t.Fatalf("opt-out downloaded or enabled the GUI: %+v hits=%d", updated.WebGUI, hits)
+	}
+}
+
 func TestReconcileWebGUISelectsNewestCompatiblePackage(t *testing.T) {
 	t.Setenv("FSE_WEB_GUI_ENABLED", "true")
 	dir := t.TempDir()

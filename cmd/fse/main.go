@@ -301,6 +301,7 @@ func run(configPath string) {
 	peers := append([]string(nil), cfg.Discovery.DHTBootstrapPeers...)
 	fatalexit.Go(func() { discovery.WatchObservedAddresses(detectCtx, peers, advertise.NoteObservedIP) })
 	fatalexit.Go(func() { advertise.StartAutoDetect(detectCtx, cfg) })
+	fatalexit.Go(func() { daemonwebgui.StartAutoUpdate(detectCtx, configPath, apiServer.SetWebGUIState) })
 	schedule := daemonloop.NewPollSchedule(time.Now(), time.Now())
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()

@@ -16,6 +16,14 @@ export type DaemonStatus = {
   peers?: number;
   maintenance?: Record<string, unknown>;
   backup?: Record<string, unknown>;
+  webGUI?: {
+    enabled?: boolean;
+    version?: string;
+    lastUpdateCheck?: string;
+    lastUpdateResult?: string;
+    lastUpdateMessage?: string;
+    autoUpdate?: boolean;
+  };
 };
 
 export type DaemonFolder = {

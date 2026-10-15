@@ -2182,6 +2182,14 @@
 
     <form class="control-form" on:submit|preventDefault={submitWebGUIForm} aria-label="Web GUI form">
       <h3>Web GUI form</h3>
+      <p data-testid="web-gui-version">Web GUI version {status?.webGUI?.version || 'not installed'}</p>
+      <p data-testid="web-gui-update-check">
+        {#if status?.webGUI?.lastUpdateCheck}
+          Last update check {status.webGUI.lastUpdateCheck}. {status.webGUI.lastUpdateMessage || status.webGUI.lastUpdateResult}
+        {:else}
+          No web GUI update check yet.
+        {/if}
+      </p>
       <label>
         Action
         <select bind:value={webGUIFormAction} name="webGUIFormAction">
