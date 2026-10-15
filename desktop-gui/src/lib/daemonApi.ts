@@ -105,7 +105,7 @@ export type PeerCommandRequest = {
 };
 
 export type FolderCommandRequest = {
-  action: 'add' | 'remove' | 'update' | 'pause' | 'resume';
+  action: 'add' | 'remove' | 'update' | 'pause' | 'resume' | 'rescan';
   id?: string;
   path?: string;
   mode?: string;
