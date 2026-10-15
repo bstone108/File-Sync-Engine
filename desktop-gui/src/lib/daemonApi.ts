@@ -7,6 +7,8 @@ export type DaemonStatus = {
   nodeName?: string;
   identityPublicKey?: string;
   advertiseURL?: string;
+  apiListen?: string;
+  publishedAPIPort?: number;
   engineSchemaVersion?: number;
   startedAt?: string;
   status?: string;

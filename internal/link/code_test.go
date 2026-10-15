@@ -154,15 +154,33 @@ func TestManualProfileKeepsLANTailscalePublicRelayAndPin(t *testing.T) {
 	if byHint["wan/manual"] != "https://203.0.113.20:22420" {
 		t.Fatalf("public = %+v", profile.Addresses)
 	}
-	if byHint["container_bridge/manual"] != "https://172.17.0.2:22420" {
-		t.Fatalf("bridge = %+v", profile.Addresses)
+	if _, ok := byHint["container_bridge/manual"]; ok {
+		t.Fatalf("bridge address was advertised: %+v", profile.Addresses)
+	}
+	for _, address := range profile.Addresses {
+		if strings.Contains(address.Address, "172.17.0.2") {
+			t.Fatalf("bridge address was advertised: %+v", profile.Addresses)
+		}
 	}
 	if len(profile.Relays) != 1 || profile.Relays[0] != "https://relay.example:22420" {
 		t.Fatalf("relays = %+v", profile.Relays)
 	}
 	endpoints := profile.Endpoints("https://203.0.113.20:22420")
-	if len(endpoints) != 5 {
+	if len(endpoints) != 4 {
 		t.Fatalf("endpoints = %+v", endpoints)
+	}
+	withHostPort := Gather(cfg, Extras{ExtraURLs: []string{"https://192.168.1.20:22420", "https://172.17.0.4:22420"}})
+	foundHostPort := false
+	for _, address := range withHostPort.Addresses {
+		if strings.Contains(address.Address, "172.17.") || strings.Contains(address.Address, "172.18.") {
+			t.Fatalf("bridge URL in extra addresses: %+v", withHostPort.Addresses)
+		}
+		if address.Address == "https://192.168.1.20:22420" && address.NetworkHint == "local" {
+			foundHostPort = true
+		}
+	}
+	if !foundHostPort {
+		t.Fatalf("published host port missing: %+v", withHostPort.Addresses)
 	}
 }
 

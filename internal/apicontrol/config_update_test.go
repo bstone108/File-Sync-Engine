@@ -41,6 +41,21 @@ func TestHandleConfigUpdatePatchesOnlyNonSecretSettings(t *testing.T) {
 	}
 }
 
+func TestHandleConfigUpdateRejectsDockerBridgeAdvertiseURL(t *testing.T) {
+	configPath := writeConfigUpdateConfig(t)
+	bridge := "https://172.17.0.4:22420"
+	if _, err := HandleConfigUpdate(configPath, api.ConfigUpdateRequest{API: &api.ConfigAPIUpdate{AdvertiseURL: &bridge}}); err == nil || !strings.Contains(err.Error(), "container-internal") {
+		t.Fatalf("bridge advertise URL error = %v", err)
+	}
+	cfg, err := config.LoadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(cfg.API.AdvertiseURL, "172.17.0.4") {
+		t.Fatalf("bridge URL was stored: %s", cfg.API.AdvertiseURL)
+	}
+}
+
 func TestHandleConfigUpdateWithStoreMirrorsLocalSettingsDocument(t *testing.T) {
 	configPath := writeConfigUpdateConfig(t)
 	store := state.NewJSONStore(filepath.Join(t.TempDir(), "state.json"))

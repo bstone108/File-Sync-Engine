@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/configops"
@@ -27,8 +29,10 @@ func SetLinkService(service *link.Service) {
 }
 
 func gatheredProfile(cfg config.Config, certificate string) link.Profile {
+	extras := append(advertise.ListFromEnv(os.Getenv(advertise.EnvVarList)), advertise.PublishedAPIURLs(cfg)...)
 	return link.Gather(cfg, link.Extras{
 		IPs:               detectLinkIPs(),
+		ExtraURLs:         extras,
 		Relays:            linkService.Relays(),
 		DHTPeerID:         linkService.PeerID(),
 		CertificateSHA256: certificate,

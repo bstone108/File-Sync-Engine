@@ -28,6 +28,8 @@ type State struct {
 	EngineSchemaVersion int              `json:"engineSchemaVersion,omitempty"`
 	IdentityPublicKey   string           `json:"identityPublicKey,omitempty"`
 	AdvertiseURL        string           `json:"advertiseURL,omitempty"`
+	APIListen           string           `json:"apiListen,omitempty"`
+	PublishedAPIPort    int              `json:"publishedAPIPort,omitempty"`
 	StartedAt           time.Time        `json:"startedAt"`
 	ConfigPath          string           `json:"configPath"`
 	ConfigVersion       uint64           `json:"configVersion"`

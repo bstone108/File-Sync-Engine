@@ -14,7 +14,11 @@ async function pairFrom(page) {
   await expect(text).toBeVisible();
   const value = await text.inputValue();
   expect(value).toContain('reachableAPIURL');
+  expect(value).toContain('https://fse-');
+  expect(value).not.toMatch(/172\.(1[7-9]|2\d|3[01])\./);
   expect(value).not.toContain('pairing-local-url');
+  const advertised = page.getByTestId('pairing-advertise-override');
+  await expect(advertised).toHaveValue(/https:\/\/fse-[ab]:22420/);
   return value;
 }
 
@@ -40,6 +44,20 @@ async function addSharedFolder(page) {
   await expect(status).not.toContainText('No folder command has run yet');
 }
 
+async function changeLogLevel(page) {
+  await page.getByTestId('nav-daemon-settings').click();
+  const select = page.locator('form[aria-label="Config patch form"] select[name="configPatchLoggingLevel"]');
+  await select.scrollIntoViewIfNeeded();
+  await select.selectOption('debug');
+  const submit = page.getByRole('button', { name: 'Submit non-secret config patch' });
+  await submit.scrollIntoViewIfNeeded();
+  await submit.click();
+  const status = page.getByLabel('Config operation status');
+  await expect(status).toContainText('config patch');
+  await expect(status).not.toContainText('No config command has run yet');
+  await expect(status).not.toContainText('idle:');
+}
+
 async function pageShowsFolderError(page) {
   await page.getByTestId('nav-daemon-settings').click();
   await page.locator('form[aria-label="Daemon settings folder form"] select[name="folderFormAction"]').selectOption('remove');
@@ -56,6 +74,12 @@ async function pageShowsFolderError(page) {
   const trustStatus = page.getByLabel('API trust operation status');
   await expect(trustStatus).not.toContainText('404');
   await expect(trustStatus).not.toContainText('has not been checked yet');
+  await expect(trustStatus).not.toContainText('idle:');
+  const details = page.getByLabel('API certificate trust details');
+  await expect(details).toContainText('Certificate fingerprint');
+  await expect(details).toContainText('Trusted certificate matches');
+  await expect(details).not.toContainText('certificateSha256');
+  await expect(details).not.toContainText('trustedCertificateMatches');
 }
 
 function compose(args, capture = false) {
@@ -97,6 +121,9 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await importOn(b, exported, 'identity import accepted');
   const reverse = await pairFrom(b);
   await importOn(a, reverse, 'already paired');
+  await expect(a.getByText('peer-pair key pending')).toHaveCount(0);
+  await expect(a.getByText('prepared at level 0')).toHaveCount(0);
+  await changeLogLevel(a);
   await addSharedFolder(a);
   await addSharedFolder(b);
   await pageShowsFolderError(a);
@@ -116,4 +143,9 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
       return 'present';
     }
   }, { timeout: 45000 }).toBe('gone');
+
+  await expect(a.locator('aside strong.connection-state').first()).toHaveText('Online');
+  await expect(b.locator('aside strong.connection-state').first()).toHaveText('Online');
+  await expect(a.getByTestId('local-engine-connection')).toHaveText('Online');
+  await expect(b.getByTestId('local-engine-connection')).toHaveText('Online');
 });

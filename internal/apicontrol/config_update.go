@@ -67,6 +67,9 @@ func loadPatchedConfig(configPath string, req api.ConfigUpdateRequest) (config.C
 				if err != nil {
 					return config.Config{}, err
 				}
+				if advertise.ContainerInternalURL(normalized) {
+					return config.Config{}, fmt.Errorf("advertise URL %s is a container-internal address; set %s to a host-reachable URL", normalized, advertise.EnvVar)
+				}
 				cfg.API.AdvertiseURL = normalized
 			}
 		}

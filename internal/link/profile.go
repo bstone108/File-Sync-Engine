@@ -31,9 +31,11 @@ type Profile struct {
 }
 
 // Extras are observations supplied by the caller. Empty IPs means the
-// profile only includes the configured advertise URL.
+// profile only includes the configured advertise URL and ExtraURLs.
+// Container-internal addresses are never included.
 type Extras struct {
 	IPs               []string
+	ExtraURLs         []string
 	Relays            []string
 	DHTPeerID         string
 	CertificateSHA256 string
@@ -48,7 +50,7 @@ func LocalIPs() []string {
 	seen := map[string]struct{}{}
 	out := []string{}
 	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 {
+		if iface.Flags&net.FlagUp == 0 || routing.ContainerInterface(iface.Name) {
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -86,6 +88,9 @@ func Gather(cfg config.Config, extras Extras) Profile {
 		if !strings.Contains(raw, "://") {
 			normalized = scheme + "://" + net.JoinHostPort(raw, port)
 		}
+		if !keepReachableAddress(normalized) {
+			return
+		}
 		if _, ok := seen[normalized]; ok {
 			return
 		}
@@ -98,11 +103,18 @@ func Gather(cfg config.Config, extras Extras) Profile {
 		addresses = append(addresses, Address{Kind: kind, Address: normalized, NetworkHint: hint})
 	}
 	add(cfg.API.AdvertiseURL)
+	for _, extra := range extras.ExtraURLs {
+		add(extra)
+	}
 	for _, ip := range extras.IPs {
 		add(ip)
 	}
-	relays := normalizeList(extras.Relays)
-	for _, relay := range relays {
+	relays := []string{}
+	for _, relay := range normalizeList(extras.Relays) {
+		if !keepReachableAddress(relay) {
+			continue
+		}
+		relays = append(relays, relay)
 		if _, ok := seen[relay]; ok {
 			continue
 		}
@@ -132,7 +144,7 @@ func (p Profile) Endpoints(primary string) []config.EndpointConfig {
 	out := []config.EndpointConfig{}
 	add := func(kind, address, hint string) {
 		address = strings.TrimSpace(address)
-		if address == "" {
+		if address == "" || !keepReachableAddress(address) {
 			return
 		}
 		if _, ok := seen[address]; ok {
@@ -177,7 +189,7 @@ func MergeProfiles(current, observed Profile) Profile {
 	seen := map[string]struct{}{}
 	merged := []Address{}
 	for _, address := range append(append([]Address{}, current.Addresses...), observed.Addresses...) {
-		if address.Address == "" {
+		if address.Address == "" || !keepReachableAddress(address.Address) {
 			continue
 		}
 		if _, ok := seen[address.Address]; ok {
@@ -243,8 +255,12 @@ func addrIP(addr net.Addr) net.IP {
 }
 
 func usableLinkIP(ip net.IP) bool {
-	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || routing.IsContainerBridgeIP(ip) {
 		return false
 	}
 	return true
+}
+
+func keepReachableAddress(address string) bool {
+	return routing.ClassifyEndpointNetwork(address) != routing.ContainerBridgeNetwork
 }

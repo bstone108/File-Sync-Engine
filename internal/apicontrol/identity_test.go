@@ -42,6 +42,31 @@ func TestHandleIdentityPackageBuildsPackageFromCurrentConfig(t *testing.T) {
 	}
 }
 
+func TestIdentityPackageOmitsDockerBridgeURL(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.jsonc")
+	groupToken := strings.Repeat("z", 80)
+	body := `{
+		"nodeName":"node-a",
+		"api":{"listen":"0.0.0.0:22420","key":"api-secret","advertiseURL":"https://172.17.0.4:22420"},
+		"identity":{"privateKey":"private-secret","publicKey":"public-discovery-key","encryptionLevel":4,"groups":[{"id":"family-sync","token":"` + groupToken + `","enabled":true}]},
+		"peers":[],
+		"folders":[]
+	}`
+	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FSE_ADVERTISE_URL", "")
+	t.Setenv("FSE_ADVERTISE_URLS", "")
+	pkg, err := HandleIdentityPackage(configPath, api.IdentityPackageRequest{GroupID: "family-sync"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(pkg.ReachableAPIURL, "172.17.") || strings.Contains(pkg.ReachableAPIURL, "172.18.") {
+		t.Fatalf("package advertised a bridge URL: %s", pkg.ReachableAPIURL)
+	}
+}
+
 func TestHandleIdentityImportValidatesPackageAndCreatesRedactedPeerPairMaterial(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.jsonc")

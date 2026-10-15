@@ -31,6 +31,17 @@ func HandleIdentityPackage(configPath string, req api.IdentityPackageRequest) (p
 	if reachable == "" {
 		reachable = strings.TrimSpace(cfg.API.AdvertiseURL)
 	}
+	if advertise.ContainerInternalURL(reachable) {
+		reachable = ""
+	}
+	if reachable == "" {
+		if resolved, err := advertise.ResolveWithHost(cfg, os.Getenv(advertise.EnvVar), ""); err == nil && !advertise.ContainerInternalURL(resolved) {
+			reachable = resolved
+		}
+	}
+	if advertise.ContainerInternalURL(reachable) {
+		reachable = ""
+	}
 	if reachable != "" {
 		pkg.ReachableAPIURL = reachable
 		fingerprint, err := localAPICertificateFingerprint(configPath, cfg)
