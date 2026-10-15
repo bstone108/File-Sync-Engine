@@ -500,6 +500,39 @@ func TestPullFolderExchangesTransferCapsDuringHandshake(t *testing.T) {
 	}
 }
 
+func TestPullFolderRetriesWhenPeerRequiresAStrongerSuite(t *testing.T) {
+	remoteRoot := t.TempDir()
+	localRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(remoteRoot, "doc.txt"), []byte("raised suite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	serverIdentity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientIdentity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	server := NewServer(ServerConfig{NodeID: "node-a", BlockSize: 8, Folders: map[string]string{"docs": remoteRoot}, Identity: serverIdentity, EncryptionLevel: 8, TrustedPeerPublicKeys: map[string]string{"node-b": clientIdentity.PublicKey}})
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.Serve(context.Background(), serverConn) }()
+
+	result, err := PullFolder(context.Background(), clientConn, PullOptions{NodeID: "node-b", FolderID: "docs", LocalRoot: localRoot, Identity: clientIdentity, EncryptionLevel: 4, PeerPublicKey: serverIdentity.PublicKey})
+	if err != nil {
+		t.Fatalf("PullFolder: %v", err)
+	}
+	if result.NegotiatedEncryptionLevel != 8 {
+		t.Fatalf("negotiated encryption level = %d", result.NegotiatedEncryptionLevel)
+	}
+	clientConn.Close()
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server: %v", err)
+	}
+}
+
 func TestPullFolderRejectsWeakerNegotiatedEncryptionWithoutOverride(t *testing.T) {
 	remoteRoot := t.TempDir()
 	localRoot := t.TempDir()

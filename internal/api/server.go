@@ -19,6 +19,7 @@ import (
 	"filesyncengine/internal/foldershare"
 	"filesyncengine/internal/link"
 	"filesyncengine/internal/pairing"
+	"filesyncengine/internal/peeridentity"
 	"filesyncengine/internal/scanner"
 	"filesyncengine/internal/schemaversion"
 	"filesyncengine/internal/state"
@@ -427,15 +428,16 @@ type APITrustCommandResponse struct {
 }
 
 type ConfigUpdateRequest struct {
-	NodeName    *string                   `json:"nodeName,omitempty"`
-	Listen      []string                  `json:"listen,omitempty"`
-	API         *ConfigAPIUpdate          `json:"api,omitempty"`
-	Logging     *config.LoggingConfig     `json:"logging,omitempty"`
-	Transfer    *config.TransferConfig    `json:"transfer,omitempty"`
-	Backup      *config.BackupConfig      `json:"backup,omitempty"`
-	Discovery   *config.DiscoveryConfig   `json:"discovery,omitempty"`
-	Metadata    *config.MetadataConfig    `json:"metadata,omitempty"`
-	Maintenance *config.MaintenanceConfig `json:"maintenance,omitempty"`
+	NodeName        *string                   `json:"nodeName,omitempty"`
+	Listen          []string                  `json:"listen,omitempty"`
+	API             *ConfigAPIUpdate          `json:"api,omitempty"`
+	Logging         *config.LoggingConfig     `json:"logging,omitempty"`
+	Transfer        *config.TransferConfig    `json:"transfer,omitempty"`
+	Backup          *config.BackupConfig      `json:"backup,omitempty"`
+	Discovery       *config.DiscoveryConfig   `json:"discovery,omitempty"`
+	Metadata        *config.MetadataConfig    `json:"metadata,omitempty"`
+	Maintenance     *config.MaintenanceConfig `json:"maintenance,omitempty"`
+	EncryptionLevel *int                      `json:"encryptionLevel,omitempty"`
 	// Raw is the original JSON body. Nested objects merge by presence so a
 	// logging.level patch does not drop logging.output.
 	Raw json.RawMessage `json:"-"`
@@ -806,6 +808,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/config-sync/merge", s.requireKey(s.handleConfigSyncMerge))
 	mux.HandleFunc("/v1/filesystem/browse", s.requireKey(s.handleFilesystemBrowse))
 	mux.HandleFunc("/v1/config", s.requireKey(s.handleConfig))
+	mux.HandleFunc("/v1/encryption-profiles", s.requireKey(s.handleEncryptionProfiles))
 	mux.HandleFunc("/v1/stop", s.requireKey(s.handleStop))
 	mux.HandleFunc("/v1/folder-index", s.requireKey(s.handleFolderIndex))
 	mux.HandleFunc("/v1/folder-file", s.requireKey(s.handleFolderFile))
@@ -1989,6 +1992,44 @@ func BrowseLocalFilesystem(ctx context.Context, req FilesystemBrowseRequest) (Fi
 		response.Entries = append(response.Entries, FilesystemBrowseEntry{Name: entry.Name(), Path: entryPath, Type: "directory", Readable: readable})
 	}
 	return response, nil
+}
+
+func (s *Server) handleEncryptionProfiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	profiles := peeridentity.EncryptionProfiles()
+	type profileJSON struct {
+		Level             int    `json:"level"`
+		Name              string `json:"name"`
+		Description       string `json:"description"`
+		Explanation       string `json:"explanation"`
+		Plaintext         bool   `json:"plaintext"`
+		KeyAgreement      string `json:"keyAgreement"`
+		KDF               string `json:"kdf"`
+		AEAD              string `json:"aead"`
+		MAC               string `json:"mac"`
+		Signatures        string `json:"signatures"`
+		RekeyEveryMiB     int    `json:"rekeyEveryMiB"`
+		MemoryCostMiB     int    `json:"memoryCostMiB"`
+		Iterations        int    `json:"iterations"`
+		CompatibilityNote string `json:"compatibilityNote,omitempty"`
+	}
+	encoded := make([]profileJSON, 0, len(profiles))
+	for _, profile := range profiles {
+		encoded = append(encoded, profileJSON{
+			Level: profile.Level, Name: profile.Name, Description: profile.Description, Explanation: profile.Explanation,
+			Plaintext: profile.Plaintext, KeyAgreement: profile.KeyAgreement, KDF: profile.KDF, AEAD: profile.AEAD,
+			MAC: profile.MAC, Signatures: profile.Signatures, RekeyEveryMiB: profile.RekeyEveryMiB,
+			MemoryCostMiB: profile.MemoryCostMiB, Iterations: profile.Iterations, CompatibilityNote: profile.CompatibilityNote,
+		})
+	}
+	writeJSON(w, map[string]any{
+		"profiles":              encoded,
+		"dataLevel":             peeridentity.DefaultEncryptionLevel,
+		"identityExchangeLevel": peeridentity.IdentityExchangeEncryptionLevel,
+	})
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {

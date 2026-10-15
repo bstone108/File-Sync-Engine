@@ -49,15 +49,21 @@ type Message struct {
 }
 
 type Hello struct {
-	ProtocolVersion  int             `json:"protocolVersion"`
-	NodeID           string          `json:"nodeID"`
-	Capabilities     []string        `json:"capabilities,omitempty"`
-	PublicKey        string          `json:"publicKey,omitempty"`
-	SessionPublicKey string          `json:"sessionPublicKey,omitempty"`
-	EncryptionLevel  int             `json:"encryptionLevel"`
-	Transfer         *TransferLimits `json:"transfer,omitempty"`
-	Nonce            string          `json:"nonce,omitempty"`
-	Signature        string          `json:"signature,omitempty"`
+	ProtocolVersion      int             `json:"protocolVersion"`
+	NodeID               string          `json:"nodeID"`
+	Capabilities         []string        `json:"capabilities,omitempty"`
+	PublicKey            string          `json:"publicKey,omitempty"`
+	SessionPublicKey     string          `json:"sessionPublicKey,omitempty"`
+	SessionKEMPublic     string          `json:"sessionKEMPublic,omitempty"`
+	SessionKEMCiphertext string          `json:"sessionKEMCiphertext,omitempty"`
+	SessionPQPublic      string          `json:"sessionPQPublic,omitempty"`
+	SessionPQSignature   string          `json:"sessionPQSignature,omitempty"`
+	SessionSLHPublic     string          `json:"sessionSLHPublic,omitempty"`
+	SessionSLHSignature  string          `json:"sessionSLHSignature,omitempty"`
+	EncryptionLevel      int             `json:"encryptionLevel"`
+	Transfer             *TransferLimits `json:"transfer,omitempty"`
+	Nonce                string          `json:"nonce,omitempty"`
+	Signature            string          `json:"signature,omitempty"`
 }
 
 type TransferLimits struct {

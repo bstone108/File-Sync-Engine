@@ -10,6 +10,7 @@
     fetchDaemonTransfers,
     fetchBackupJobs,
     fetchAPITrustStatus,
+    fetchEncryptionProfiles,
     browseFilesystemDirectories,
     fetchRemoteMeshSettings,
     generateIdentityPairingPackage,
@@ -34,6 +35,7 @@
     sendWebGUICommand,
     type CommandResponse,
     type APITrustStatus,
+    type EncryptionProfile,
     type DaemonConfig,
     type DaemonStatus,
     type DaemonFolder,
@@ -165,6 +167,11 @@
   let maintenanceFormFolderID = '';
   let webGUIFormAction: 'status' | 'install' | 'update' | 'start' | 'stop' = 'status';
   let configPatchLoggingLevel = 'info';
+  let encryptionProfiles: EncryptionProfile[] = [];
+  let selectedEncryptionLevel = '4';
+  let encryptionLevelDirty = false;
+  let encryptionLevelLoaded = false;
+  let identityExchangeEncryptionLevel = 10;
   const primaryIdentityPackageID = 'primary';
   const pairingGroupID = primaryIdentityPackageID;
   let advertiseOverride = '';
@@ -607,6 +614,7 @@
         advertiseOverride = status?.advertiseURL ?? '';
       }
       void refreshConfigInstances();
+      await ensureEncryptionCatalog().catch(() => undefined);
       managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
         ...instance,
         connectionState: 'online',
@@ -733,9 +741,42 @@
     return { action: webGUIFormAction };
   }
 
+  async function ensureEncryptionCatalog() {
+    if (!hasDaemonCredential) return;
+    if (encryptionProfiles.length === 0) {
+      const catalog = await fetchEncryptionProfiles(daemonConnectionSettings);
+      encryptionProfiles = catalog.profiles ?? [];
+      identityExchangeEncryptionLevel = catalog.identityExchangeLevel ?? 10;
+      if (!encryptionLevelDirty && !encryptionLevelLoaded && typeof catalog.dataLevel === 'number') {
+        selectedEncryptionLevel = String(catalog.dataLevel);
+      }
+    }
+    if (!encryptionLevelDirty && !encryptionLevelLoaded) {
+      const cfg = await readDaemonConfig(daemonConnectionSettings);
+      const identity = cfg.identity;
+      if (identity && typeof identity === 'object' && 'encryptionLevel' in identity) {
+        const level = (identity as { encryptionLevel?: unknown }).encryptionLevel;
+        if (typeof level === 'number') selectedEncryptionLevel = String(level);
+      }
+      encryptionLevelLoaded = true;
+    }
+  }
+
+  function selectedEncryptionProfile(): EncryptionProfile | undefined {
+    return encryptionProfiles.find((profile) => String(profile.level) === selectedEncryptionLevel);
+  }
+
   function validateConfigPatchForm() {
     const level = requireNonEmpty(configPatchLoggingLevel, 'Logging level');
-    return { logging: { level } };
+    const patch: { logging: { level: string }; encryptionLevel?: number } = { logging: { level } };
+    if (encryptionLevelLoaded || encryptionLevelDirty) {
+      const encryptionLevel = Number(selectedEncryptionLevel);
+      if (!Number.isInteger(encryptionLevel) || encryptionLevel < 0 || encryptionLevel > 10) {
+        throw new Error('Encryption level must be an integer from 0 through 10.');
+      }
+      patch.encryptionLevel = encryptionLevel;
+    }
+    return patch;
   }
 
   async function generatePairingPackage() {
@@ -1044,6 +1085,7 @@
 
   async function submitConfigPatchForm() {
     const settings = daemonConnectionSettings;
+    await ensureEncryptionCatalog().catch(() => undefined);
     const target = configInstances.find((instance) => instance.instanceId === selectedConfigInstanceId);
     if (target && !target.local) {
       await runControlCommand('config', 'config patch', async () => {
@@ -1867,6 +1909,33 @@
           <option value="off">off</option>
         </select>
       </label>
+      <label>
+        Data encryption level
+        <select bind:value={selectedEncryptionLevel} name="encryptionLevel" data-testid="encryption-level" on:change={() => { encryptionLevelDirty = true; }}>
+          {#if encryptionProfiles.length === 0}
+            {#each Array.from({ length: 11 }, (_, level) => level) as level}
+              <option value={String(level)}>{level}</option>
+            {/each}
+          {:else}
+            {#each encryptionProfiles as profile}
+              <option value={String(profile.level)}>{profile.level} — {profile.name}</option>
+            {/each}
+          {/if}
+        </select>
+      </label>
+      <p data-testid="encryption-level-explanation">
+        {selectedEncryptionProfile()?.explanation ?? 'Encryption levels load from the local engine. Level 4 is the default for file data. Identity exchange, negotiation, and pairing stay at level ' + identityExchangeEncryptionLevel + '.'}
+      </p>
+      {#if selectedEncryptionProfile()?.keyAgreement}
+        <p>
+          {selectedEncryptionProfile()?.keyAgreement}; {selectedEncryptionProfile()?.aead}; {selectedEncryptionProfile()?.kdf}; MAC {selectedEncryptionProfile()?.mac}; signatures {selectedEncryptionProfile()?.signatures}; rekey every {selectedEncryptionProfile()?.rekeyEveryMiB} MiB.
+        </p>
+      {/if}
+      {#if selectedEncryptionLevel === '0' || selectedEncryptionProfile()?.plaintext}
+        <p class="plaintext-warning" role="alert" data-testid="encryption-plaintext-warning">
+          Level 0 is plaintext. File contents and control messages are not encrypted. Anyone who can see the connection can read them. Do not use this level except for local debugging.
+        </p>
+      {/if}
       <button type="submit" disabled={loading || !hasDaemonCredential}>Submit non-secret config patch</button>
       <p class="operation-status" data-phase={localControlOperationStates.config.phase} aria-label="Config operation status">{configOperationStatusText}</p>
     </form>
@@ -2628,6 +2697,15 @@
   }
   .operation-status[data-phase='failed'] {
     border-color: #ff8a8a;
+  }
+  .plaintext-warning {
+    margin: 0;
+    padding: 0.75rem;
+    border: 2px solid #ff8a8a;
+    border-radius: 0.5rem;
+    background: #3a1212;
+    color: #ffd0d0;
+    font-weight: 600;
   }
   .settings-grid {
     display: grid;

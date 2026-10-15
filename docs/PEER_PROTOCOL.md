@@ -2,7 +2,7 @@
 
 ## Current status
 
-A minimal internal stream protocol contract exists for the future pipe/stdio and direct peer transports. Signed peer identity for stream hello messages is now implemented as an authentication foundation, and the stream handshake now negotiates the session encryption level. The 0-10 level mapping is now defined as a protocol policy table; payload encryption that enforces the selected profile is still planned work.
+A minimal internal stream protocol contract exists for pipe/stdio and direct peer transports. Signed peer identity for stream hello messages is implemented, and the handshake negotiates a session suite from levels 0 through 10. Payload bytes after the hello use that suite. The canonical table is `docs/ENCRYPTION.md`.
 
 The codec is intentionally transport-agnostic. It reads and writes newline-delimited JSON messages over any `io.Reader`/`io.Writer`, including pipes, stdio, TCP streams, relays, or libp2p streams later.
 
@@ -50,23 +50,7 @@ Current message types:
 - `apply_result`
 - `error`
 
-The `hello` payload includes `protocolVersion`, `nodeID`, optional `capabilities`, optional peer `publicKey`, `encryptionLevel`, a session `nonce`, and optional Ed25519 `signature`. When a caller supplies the expected peer public key, the stream pull verifies that the peer signed the hello payload and the nonce before requesting folder data. By default the server replies with the highest level requested by either side; a caller can explicitly allow a lower compatibility level for lawful/debug/drop-in deployments. This authenticates peer identity and records the negotiated level for the prototype stream path. The negotiated level now maps to a named security profile:
-
-| Level | Profile | Intended mapping |
-| --- | --- | --- |
-| 0 | `none-debug` | no payload encryption; debug/protocol visibility only; never for untrusted links |
-| 1 | `minimal-permissive` | X25519, HKDF-SHA256, AES-128-GCM; permissive/lawful-compatibility mode |
-| 2 | `basic` | X25519, HKDF-SHA256, ChaCha20-Poly1305 |
-| 3 | `balanced` | X25519, HKDF-SHA256, ChaCha20-Poly1305 with tighter rekeying |
-| 4 | `strong` | ordinary peer-pair default/bank-equivalent target: X25519, HKDF-SHA256, XChaCha20-Poly1305 |
-| 5 | `standard-strong` | stronger production session profile: X25519, HKDF-SHA256, XChaCha20-Poly1305 with 128 MiB rekey target |
-| 6 | `strong-plus` | X25519, HKDF-SHA384, XChaCha20-Poly1305 with tighter rekeying |
-| 7 | `hardened` | X25519, HKDF-SHA512, XChaCha20-Poly1305 with frequent rekeying |
-| 8 | `high-security` | planned hybrid X25519 + ML-KEM-768, HKDF-SHA512, XChaCha20-Poly1305 |
-| 9 | `paranoid` | planned hybrid X25519 + ML-KEM-1024, Argon2id + HKDF-SHA512, XChaCha20-Poly1305 |
-| 10 | `maximum-high-cpu` | planned hybrid X25519 + ML-KEM-1024, high-cost Argon2id + HKDF-SHA512, XChaCha20-Poly1305; expect higher CPU/memory cost |
-
-This table is the final policy mapping for the current protocol design, but the current stream prototype still does not encrypt payload bytes, authenticate persisted resume metadata beyond per-block manifest hash verification, or provide the binary framing needed for high-throughput encrypted blocks.
+The `hello` payload includes `protocolVersion`, `nodeID`, optional `capabilities`, optional peer `publicKey`, `encryptionLevel`, a session `nonce`, the classical and hybrid handshake fields (`sessionPublicKey`, `sessionKEMPublic`, `sessionKEMCiphertext`, `sessionPQPublic`, `sessionPQSignature`, `sessionSLHPublic`, `sessionSLHSignature`), and an optional Ed25519 `signature` over `fse-peer-hello-v2`. When a caller supplies the expected peer public key, the stream pull checks that signature before requesting folder data. By default the server replies with the highest level requested by either side. If the offer is missing material for that level, the server returns `error.code = "encryption_retry"` and `retry handshake at encryption level N`; the client retries once at N. It does not continue with a weaker cipher. A caller can explicitly allow a lower compatibility level for lawful/debug/drop-in deployments, and the peer must allow it too. After the hello exchange, payload bytes use the negotiated suite from `docs/ENCRYPTION.md`. Level 0 stays plaintext.
 
 The codec validates message type/payload pairing and rejects unknown types.
 
