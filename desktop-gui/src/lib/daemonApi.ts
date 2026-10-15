@@ -6,6 +6,7 @@ export type DaemonConnectionSettings = {
 export type DaemonStatus = {
   nodeName?: string;
   identityPublicKey?: string;
+  advertiseURL?: string;
   engineSchemaVersion?: number;
   startedAt?: string;
   status?: string;

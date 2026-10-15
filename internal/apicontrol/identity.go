@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/configops"
@@ -26,8 +27,12 @@ func HandleIdentityPackage(configPath string, req api.IdentityPackageRequest) (p
 	if err != nil {
 		return pairing.IdentityPackage{}, err
 	}
-	if strings.TrimSpace(req.ReachableAPIURL) != "" {
-		pkg.ReachableAPIURL = strings.TrimSpace(req.ReachableAPIURL)
+	reachable := strings.TrimSpace(req.ReachableAPIURL)
+	if reachable == "" {
+		reachable = strings.TrimSpace(cfg.API.AdvertiseURL)
+	}
+	if reachable != "" {
+		pkg.ReachableAPIURL = reachable
 		fingerprint, err := localAPICertificateFingerprint(configPath, cfg)
 		if err != nil {
 			return pairing.IdentityPackage{}, err
@@ -45,10 +50,21 @@ func HandleIdentityImport(configPath string, req api.IdentityImportRequest) (api
 	if err != nil {
 		return api.IdentityImportResponse{}, err
 	}
+	if _, ok := peerByDiscoveryID(cfg, req.Package.DiscoveryID); ok {
+		return api.IdentityImportResponse{
+			Status:            "accepted",
+			Message:           "already paired with this engine",
+			GroupID:           req.Package.GroupID,
+			RemoteDiscoveryID: req.Package.DiscoveryID,
+		}, nil
+	}
+	localURL := ""
 	if strings.TrimSpace(req.Package.ReachableAPIURL) != "" {
-		if strings.TrimSpace(req.LocalReachableAPIURL) == "" {
-			return api.IdentityImportResponse{}, fmt.Errorf("local reachable API URL is required to pair with a remote engine")
+		localURL, err = localReachableAPIURL(cfg, req.LocalReachableAPIURL)
+		if err != nil {
+			return api.IdentityImportResponse{}, err
 		}
+		req.LocalReachableAPIURL = localURL
 		if err := adoptIdentityGroup(&cfg, req.Package); err != nil {
 			return api.IdentityImportResponse{}, err
 		}
@@ -98,6 +114,30 @@ func adoptIdentityGroup(cfg *config.Config, pkg pairing.IdentityPackage) error {
 	return cfg.Validate()
 }
 
+func localReachableAPIURL(cfg config.Config, requested string) (string, error) {
+	if strings.TrimSpace(requested) != "" {
+		return advertise.Normalize(requested, cfg)
+	}
+	resolved, err := advertise.ResolveWithHost(cfg, os.Getenv(advertise.EnvVar), advertise.DetectHost())
+	if err != nil {
+		return "", fmt.Errorf("this engine could not determine its reachable API URL; set %s", advertise.EnvVar)
+	}
+	return resolved, nil
+}
+
+func peerByDiscoveryID(cfg config.Config, discoveryID string) (config.PeerConfig, bool) {
+	discoveryID = strings.TrimSpace(discoveryID)
+	if discoveryID == "" {
+		return config.PeerConfig{}, false
+	}
+	for _, peer := range cfg.Peers {
+		if peer.IdentityPublicKey == discoveryID {
+			return peer, true
+		}
+	}
+	return config.PeerConfig{}, false
+}
+
 func exchangeAndPersistPeer(ctx context.Context, configPath string, cfg config.Config, req api.IdentityImportRequest) error {
 	fingerprint, err := localAPICertificateFingerprint(configPath, cfg)
 	if err != nil {
@@ -130,12 +170,24 @@ func HandlePairExchange(configPath string, req api.PairExchangeRequest) (api.Pai
 	if err != nil {
 		return api.PairExchangeResponse{}, err
 	}
+	if req.DiscoveryID == "" || req.DiscoveryID == cfg.Identity.PublicKey {
+		return api.PairExchangeResponse{}, fmt.Errorf("pair exchange discovery id is invalid")
+	}
+	if existing, ok := peerByDiscoveryID(cfg, req.DiscoveryID); ok && req.APIKey != "" && subtle.ConstantTimeCompare([]byte(existing.APIKey), []byte(req.APIKey)) == 1 {
+		fingerprint, err := localAPICertificateFingerprint(configPath, cfg)
+		if err != nil {
+			return api.PairExchangeResponse{}, err
+		}
+		return api.PairExchangeResponse{
+			DiscoveryID:          cfg.Identity.PublicKey,
+			NodeName:             cfg.NodeName,
+			APIKey:               cfg.API.Key,
+			APICertificateSHA256: fingerprint,
+		}, nil
+	}
 	token, ok := pairing.GroupToken(cfg, req.GroupID)
 	if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(req.BootstrapProofKey)) != 1 {
 		return api.PairExchangeResponse{}, fmt.Errorf("identity bootstrap proof does not match group %q", req.GroupID)
-	}
-	if req.DiscoveryID == "" || req.DiscoveryID == cfg.Identity.PublicKey {
-		return api.PairExchangeResponse{}, fmt.Errorf("pair exchange discovery id is invalid")
 	}
 	if req.APIKey == "" || req.ReachableAPIURL == "" {
 		return api.PairExchangeResponse{}, fmt.Errorf("pair exchange is missing the caller API address or key")

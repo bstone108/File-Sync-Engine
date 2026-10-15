@@ -256,6 +256,7 @@ func downloadVerified(ctx context.Context, pkg Package, dest string, client *htt
 	if !strings.EqualFold(sum, pkg.ChecksumSHA256) {
 		return fmt.Errorf("GUI package %s checksum mismatch", pkg.GUIVersion)
 	}
+	fmt.Fprintln(os.Stderr, "web GUI package checksum verified")
 	if err := os.Rename(tmpName, dest); err != nil {
 		return err
 	}

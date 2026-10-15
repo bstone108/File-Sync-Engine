@@ -28,6 +28,9 @@ import (
 
 const versionMarkerName = ".fse-web-version"
 
+// checksumVerifiedLog receives the success line after a package checksum matches.
+var checksumVerifiedLog io.Writer = os.Stderr
+
 type InstallOptions struct {
 	PackagePath    string
 	InstallDir     string
@@ -191,56 +194,62 @@ func webMux(installDir, version string, nativeAPI http.Handler, nativeAPIKey str
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version})
 	})
 	if nativeAPI != nil && nativeAPIKey != "" {
-		mux.HandleFunc("/api/v1/status", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/status"))
-		mux.HandleFunc("/api/v1/folders", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/folders"))
-		mux.HandleFunc("/api/v1/peers", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/peers"))
-		mux.HandleFunc("/api/v1/transfers", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/transfers"))
-		mux.HandleFunc("/api/v1/actionable-errors", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/actionable-errors"))
-		mux.HandleFunc("/api/v1/logs", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/logs"))
-		mux.HandleFunc("/api/v1/schema", nativeReadOnlyBridge(nativeAPI, nativeAPIKey, "/v1/schema"))
-		mux.HandleFunc("/api/v1/config", nativeMethodBridge(nativeAPI, nativeAPIKey, "/v1/config", []string{http.MethodGet, http.MethodPatch}, false))
-		mux.HandleFunc("/api/v1/filesystem/browse", nativeMethodBridge(nativeAPI, nativeAPIKey, "/v1/filesystem/browse", []string{http.MethodGet}, true))
-		for _, path := range []string{
-			"/v1/peer-command",
-			"/v1/folder-command",
-			"/v1/discovery-command",
-			"/v1/transfer-command",
-			"/v1/identity-package",
-			"/v1/identity-import",
-			"/v1/maintenance/scrub",
-			"/v1/web-gui-command",
-		} {
-			mux.HandleFunc("/api"+path, nativeMethodBridge(nativeAPI, nativeAPIKey, path, []string{http.MethodPost}, false))
+		for _, route := range dockerProxyRoutes() {
+			mux.HandleFunc(route.BrowserPath, nativeMethodBridge(nativeAPI, nativeAPIKey, route.NativePath, route.Methods, route.QueryKeys))
 		}
 	}
 	mux.Handle("/", http.FileServer(http.Dir(installDir)))
 	return mux
 }
 
-func nativeReadOnlyBridge(nativeAPI http.Handler, nativeAPIKey, nativePath string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		nativeRequest, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://fse-native"+nativePath, nil)
-		if err != nil {
-			http.Error(w, "web read-only bridge request failed", http.StatusInternalServerError)
-			return
-		}
-		nativeRequest.Header.Set("X-FSE-API-Key", nativeAPIKey)
-		recorder := httptest.NewRecorder()
-		nativeAPI.ServeHTTP(recorder, nativeRequest)
-		if contentType := recorder.Header().Get("Content-Type"); contentType != "" {
-			w.Header().Set("Content-Type", contentType)
-		}
-		w.WriteHeader(recorder.Code)
-		_, _ = w.Write(recorder.Body.Bytes())
+type proxyRoute struct {
+	BrowserPath string
+	NativePath  string
+	Methods     []string
+	QueryKeys   []string
+}
+
+// dockerProxyRoutes is the browser allowlist. Daemon routes such as /v1/api/trust
+// are registered under /api plus that path so the GUI prefix is not dropped.
+func dockerProxyRoutes() []proxyRoute {
+	get := []string{http.MethodGet}
+	post := []string{http.MethodPost}
+	return []proxyRoute{
+		{BrowserPath: "/api/v1/status", NativePath: "/v1/status", Methods: get},
+		{BrowserPath: "/api/v1/folders", NativePath: "/v1/folders", Methods: get},
+		{BrowserPath: "/api/v1/peers", NativePath: "/v1/peers", Methods: get},
+		{BrowserPath: "/api/v1/transfers", NativePath: "/v1/transfers", Methods: get},
+		{BrowserPath: "/api/v1/actionable-errors", NativePath: "/v1/actionable-errors", Methods: get},
+		{BrowserPath: "/api/v1/logs", NativePath: "/v1/logs", Methods: get},
+		{BrowserPath: "/api/v1/schema", NativePath: "/v1/schema", Methods: get},
+		{BrowserPath: "/api/v1/config", NativePath: "/v1/config", Methods: []string{http.MethodGet, http.MethodPatch}},
+		{BrowserPath: "/api/v1/filesystem/browse", NativePath: "/v1/filesystem/browse", Methods: get, QueryKeys: []string{"path"}},
+		{BrowserPath: "/api/v1/api/trust", NativePath: "/v1/api/trust", Methods: get},
+		{BrowserPath: "/api/v1/api/trust-command", NativePath: "/v1/api/trust-command", Methods: post},
+		{BrowserPath: "/api/v1/peer-command", NativePath: "/v1/peer-command", Methods: post},
+		{BrowserPath: "/api/v1/folder-command", NativePath: "/v1/folder-command", Methods: post},
+		{BrowserPath: "/api/v1/discovery-command", NativePath: "/v1/discovery-command", Methods: post},
+		{BrowserPath: "/api/v1/transfer-command", NativePath: "/v1/transfer-command", Methods: post},
+		{BrowserPath: "/api/v1/identity-package", NativePath: "/v1/identity-package", Methods: post},
+		{BrowserPath: "/api/v1/identity-import", NativePath: "/v1/identity-import", Methods: post},
+		{BrowserPath: "/api/v1/maintenance/scrub", NativePath: "/v1/maintenance/scrub", Methods: post},
+		{BrowserPath: "/api/v1/web-gui-command", NativePath: "/v1/web-gui-command", Methods: post},
+		{BrowserPath: "/api/v1/mesh/settings", NativePath: "/v1/mesh/settings", Methods: get, QueryKeys: []string{"nodeId"}},
+		{BrowserPath: "/api/v1/mesh/settings-command", NativePath: "/v1/mesh/settings-command", Methods: post},
+		{BrowserPath: "/api/v1/snapshots", NativePath: "/v1/snapshots", Methods: post},
+		{BrowserPath: "/api/v1/restore-plans", NativePath: "/v1/restore-plans", Methods: post},
+		{BrowserPath: "/api/v1/restores", NativePath: "/v1/restores", Methods: post},
+		{BrowserPath: "/api/v1/snapshot-retention", NativePath: "/v1/snapshot-retention", Methods: post},
+		{BrowserPath: "/api/v1/backup/scrub", NativePath: "/v1/backup/scrub", Methods: post},
+		{BrowserPath: "/api/v1/backup/jobs", NativePath: "/v1/backup/jobs", Methods: get, QueryKeys: []string{"snapshotId"}},
 	}
 }
 
-func nativeMethodBridge(nativeAPI http.Handler, nativeAPIKey, nativePath string, methods []string, pathQuery bool) http.HandlerFunc {
+func nativeReadOnlyBridge(nativeAPI http.Handler, nativeAPIKey, nativePath string) http.HandlerFunc {
+	return nativeMethodBridge(nativeAPI, nativeAPIKey, nativePath, []string{http.MethodGet}, nil)
+}
+
+func nativeMethodBridge(nativeAPI http.Handler, nativeAPIKey, nativePath string, methods []string, queryKeys []string) http.HandlerFunc {
 	allowed := map[string]struct{}{}
 	for _, method := range methods {
 		allowed[method] = struct{}{}
@@ -252,10 +261,8 @@ func nativeMethodBridge(nativeAPI http.Handler, nativeAPIKey, nativePath string,
 			return
 		}
 		target := "http://fse-native" + nativePath
-		if pathQuery {
-			if path := r.URL.Query().Get("path"); path != "" {
-				target += "?path=" + url.QueryEscape(path)
-			}
+		if encoded := allowlistedQuery(r, queryKeys); encoded != "" {
+			target += "?" + encoded
 		}
 		var body io.Reader
 		if r.Method != http.MethodGet && r.Body != nil {
@@ -539,7 +546,21 @@ func verifyPackageChecksum(path string, expected string) error {
 	if !strings.EqualFold(got, expected) {
 		return fmt.Errorf("web GUI package checksum mismatch")
 	}
+	fmt.Fprintln(checksumVerifiedLog, "web GUI package checksum verified")
 	return nil
+}
+
+func allowlistedQuery(r *http.Request, keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	query := url.Values{}
+	for _, key := range keys {
+		if value := r.URL.Query().Get(key); value != "" {
+			query.Set(key, value)
+		}
+	}
+	return query.Encode()
 }
 
 func extractZip(packagePath string, dest string) error {

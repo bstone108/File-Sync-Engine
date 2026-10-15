@@ -4,34 +4,58 @@ const path = require('node:path');
 
 const composeFile = path.resolve(__dirname, 'compose.yaml');
 
-async function pairFrom(page, reachableURL) {
+async function pairFrom(page) {
   await page.getByTestId('nav-peers').click();
-  await page.getByTestId('pairing-reachable-url').fill(reachableURL);
+  await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
+  await expect(page.getByTestId('pairing-reachable-url')).toHaveCount(0);
+  await expect(page.getByTestId('pairing-advertise-url')).toContainText('advertises');
   await page.getByTestId('generate-pairing').click();
   const text = page.getByTestId('pairing-export-text');
   await expect(text).toBeVisible();
   const value = await text.inputValue();
   expect(value).toContain('reachableAPIURL');
+  expect(value).not.toContain('pairing-local-url');
   return value;
 }
 
-async function importOn(page, localURL, packageText) {
+async function importOn(page, packageText, expected) {
   await page.getByTestId('nav-peers').click();
-  await page.getByTestId('pairing-local-url').fill(localURL);
+  await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
   await page.getByTestId('pairing-import-text').fill(packageText);
   await page.getByTestId('parse-pairing').click();
   await page.getByTestId('import-pairing').click();
-  await expect(page.getByText('identity import accepted', { exact: false })).toBeVisible();
+  await expect(page.getByText(expected, { exact: false })).toBeVisible();
 }
 
 async function addSharedFolder(page) {
   await page.getByTestId('nav-daemon-settings').click();
+  await page.locator('form[aria-label="Daemon settings folder form"] select[name="folderFormAction"]').selectOption('add');
   await page.getByTestId('folder-id').fill('shared');
   await page.getByTestId('folder-path').fill('/data/shared');
   const submit = page.getByTestId('folder-submit');
   await submit.scrollIntoViewIfNeeded();
   await submit.click();
-  await expect(page.getByLabel('Folder operation status')).toContainText('folder add accepted');
+  const status = page.getByLabel('Folder operation status');
+  await expect(status).toContainText('folder add accepted');
+  await expect(status).not.toContainText('No folder command has run yet');
+}
+
+async function pageShowsFolderError(page) {
+  await page.getByTestId('nav-daemon-settings').click();
+  await page.locator('form[aria-label="Daemon settings folder form"] select[name="folderFormAction"]').selectOption('remove');
+  await page.getByTestId('folder-id').fill('docs');
+  const submit = page.getByTestId('folder-submit');
+  await submit.scrollIntoViewIfNeeded();
+  await submit.click();
+  const status = page.getByLabel('Folder operation status');
+  await expect(status).toContainText('not found');
+  await expect(status).not.toContainText('No folder command has run yet');
+  const trust = page.getByRole('button', { name: 'Fetch API trust status' });
+  await trust.scrollIntoViewIfNeeded();
+  await trust.click();
+  const trustStatus = page.getByLabel('API trust operation status');
+  await expect(trustStatus).not.toContainText('404');
+  await expect(trustStatus).not.toContainText('has not been checked yet');
 }
 
 function compose(args, capture = false) {
@@ -63,14 +87,19 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   }).toBe(true);
   await expect(a.getByTestId('device-node-name')).toHaveText('fse-a');
   await expect(b.getByTestId('device-node-name')).toHaveText('fse-b');
+  await expect(a.locator('aside strong.connection-state').first()).toHaveText('Online');
+  await expect(b.locator('aside strong.connection-state').first()).toHaveText('Online');
 
   compose(['exec', '-T', '-u', '0', 'fse-a', 'sh', '-c', 'mkdir -p /data/shared && chown -R 99:100 /data && chmod 777 /data /data/shared']);
   compose(['exec', '-T', '-u', '0', 'fse-b', 'sh', '-c', 'mkdir -p /data/shared && chown -R 99:100 /data && chmod 777 /data /data/shared']);
 
-  const exported = await pairFrom(a, 'https://fse-a:22420');
-  await importOn(b, 'https://fse-b:22420', exported);
+  const exported = await pairFrom(a);
+  await importOn(b, exported, 'identity import accepted');
+  const reverse = await pairFrom(b);
+  await importOn(a, reverse, 'already paired');
   await addSharedFolder(a);
   await addSharedFolder(b);
+  await pageShowsFolderError(a);
   compose(['exec', '-T', '-u', '99:100', 'fse-a', 'sh', '-c', 'echo hello-from-a > /data/shared/note.txt']);
 
   await expect.poll(() => readShared('fse-b'), { timeout: 45000 }).toBe('hello-from-a');

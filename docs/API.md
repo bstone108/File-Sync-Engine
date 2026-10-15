@@ -293,7 +293,7 @@ The revocation foundation is currently a prototype planning contract rather than
 }
 ```
 
-`reachableAPIURL` and `apiCertificateSha256` are optional. When the importer sends them with `localReachableAPIURL`, the daemon adopts a missing identity group (it does not overwrite a different existing token), calls the peer's `/v1/pair-exchange`, and stores the peer API key and certificate pin. The browser response stays redacted.
+`reachableAPIURL` and `apiCertificateSha256` are filled from the engine's `api.advertiseURL` (or `FSE_ADVERTISE_URL`, otherwise a detected local address) when the GUI does not send them. The importer uses that same local advertise URL for the callback. It does not replace this node's own primary bootstrap token with the remote package token. If the remote discovery id is already a paired peer, import returns `already paired with this engine` and does not exchange again. A repeat `/v1/pair-exchange` from a peer that already presented its stored API key succeeds without rotating keys. The browser response stays redacted.
 
 ## Peer, folder, discovery, and config commands
 
