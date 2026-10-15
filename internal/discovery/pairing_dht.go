@@ -157,7 +157,7 @@ func (r *Libp2pDHTRouter) ensureBootstrapped(ctx context.Context) error {
 	if ready {
 		return nil
 	}
-	if err := r.Bootstrap(ctx, DefaultPublicDHTBootstrapPeers); err != nil {
+	if err := r.Bootstrap(ctx, r.bootstrapPeerList()); err != nil {
 		return err
 	}
 	r.mu.Lock()

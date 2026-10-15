@@ -56,6 +56,9 @@ async function changeLogLevel(page) {
   await expect(status).toContainText('config patch');
   await expect(status).not.toContainText('No config command has run yet');
   await expect(status).not.toContainText('idle:');
+  const statusText = await status.innerText();
+  const accepted = 'config update accepted; daemon hot reload will adopt the config change';
+  expect(statusText.split(accepted).length - 1).toBe(1);
 }
 
 async function pageShowsFolderError(page) {
@@ -81,6 +84,20 @@ async function pageShowsFolderError(page) {
   await expect(details).toContainText('Trusted certificate matches');
   await expect(details).not.toContainText('certificateSha256');
   await expect(details).not.toContainText('trustedCertificateMatches');
+  const summary = page.getByTestId('api-trust-summary');
+  await expect(summary).toContainText('Certificate fingerprint');
+  await expect(summary).not.toContainText('has not been fetched');
+}
+
+async function showDefaultPairingCode(page, service) {
+  const raw = compose(['exec', '-T', service, 'cat', '/config/config.jsonc'], true);
+  const cfg = JSON.parse(raw);
+  const peers = cfg.discovery && cfg.discovery.dhtBootstrapPeers;
+  expect(peers).toEqual(['/dnsaddr/bootstrap.libp2p.io']);
+  await page.getByTestId('nav-peers').click();
+  await page.getByTestId('show-pairing-code').click();
+  await expect(page.getByTestId('pairing-code')).toBeVisible({ timeout: 60000 });
+  await expect(page.getByTestId('pairing-message')).not.toContainText('invalid p2p multiaddr');
 }
 
 function compose(args, capture = false) {
@@ -114,6 +131,7 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await expect(b.getByTestId('device-node-name')).toHaveText('fse-b');
   await expect(a.locator('aside strong.connection-state').first()).toHaveText('Online');
   await expect(b.locator('aside strong.connection-state').first()).toHaveText('Online');
+  await showDefaultPairingCode(a, 'fse-a');
 
   compose(['exec', '-T', '-u', '0', 'fse-a', 'sh', '-c', 'mkdir -p /data/shared && chown -R 99:100 /data && chmod 777 /data /data/shared']);
   compose(['exec', '-T', '-u', '0', 'fse-b', 'sh', '-c', 'mkdir -p /data/shared && chown -R 99:100 /data && chmod 777 /data /data/shared']);
