@@ -2129,9 +2129,6 @@
         {#if pairingImportSummary}
           <p class="success">{pairingImportSummary}</p>
         {/if}
-        {#if pairingCode}
-          <p data-testid="pairing-code">{pairingCode}</p>
-        {/if}
         {#if pairingMessage}
           <p data-testid="pairing-message">{pairingMessage}</p>
         {/if}

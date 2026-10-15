@@ -96,13 +96,16 @@ async function showDefaultPairingCode(page, service) {
   expect(peers).toEqual(['/dnsaddr/bootstrap.libp2p.io']);
   await page.getByTestId('nav-peers').click();
   await page.getByTestId('show-pairing-code').click();
+  const code = page.getByTestId('pairing-code');
   await expect.poll(async () => {
-    if (await page.getByTestId('pairing-code').isVisible().catch(() => false)) {
+    if (await code.count() === 1 && await code.isVisible()) {
       return 'shown';
     }
     const message = await page.getByTestId('pairing-message').textContent().catch(() => '');
-    return (message || '').trim() || 'pending';
+    return `${await code.count()} code element(s); ${(message || '').trim() || 'pending'}`;
   }, { timeout: 60000 }).toBe('shown');
+  await expect(code).toContainText(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
+  await expect(page.getByTestId('pairing-message')).toContainText('is ready');
   await expect(page.getByTestId('pairing-message')).not.toContainText('invalid p2p multiaddr');
 }
 
