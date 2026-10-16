@@ -76,7 +76,7 @@ test('pairing works when only published ports connect the containers', async ({ 
     expect(code).toMatch(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/);
     await expect.poll(() => {
       const raw = engineLog('published-a');
-      if (raw.includes('pairing.publish.ok')) {
+      if (raw.includes('pairing code advertised on the DHT')) {
         return 'ok';
       }
       const failed = raw.split('\n').filter((line) => line.includes('pairing.publish.failed')).pop();

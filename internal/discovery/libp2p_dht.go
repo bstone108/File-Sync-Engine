@@ -244,6 +244,8 @@ func (r *Libp2pDHTRouter) connectBootstrap(ctx context.Context, infos []peer.Add
 	// One address at a time. Concurrent dials of the public /dnsaddr peers
 	// fail together from some networks, while the same addresses connect
 	// when each dial finishes before the next one starts.
+	var lastErr error
+	var lastAddr string
 	for _, info := range attempts[:limit] {
 		r.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
 		connectCtx, cancel := context.WithTimeout(ctx, bootstrapDialTimeout)
@@ -252,6 +254,17 @@ func (r *Libp2pDHTRouter) connectBootstrap(ctx context.Context, infos []peer.Add
 		if err == nil {
 			return 1
 		}
+		lastErr = err
+		if len(info.Addrs) > 0 {
+			lastAddr = info.Addrs[0].String()
+		}
+	}
+	if lastErr != nil {
+		structuredlog.Event("warn", "libp2p.bootstrap.dial", "libp2p bootstrap dial failed", map[string]any{
+			"error":      lastErr.Error(),
+			"address":    lastAddr,
+			"candidates": limit,
+		})
 	}
 	return 0
 }

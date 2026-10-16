@@ -2,12 +2,27 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 )
+
+func TestAcceptedBootstrapRequiresAConnectedPeer(t *testing.T) {
+	if err := acceptedBootstrap(nil, 2, []string{"/ip4/127.0.0.1/tcp/1"}); err != nil {
+		t.Fatal(err)
+	}
+	err := acceptedBootstrap(nil, 0, []string{"/ip4/172.30.29.1/tcp/22423"})
+	if err == nil || !strings.Contains(err.Error(), "172.30.29.1") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := acceptedBootstrap(context.DeadlineExceeded, 0, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+}
 
 func TestAcceptPartialAdvertiseRequiresPeersAndALiveParent(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())

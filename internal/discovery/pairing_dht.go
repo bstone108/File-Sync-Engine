@@ -88,6 +88,22 @@ func (r *Libp2pDHTRouter) routingTableSize() int {
 	return r.dht.RoutingTable().Size()
 }
 
+// acceptedBootstrap rejects a finished dial that left the routing table empty.
+// kad-dht reports that as success, and a later advertise then fails with
+// "failed to find any peer in table" without trying the peer again.
+func acceptedBootstrap(err error, peers int, peerList []string) error {
+	if err != nil {
+		return err
+	}
+	if peers > 0 {
+		return nil
+	}
+	if len(peerList) == 0 {
+		return errors.New("pairing DHT bootstrap connected no peers")
+	}
+	return fmt.Errorf("pairing DHT bootstrap connected no peers (%s)", strings.Join(peerList, ", "))
+}
+
 func acceptPartialAdvertise(err error, peers int, parent context.Context) error {
 	if err == nil {
 		return nil
@@ -298,12 +314,34 @@ func (r *Libp2pDHTRouter) ensureBootstrapped(ctx context.Context) error {
 	return errors.New("pairing DHT bootstrap did not finish")
 }
 
-// finishBootstrap connects once. Lookup deadlines wait on the channel and do
-// not cancel this attempt.
+// finishBootstrap keeps dialing until a peer lands in the routing table.
+// The first attempt often runs before the other engine is listening, and an
+// empty table must not count as finished or pairing never retries the dial.
 func (r *Libp2pDHTRouter) finishBootstrap(wait chan struct{}) {
 	bootCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	err := r.Bootstrap(bootCtx, r.bootstrapPeerList())
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-bootCtx.Done():
+				timer.Stop()
+				err = bootCtx.Err()
+			case <-timer.C:
+			}
+		}
+		if bootCtx.Err() != nil && err == nil {
+			err = bootCtx.Err()
+		}
+		if bootCtx.Err() != nil {
+			break
+		}
+		err = acceptedBootstrap(r.Bootstrap(bootCtx, r.bootstrapPeerList()), r.routingTableSize(), r.bootstrapPeerList())
+		if err == nil {
+			break
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err == nil {
