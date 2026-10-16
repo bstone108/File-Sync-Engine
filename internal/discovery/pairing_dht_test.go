@@ -24,6 +24,39 @@ func TestAcceptedBootstrapRequiresAConnectedPeer(t *testing.T) {
 	}
 }
 
+func TestServerModeBootstrapAddsThePeerToTheRoutingTable(t *testing.T) {
+	t.Setenv("FSE_LIBP2P_DHT_MODE", "server")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	left, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "left"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = left.Close() })
+	right, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "right"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = right.Close() })
+	var dial string
+	for _, addr := range right.host.Addrs() {
+		raw := addr.String()
+		if strings.Contains(raw, "/ip4/127.0.0.1/tcp/") && !strings.Contains(raw, "/ws") {
+			dial = raw + "/p2p/" + right.PeerID()
+			break
+		}
+	}
+	if dial == "" {
+		t.Fatalf("no loopback address in %v", right.host.Addrs())
+	}
+	if err := left.Bootstrap(ctx, []string{dial}); err != nil {
+		t.Fatal(err)
+	}
+	if left.routingTableSize() == 0 {
+		t.Fatal("server bootstrap left the routing table empty")
+	}
+}
+
 func TestAcceptPartialAdvertiseRequiresPeersAndALiveParent(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()

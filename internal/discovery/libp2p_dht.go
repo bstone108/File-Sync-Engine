@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -88,7 +89,12 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		return nil, err
 	}
 	hostBox.Store(h)
-	kad, err := dht.New(ctx, h, dht.Mode(dht.ModeAuto))
+	mode, err := libp2pDHTMode()
+	if err != nil {
+		_ = h.Close()
+		return nil, err
+	}
+	kad, err := dht.New(ctx, h, dht.Mode(mode))
 	if err != nil {
 		_ = h.Close()
 		return nil, err
@@ -205,6 +211,23 @@ func (r *Libp2pDHTRouter) bootstrapPeerList() []string {
 // BootstrapPeers is the list Bootstrap uses, including the public default.
 func (r *Libp2pDHTRouter) BootstrapPeers() []string {
 	return r.bootstrapPeerList()
+}
+
+// libp2pDHTMode is ModeAuto unless FSE_LIBP2P_DHT_MODE says otherwise.
+// Two engines that bootstrap only to each other need server mode: an
+// unreachable AutoNAT result leaves ModeAuto as a client, and clients are
+// not added to the routing table, so the pairing record is never stored.
+func libp2pDHTMode() (dht.ModeOpt, error) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FSE_LIBP2P_DHT_MODE"))) {
+	case "", "auto":
+		return dht.ModeAuto, nil
+	case "auto-server":
+		return dht.ModeAutoServer, nil
+	case "server":
+		return dht.ModeServer, nil
+	default:
+		return 0, fmt.Errorf("FSE_LIBP2P_DHT_MODE must be auto, auto-server, or server")
+	}
 }
 
 func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value) <-chan peer.AddrInfo {

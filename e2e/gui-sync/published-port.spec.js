@@ -79,8 +79,8 @@ test('pairing works when only published ports connect the containers', async ({ 
       if (raw.includes('pairing code advertised on the DHT')) {
         return 'ok';
       }
-      const failed = raw.split('\n').filter((line) => line.includes('pairing.publish.failed')).pop();
-      return failed || '';
+      const lines = raw.split('\n').filter((line) => line.includes('libp2p.bootstrap.dial') || line.includes('pairing.publish.failed'));
+      return lines.slice(-3).join('\n');
     }, { timeout: 50000 }).toBe('ok');
     await b.getByTestId('nav-peers').click();
     await b.getByTestId('pairing-code-input').fill(code);

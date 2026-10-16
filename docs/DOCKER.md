@@ -92,7 +92,8 @@ Secrets are generated inside `/config/config.jsonc` and are not logged by the en
 | `FSE_LIBP2P_PORT` | `22421` | TCP and QUIC/UDP port libp2p listens on inside the container. Publish it. A random port is not reachable from another host, so pairing finds the peer and then cannot open a stream. |
 | `FSE_PUBLISHED_LIBP2P_PORT` | listen port | Host port mapped to `FSE_LIBP2P_PORT`. DHT provider records advertise this port, plus the reachable HTTPS API URL. If the libp2p stream fails, the redeemer fetches the sealed record from that API. |
 | `FSE_DHT_BOOTSTRAP_PEERS` | unset | Optional comma-separated bootstrap multiaddrs written on first config creation. Empty keeps `/dnsaddr/bootstrap.libp2p.io`. |
-| `FSE_LIBP2P_PRIVATE_KEY` | unset | Optional base64 libp2p private key. Empty generates a new peer id at start. | 
+| `FSE_LIBP2P_PRIVATE_KEY` | unset | Optional base64 libp2p private key. Empty generates a new peer id at start. |
+| `FSE_LIBP2P_DHT_MODE` | `auto` | `auto` follows reachability. `server` always answers DHT queries, which a private two-node bootstrap needs because clients are not stored in the routing table. | 
 | `FSE_WEB_GUI_ENABLED` | `false` | Opt in to the web GUI on every start. Unset or `false` disables the GUI listener. |
 | `FSE_WEB_GUI_VERSION` | unset | Explicit version of the separately delivered web-GUI package; required with every other web-GUI delivery field when opt-in is enabled. |
 | `FSE_WEB_GUI_PACKAGE` | unset | Absolute path of a separately mounted trusted GUI package; required with its version and checksum when the GUI is enabled. |
