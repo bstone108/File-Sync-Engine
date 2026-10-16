@@ -71,6 +71,10 @@ async function changeLogLevel(page) {
   if (copies !== 1) {
     throw new Error(`expected the config acceptance once, saw ${copies}: ${statusText}`);
   }
+  const raw = compose(['exec', '-T', 'fse-a', 'cat', '/config/config.jsonc'], true);
+  const cfg = JSON.parse(raw);
+  expect(cfg.logging && cfg.logging.output).toBe('/config/logs/fse.jsonl');
+  expect(cfg.logging && cfg.logging.level).toBe('debug');
 }
 
 async function pageShowsFolderError(page) {

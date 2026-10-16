@@ -26,7 +26,11 @@ const pairingAdvertiseTimeout = 25 * time.Second
 // pairingLookupTimeout bounds a redeemer's public DHT walk. The local
 // directory answers same-LAN pairing on its own, and a second redeem must
 // be rejected without waiting out a full provider search.
-const pairingLookupTimeout = 8 * time.Second
+const pairingLookupTimeout = 20 * time.Second
+
+// pairingStreamTimeout keeps a dead libp2p dial from consuming the lookup.
+// The advertised HTTPS API is tried next.
+const pairingStreamTimeout = 4 * time.Second
 
 const (
 	// PairingProtocol serves the MAC-bound pairing record after DHT provider
@@ -84,6 +88,22 @@ func (r *Libp2pDHTRouter) routingTableSize() int {
 	return r.dht.RoutingTable().Size()
 }
 
+// acceptedBootstrap rejects a finished dial that left the routing table empty.
+// kad-dht reports that as success, and a later advertise then fails with
+// "failed to find any peer in table" without trying the peer again.
+func acceptedBootstrap(err error, peers int, peerList []string) error {
+	if err != nil {
+		return err
+	}
+	if peers > 0 {
+		return nil
+	}
+	if len(peerList) == 0 {
+		return errors.New("pairing DHT bootstrap connected no peers")
+	}
+	return fmt.Errorf("pairing DHT bootstrap connected no peers (%s)", strings.Join(peerList, ", "))
+}
+
 func acceptPartialAdvertise(err error, peers int, parent context.Context) error {
 	if err == nil {
 		return nil
@@ -99,6 +119,8 @@ func acceptPartialAdvertise(err error, peers int, parent context.Context) error 
 }
 
 // LookupPairing finds DHT providers for the namespace and fetches each record.
+// The caller does not have to be a DHT server; a client behind NAT can query
+// peers it has dialed and then open the stream or the advertised API URL.
 // Callers must verify the code MAC and identity signature before trusting one.
 func (r *Libp2pDHTRouter) LookupPairing(ctx context.Context, namespace string) ([][]byte, error) {
 	if r == nil || r.discovery == nil || r.host == nil {
@@ -177,13 +199,35 @@ func (r *Libp2pDHTRouter) UnpublishPairing(_ context.Context, namespace string) 
 }
 
 // FetchPairing dials one discovered peer and reads its pairing record.
+// When the libp2p stream cannot be opened, it fetches the same sealed record
+// from the HTTPS API URL carried in the provider addresses.
 func (r *Libp2pDHTRouter) FetchPairing(ctx context.Context, info peer.AddrInfo, namespace string) ([]byte, error) {
 	if r == nil || r.host == nil {
 		return nil, fmt.Errorf("libp2p DHT router is not initialized")
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	payload, err := r.fetchPairingStream(ctx, info, namespace)
+	if err == nil {
+		return payload, nil
+	}
+	httpPayload, httpErr := fetchPairingHTTP(ctx, info.Addrs, namespace)
+	if httpErr == nil && len(httpPayload) > 0 {
+		return httpPayload, nil
+	}
+	return nil, err
+}
+
+func (r *Libp2pDHTRouter) fetchPairingStream(ctx context.Context, info peer.AddrInfo, namespace string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, pairingStreamTimeout)
 	defer cancel()
-	if err := r.host.Connect(dialCtx, info); err != nil {
+	dialInfo := info
+	dialInfo.Addrs = dialablePairingAddrs(info.Addrs)
+	if len(dialInfo.Addrs) == 0 {
+		return nil, fmt.Errorf("pairing provider has no dialable libp2p address")
+	}
+	if err := r.host.Connect(dialCtx, dialInfo); err != nil {
 		return nil, err
 	}
 	stream, err := r.host.NewStream(dialCtx, info.ID, protocol.ID(PairingProtocol))
@@ -191,7 +235,7 @@ func (r *Libp2pDHTRouter) FetchPairing(ctx context.Context, info peer.AddrInfo, 
 		return nil, err
 	}
 	defer stream.Close()
-	_ = stream.SetDeadline(time.Now().Add(8 * time.Second))
+	_ = stream.SetDeadline(time.Now().Add(pairingStreamTimeout))
 	if _, err := io.WriteString(stream, namespace+"\n"); err != nil {
 		return nil, err
 	}
@@ -272,12 +316,34 @@ func (r *Libp2pDHTRouter) ensureBootstrapped(ctx context.Context) error {
 	return errors.New("pairing DHT bootstrap did not finish")
 }
 
-// finishBootstrap connects once. Lookup deadlines wait on the channel and do
-// not cancel this attempt.
+// finishBootstrap keeps dialing until a peer lands in the routing table.
+// The first attempt often runs before the other engine is listening, and an
+// empty table must not count as finished or pairing never retries the dial.
 func (r *Libp2pDHTRouter) finishBootstrap(wait chan struct{}) {
 	bootCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	err := r.Bootstrap(bootCtx, r.bootstrapPeerList())
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-bootCtx.Done():
+				timer.Stop()
+				err = bootCtx.Err()
+			case <-timer.C:
+			}
+		}
+		if bootCtx.Err() != nil && err == nil {
+			err = bootCtx.Err()
+		}
+		if bootCtx.Err() != nil {
+			break
+		}
+		err = acceptedBootstrap(r.Bootstrap(bootCtx, r.bootstrapPeerList()), r.routingTableSize(), r.bootstrapPeerList())
+		if err == nil {
+			break
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err == nil {

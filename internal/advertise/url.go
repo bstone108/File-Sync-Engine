@@ -101,7 +101,32 @@ func resolve(cfg config.Config, envOverride, detectedHost string, obs Observatio
 	if strings.TrimSpace(detectedHost) != "" && HostReachable(detectedHost) {
 		return Normalize(detectedHost, cfg)
 	}
+	if PublishedAPIPort() > 0 {
+		return "", ErrPendingHost
+	}
 	return "", errors.New("could not detect a host-reachable address; set FSE_ADVERTISE_URL")
+}
+
+// ErrPendingHost means FSE_PUBLISHED_API_PORT is set and a LAN, Tailscale, or
+// GUI host is not known yet. The URL is stored when one of those appears.
+var ErrPendingHost = errors.New("host-reachable address is not known yet; the published API port will be used when one is detected")
+
+// StartupMessage is the stderr line for advertise detection. A published port
+// with no host yet is pending, so startup does not claim the URL is unconfigured.
+func StartupMessage(url string, err error) string {
+	if err != nil {
+		if errors.Is(err, ErrPendingHost) {
+			if port := PublishedAPIPort(); port > 0 {
+				return fmt.Sprintf("reachable API URL pending; published port %d", port)
+			}
+			return "reachable API URL pending"
+		}
+		return fmt.Sprintf("reachable API URL not configured: %v", err)
+	}
+	if strings.TrimSpace(url) != "" {
+		return fmt.Sprintf("reachable API URL %s", url)
+	}
+	return ""
 }
 
 func configuredCandidates(cfg config.Config, envOverride string) []string {
@@ -214,7 +239,7 @@ func publishedPortCandidate(detectedHost string) (string, bool) {
 	return net.JoinHostPort(host, strconv.Itoa(port)), true
 }
 
-var tailscaleIPs = queryTailscaleLocalAPI
+var tailscaleIPs = TailscaleHosts
 
 // PublishedAPIPort reads FSE_PUBLISHED_API_PORT. Zero means unset or invalid.
 func PublishedAPIPort() int {

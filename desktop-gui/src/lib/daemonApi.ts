@@ -239,7 +239,7 @@ async function dockerSameOriginRequest<T>(path: string, init: RequestInit): Prom
   });
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(text || `Request failed (${response.status})`);
+    throw new Error(text.trim() || `Request failed (${response.status})`);
   }
   return (text ? JSON.parse(text) : {}) as T;
 }

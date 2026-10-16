@@ -14,7 +14,7 @@ also one more fair warning, some of the encryption used is placeholders.  it's n
 
 ## Docker
 
-The container image is an early server/NAS prototype. Its core image is **headless by default**: it contains the daemon only, creates the web GUI configuration disabled, and exposes only the API and sync ports. Keep `/config` persistent when replacing the image. Replace `<version>` with a published `YYYY.MM.DD.BB` release tag (America/Chicago date.build, never UTC, every part zero-padded to at least 2 digits, for example `2026.10.15.01`). Older images keep their original tags, including unpadded `YYYY.M.D.N` tags such as `2026.8.28.1` and earlier padded tags such as `2026.08.11.01`. Those existing tags are never retagged. `latest` is intentionally not published.
+The container image is an early server/NAS prototype. Its core image is **headless by default**: it contains the daemon only, creates the web GUI configuration disabled, and exposes the API, sync, and libp2p ports. Keep `/config` persistent when replacing the image. Replace `<version>` with a published `YYYY.MM.DD.BB` release tag (America/Chicago date.build, never UTC, every part zero-padded to at least 2 digits, for example `2026.10.15.01`). Older images keep their original tags, including unpadded `YYYY.M.D.N` tags such as `2026.8.28.1` and earlier padded tags such as `2026.08.11.01`. Those existing tags are never retagged. `latest` is intentionally not published.
 
 ### Docker Compose
 
@@ -27,6 +27,8 @@ services:
     ports:
       - "22420:22420"
       - "22000:22000"
+      - "22421:22421/tcp"
+      - "22421:22421/udp"
     volumes:
       - ./config:/config
     environment:
@@ -39,6 +41,8 @@ services:
       FSE_LOG_OUTPUT: /config/logs/fse.jsonl
       FSE_DISCOVERY_LOCAL: "true"
       FSE_DISCOVERY_DHT: "true"
+      FSE_LIBP2P_PORT: "22421"
+      FSE_PUBLISHED_LIBP2P_PORT: "22421"
       FSE_WEB_GUI_ENABLED: "false"
       FSE_UMASK: "002"
 ```
@@ -51,6 +55,8 @@ docker run -d \
   --restart unless-stopped \
   -p 22420:22420 \
   -p 22000:22000 \
+  -p 22421:22421/tcp \
+  -p 22421:22421/udp \
   -v "$PWD/config:/config" \
   -e PUID=99 \
   -e PGID=100 \
@@ -61,6 +67,8 @@ docker run -d \
   -e FSE_LOG_OUTPUT=/config/logs/fse.jsonl \
   -e FSE_DISCOVERY_LOCAL=true \
   -e FSE_DISCOVERY_DHT=true \
+  -e FSE_LIBP2P_PORT=22421 \
+  -e FSE_PUBLISHED_LIBP2P_PORT=22421 \
   -e FSE_WEB_GUI_ENABLED=false \
   -e FSE_UMASK=002 \
   ghcr.io/bstone108/file-sync-engine:<version>
@@ -76,6 +84,9 @@ docker run -d \
 - `FSE_SYNC_LISTEN`: Sync listener on first configuration creation. Default is `tcp://0.0.0.0:22000`.
 - `FSE_LOG_LEVEL` / `FSE_LOG_OUTPUT`: First-run structured-log configuration.
 - `FSE_DISCOVERY_LOCAL` / `FSE_DISCOVERY_DHT`: First-run discovery switches. Both default on. Set `FSE_DISCOVERY_DHT=false` to keep public DHT discovery off.
+- `FSE_LIBP2P_PORT`: TCP and QUIC/UDP port libp2p listens on inside the container. Default is `22421`. Publish that port; a random listen port is not reachable from another host.
+- `FSE_PUBLISHED_LIBP2P_PORT`: Host port mapped to `FSE_LIBP2P_PORT`. Other engines dial this port. Default is the listen port.
+- `FSE_PUBLISHED_API_PORT`: Host port mapped to the API. When it is set and no LAN, Tailscale, or GUI host is known yet, startup says the reachable API URL is pending. The URL is stored when one of those hosts appears.
 - `FSE_WEB_GUI_ENABLED`: Explicit opt-in configuration for a separately delivered GUI package. Default is `false`.
 - `FSE_UMASK`: File permission mask used by the entrypoint. Default is `002`.
 - `FSE_IDENTITY_EXPORT_PATH` / `FSE_IDENTITY_EXPORT_FORCE`: Optional identity-export controls. Do not point exports at logs or world-readable mounts.

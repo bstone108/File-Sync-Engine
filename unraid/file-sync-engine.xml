@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>File-Sync-Engine</Name>
-  <Repository>ghcr.io/bstone108/file-sync-engine:2026.10.16.01</Repository>
+  <Repository>ghcr.io/bstone108/file-sync-engine:2026.10.16.02</Repository>
   <Registry>https://github.com/bstone108/File-Sync-Engine/pkgs/container/file-sync-engine</Registry>
   <Network>bridge</Network>
   <MyIP/>
@@ -24,6 +24,8 @@
   <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/file-sync-engine" Mode="rw" Description="Persistent config, metadata, logs, and an installed GUI when enabled." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/file-sync-engine</Config>
   <Config Name="Data" Target="/data" Default="/mnt/user/filesync" Mode="rw" Description="Folder data to sync. Share subfolders from the GUI." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/filesync</Config>
   <Config Name="API port" Target="22420" Default="22420" Mode="tcp" Description="Daemon HTTPS API. The GUI proxies this server-side." Type="Port" Display="always" Required="true" Mask="false">22420</Config>
+  <Config Name="Libp2p TCP" Target="22421" Default="22421" Mode="tcp" Description="libp2p TCP. Other engines dial this published port for pairing records. Keep the host port equal to FSE_PUBLISHED_LIBP2P_PORT." Type="Port" Display="always" Required="false" Mask="false">22421</Config>
+  <Config Name="Libp2p QUIC" Target="22421" Default="22421" Mode="udp" Description="libp2p QUIC/UDP on the same port number as libp2p TCP." Type="Port" Display="always" Required="false" Mask="false">22421</Config>
   <Config Name="GUI port" Target="8385" Default="8385" Mode="tcp" Description="Web GUI. Nothing listens here unless FSE_WEB_GUI_ENABLED=true." Type="Port" Display="always" Required="false" Mask="false">8385</Config>
   <Config Name="Sync port" Target="22000" Default="32000" Mode="tcp" Description="Host port for the container sync listener. Default host port 32000 leaves Syncthing's 22000 free. The container still listens on 22000 unless FSE_SYNC_LISTEN is changed." Type="Port" Display="always" Required="false" Mask="false">32000</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User id. 99 is Unraid nobody." Type="Variable" Display="always" Required="false" Mask="false">99</Config>
@@ -32,6 +34,8 @@
   <Config Name="FSE_ADVERTISE_URL" Target="FSE_ADVERTISE_URL" Default="" Mode="" Description="Optional override for the reachable API URL other engines use, for example https://192.168.1.20:22420. Leave empty. The engine learns its address from peers, the host you used to open the GUI, and UPnP or NAT-PMP, then checks that it is reachable. Docker bridge addresses are never advertised." Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="FSE_ADVERTISE_URLS" Target="FSE_ADVERTISE_URLS" Default="" Mode="" Description="Optional extra reachable API URLs, comma-separated, such as a LAN address and a Tailscale address. Bridge and container-internal addresses are ignored." Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="FSE_PUBLISHED_API_PORT" Target="FSE_PUBLISHED_API_PORT" Default="22420" Mode="" Description="Host port published for the API. Keep this equal to the host side of the API port mapping. The web GUI uses it with the address you opened the console on when the container cannot see a LAN or Tailscale address." Type="Variable" Display="always" Required="false" Mask="false">22420</Config>
+  <Config Name="FSE_LIBP2P_PORT" Target="FSE_LIBP2P_PORT" Default="22421" Mode="" Description="TCP and QUIC/UDP port libp2p listens on inside the container. A random port cannot be reached from another host." Type="Variable" Display="always" Required="false" Mask="false">22421</Config>
+  <Config Name="FSE_PUBLISHED_LIBP2P_PORT" Target="FSE_PUBLISHED_LIBP2P_PORT" Default="22421" Mode="" Description="Host port mapped to FSE_LIBP2P_PORT. Other engines dial this port. Leave it equal to the host side of the libp2p mapping." Type="Variable" Display="always" Required="false" Mask="false">22421</Config>
   <Config Name="FSE_WEB_GUI_ENABLED" Target="FSE_WEB_GUI_ENABLED" Default="false" Mode="" Description="true downloads or installs the GUI. false or empty disables the GUI listener." Type="Variable" Display="always" Required="false" Mask="false">false</Config>
   <Config Name="FSE_WEB_GUI_VERSION" Target="FSE_WEB_GUI_VERSION" Default="" Mode="" Description="Explicit GUI package version. Leave empty to select the newest schema-compatible package." Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="FSE_WEB_GUI_PACKAGE" Target="FSE_WEB_GUI_PACKAGE" Default="" Mode="" Description="Absolute in-container path of an explicit GUI zip. Leave empty for catalog download." Type="Variable" Display="always" Required="false" Mask="false"/>

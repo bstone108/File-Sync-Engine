@@ -12,6 +12,7 @@ import (
 
 	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/guischema"
 	"filesyncengine/internal/schemaversion"
 )
@@ -79,11 +80,19 @@ func RunFromEnvironment(configPath string) error {
 			return err
 		}
 	}
-	if err := advertise.Apply(&cfg, os.Getenv(advertise.EnvVar)); err != nil {
-		fmt.Fprintf(os.Stderr, "reachable API URL not configured: %v\n", err)
-	} else if cfg.API.AdvertiseURL != "" {
-		fmt.Fprintf(os.Stderr, "reachable API URL %s\n", cfg.API.AdvertiseURL)
+	if repaired, logErr := config.PersistLoggingOutput(configPath, cfg); logErr != nil {
+		fmt.Fprintf(os.Stderr, "log output was not restored: %v\n", logErr)
+	} else {
+		cfg = repaired
 	}
+	if err := advertise.Apply(&cfg, os.Getenv(advertise.EnvVar)); err != nil {
+		if message := advertise.StartupMessage(cfg.API.AdvertiseURL, err); message != "" {
+			fmt.Fprintln(os.Stderr, message)
+		}
+	} else if message := advertise.StartupMessage(cfg.API.AdvertiseURL, nil); message != "" {
+		fmt.Fprintln(os.Stderr, message)
+	}
+	discovery.SetAnnounceAPIURL(cfg.API.AdvertiseURL)
 	cfg, err = ReconcileWebGUI(configPath, cfg, DefaultsFromEnvironment())
 	if err != nil {
 		return err
@@ -199,6 +208,23 @@ func envOrDefault(name string, fallback string) string {
 	return fallback
 }
 
+func bootstrapPeersFromEnv() []string {
+	raw := strings.TrimSpace(os.Getenv("FSE_DHT_BOOTSTRAP_PEERS"))
+	if raw == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\n'
+	})
+	peers := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field = strings.TrimSpace(field); field != "" {
+			peers = append(peers, field)
+		}
+	}
+	return peers
+}
+
 func envBoolOrDefault(name string, fallback bool) bool {
 	value := os.Getenv(name)
 	if value == "" {
@@ -226,6 +252,9 @@ func ApplyFirstRunDefaults(cfg config.Config, defaults RuntimeDefaults) config.C
 	cfg.Metadata = config.MetadataConfig{Backend: config.MetadataBackendBadger, Path: "/config/metadata", PerFolder: true}
 	cfg.Discovery.Local = defaults.DiscoveryLocal
 	cfg.Discovery.DHT = defaults.DiscoveryDHT
+	if peers := bootstrapPeersFromEnv(); len(peers) > 0 {
+		cfg.Discovery.DHTBootstrapPeers = peers
+	}
 	if defaults.webGUIOptInComplete() {
 		cfg.WebGUI.Enabled = true
 		cfg.WebGUI.Version = defaults.WebGUIVersion

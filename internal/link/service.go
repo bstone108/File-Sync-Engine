@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -228,6 +229,27 @@ func (s *Service) unpublishCode(ctx context.Context, code string) {
 	if issued := s.codes[NormalizeCode(code)]; issued != nil {
 		issued.unpublished = true
 	}
+}
+
+// ServedPayload returns the sealed record for a DHT namespace while the code
+// is still redeemable. Used and unpublished codes are omitted.
+func (s *Service) ServedPayload(namespace string) ([]byte, bool) {
+	if s == nil || !strings.HasPrefix(namespace, CodeNamespacePrefix) || strings.Contains(namespace, "..") {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for _, issued := range s.codes {
+		if issued == nil || issued.used || issued.unpublished || !now.Before(issued.expires) {
+			continue
+		}
+		if Namespace(issued.code) != namespace {
+			continue
+		}
+		return append([]byte(nil), issued.payload...), true
+	}
+	return nil, false
 }
 
 // Warmup builds the pairing directory before the first code is issued.

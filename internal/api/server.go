@@ -436,6 +436,9 @@ type ConfigUpdateRequest struct {
 	Discovery   *config.DiscoveryConfig   `json:"discovery,omitempty"`
 	Metadata    *config.MetadataConfig    `json:"metadata,omitempty"`
 	Maintenance *config.MaintenanceConfig `json:"maintenance,omitempty"`
+	// Raw is the original JSON body. Nested objects merge by presence so a
+	// logging.level patch does not drop logging.output.
+	Raw json.RawMessage `json:"-"`
 }
 
 type ConfigAPIUpdate struct {
@@ -526,6 +529,10 @@ type PairExchangeHandler func(context.Context, PairExchangeRequest) (PairExchang
 type PairCodeHandler func(context.Context) (PairCodeResponse, error)
 type PairCodeRedeemHandler func(context.Context, PairCodeRedeemRequest) (PairCodeRedeemResponse, error)
 type PairCodeClaimHandler func(context.Context, link.ClaimRequest) (link.ClaimResponse, error)
+
+// PairCodeRecordHandler returns the sealed pairing payload for a DHT namespace.
+// The browser never calls it. Another engine uses it when the libp2p stream fails.
+type PairCodeRecordHandler func(context.Context, string) ([]byte, error)
 type LinkProfileHandler func(context.Context) (link.Profile, error)
 type LinkProfilePushHandler func(context.Context, link.LinkPush) (link.Profile, error)
 type APITrustHandler func(context.Context) (APITrustResponse, error)
@@ -732,6 +739,7 @@ type Server struct {
 	pairCodeHandler            PairCodeHandler
 	pairCodeRedeemHandler      PairCodeRedeemHandler
 	pairCodeClaimHandler       PairCodeClaimHandler
+	pairCodeRecordHandler      PairCodeRecordHandler
 	linkProfileHandler         LinkProfileHandler
 	linkProfilePushHandler     LinkProfilePushHandler
 	apiTrustHandler            APITrustHandler
@@ -787,6 +795,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/pair-code", s.requireKey(s.handlePairCode))
 	mux.HandleFunc("/v1/pair-code/redeem", s.requireKey(s.handlePairCodeRedeem))
 	mux.HandleFunc("/v1/pair-code/claim", s.handlePairCodeClaim)
+	mux.HandleFunc("/v1/pair-code/record", s.handlePairCodeRecord)
 	mux.HandleFunc("/v1/link-profile", s.requireKey(s.handleLinkProfile))
 	mux.HandleFunc("/v1/api/trust", s.requireKey(s.handleAPITrust))
 	mux.HandleFunc("/v1/api/trust-command", s.requireKey(s.handleAPITrustCommand))
@@ -910,6 +919,12 @@ func (s *Server) SetPairCodeClaimHandler(handler PairCodeClaimHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pairCodeClaimHandler = handler
+}
+
+func (s *Server) SetPairCodeRecordHandler(handler PairCodeRecordHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pairCodeRecordHandler = handler
 }
 
 func (s *Server) SetLinkProfileHandler(handler LinkProfileHandler) {
@@ -1733,6 +1748,33 @@ func (s *Server) handlePairCodeClaim(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
+func (s *Server) handlePairCodeRecord(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	namespace := strings.TrimSpace(r.URL.Query().Get("namespace"))
+	if !strings.HasPrefix(namespace, link.CodeNamespacePrefix) || strings.Contains(namespace, "..") {
+		http.Error(w, "pairing code was not found", http.StatusNotFound)
+		return
+	}
+	s.mu.RLock()
+	handler := s.pairCodeRecordHandler
+	s.mu.RUnlock()
+	if handler == nil {
+		http.Error(w, "pairing code was not found", http.StatusNotFound)
+		return
+	}
+	payload, err := handler(r.Context(), namespace)
+	if err != nil || len(payload) == 0 {
+		http.Error(w, "pairing code was not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
+}
+
 func (s *Server) handleLinkProfile(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -1995,6 +2037,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "invalid config update request", http.StatusBadRequest)
 					return
 				}
+				req.Raw = append(json.RawMessage(nil), body...)
 			}
 		}
 		response, err := handler(r.Context(), req)
