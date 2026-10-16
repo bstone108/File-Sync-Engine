@@ -30,8 +30,14 @@ func TestEnsureFileCreatesSkeletonWithGeneratedAPIKey(t *testing.T) {
 	if !strings.Contains(text, `"permissions"`) || !strings.Contains(text, `"mode": "ignore"`) {
 		t.Fatalf("skeleton lacks explicit permission policy:\n%s", text)
 	}
-	if !strings.Contains(text, `"dhtNamespace": "filesyncengine/v1"`) || !strings.Contains(text, `"dhtBootstrapPeers"`) {
+	if !strings.Contains(text, `"dhtNamespace": "filesyncengine/v1"`) || !strings.Contains(text, `"dhtBootstrapPeers"`) || !strings.Contains(text, `"dht": true`) {
 		t.Fatalf("skeleton lacks public DHT defaults:\n%s", text)
+	}
+	if strings.Contains(text, `"dht": false`) {
+		t.Fatalf("fresh install must enable DHT:\n%s", text)
+	}
+	if !cfg.Discovery.DHT {
+		t.Fatal("fresh install config has DHT disabled")
 	}
 	if strings.Contains(text, "peer-example") || strings.Contains(text, "192.0.2.10") || strings.Contains(text, `"./docs"`) {
 		t.Fatalf("fresh install must not ship example peers or folders:\n%s", text)

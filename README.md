@@ -38,7 +38,7 @@ services:
       FSE_LOG_LEVEL: info
       FSE_LOG_OUTPUT: /config/logs/fse.jsonl
       FSE_DISCOVERY_LOCAL: "true"
-      FSE_DISCOVERY_DHT: "false"
+      FSE_DISCOVERY_DHT: "true"
       FSE_WEB_GUI_ENABLED: "false"
       FSE_UMASK: "002"
 ```
@@ -60,7 +60,7 @@ docker run -d \
   -e FSE_LOG_LEVEL=info \
   -e FSE_LOG_OUTPUT=/config/logs/fse.jsonl \
   -e FSE_DISCOVERY_LOCAL=true \
-  -e FSE_DISCOVERY_DHT=false \
+  -e FSE_DISCOVERY_DHT=true \
   -e FSE_WEB_GUI_ENABLED=false \
   -e FSE_UMASK=002 \
   ghcr.io/bstone108/file-sync-engine:<version>
@@ -75,7 +75,7 @@ docker run -d \
 - `FSE_API_LISTEN`: API listen address on first configuration creation. Default is `0.0.0.0:22420`.
 - `FSE_SYNC_LISTEN`: Sync listener on first configuration creation. Default is `tcp://0.0.0.0:22000`.
 - `FSE_LOG_LEVEL` / `FSE_LOG_OUTPUT`: First-run structured-log configuration.
-- `FSE_DISCOVERY_LOCAL` / `FSE_DISCOVERY_DHT`: First-run discovery switches.
+- `FSE_DISCOVERY_LOCAL` / `FSE_DISCOVERY_DHT`: First-run discovery switches. Both default on. Set `FSE_DISCOVERY_DHT=false` to keep public DHT discovery off.
 - `FSE_WEB_GUI_ENABLED`: Explicit opt-in configuration for a separately delivered GUI package. Default is `false`.
 - `FSE_UMASK`: File permission mask used by the entrypoint. Default is `002`.
 - `FSE_IDENTITY_EXPORT_PATH` / `FSE_IDENTITY_EXPORT_FORCE`: Optional identity-export controls. Do not point exports at logs or world-readable mounts.

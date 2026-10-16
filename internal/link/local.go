@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"sync"
-	"syscall"
 	"time"
 
 	"filesyncengine/internal/structuredlog"
@@ -88,17 +87,6 @@ func listenUDP(addr *net.UDPAddr) (net.PacketConn, error) {
 		return net.ListenUDP("udp4", addr)
 	}
 	return packet, nil
-}
-
-func broadcastControl(_, _ string, c syscall.RawConn) error {
-	var sockErr error
-	err := c.Control(func(fd uintptr) {
-		sockErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
-	})
-	if err != nil {
-		return err
-	}
-	return sockErr
 }
 
 // SetDialTargets replaces subnet scanning. Tests pass the publisher address.

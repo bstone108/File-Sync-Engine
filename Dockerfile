@@ -16,7 +16,7 @@ ENV FSE_CONFIG_PATH=/config/config.jsonc \
     FSE_LOG_LEVEL=info \
     FSE_LOG_OUTPUT=/config/logs/fse.jsonl \
     FSE_DISCOVERY_LOCAL=true \
-    FSE_DISCOVERY_DHT=false \
+    FSE_DISCOVERY_DHT=true \
     FSE_WEB_GUI_ENABLED=false \
     FSE_UMASK=002
 

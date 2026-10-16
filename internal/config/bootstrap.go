@@ -34,7 +34,7 @@ func EnsureFile(path string) (Config, bool, error) {
 		Backup:      BackupConfig{Enabled: false, Mode: BackupModeBlockArchiveOnly},
 		WebGUI:      WebGUIConfig{Enabled: false, InstallDir: "./web/current", Listen: "127.0.0.1:8385"},
 		Identity:    IdentityConfig{PrivateKey: identity.PrivateKey, PublicKey: identity.PublicKey, EncryptionLevel: peeridentity.DefaultEncryptionLevel},
-		Discovery:   DiscoveryConfig{DHT: false, Local: true, DHTNamespace: "filesyncengine/v1", DHTBootstrapPeers: []string{"/dnsaddr/bootstrap.libp2p.io"}},
+		Discovery:   DiscoveryConfig{DHT: true, Local: true, DHTNamespace: "filesyncengine/v1", DHTBootstrapPeers: []string{"/dnsaddr/bootstrap.libp2p.io"}},
 		Metadata:    MetadataConfig{Backend: MetadataBackendJSON},
 		Maintenance: MaintenanceConfig{Enabled: false, Frequency: "6h", IdleOnly: true, MaxFilesPerRun: 100, MaxBytesPerRun: 104857600, AutoRepair: false},
 	}
