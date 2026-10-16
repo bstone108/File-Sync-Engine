@@ -65,13 +65,18 @@ type InstanceRecord struct {
 
 // Connection is how identity-linked engines reach one instance.
 type Connection struct {
-	InstanceID string   `json:"instanceId"`
-	Label      string   `json:"label"`
-	APIURL     string   `json:"apiURL,omitempty"`
-	Addresses  []string `json:"addresses,omitempty"`
-	Online     bool     `json:"online"`
-	LastSeen   string   `json:"lastSeen,omitempty"`
-	Clock      Clock    `json:"clock"`
+	InstanceID  string   `json:"instanceId"`
+	Label       string   `json:"label"`
+	APIURL      string   `json:"apiURL,omitempty"`
+	Addresses   []string `json:"addresses,omitempty"`
+	DiscoveryID string   `json:"discoveryId,omitempty"`
+	DHTPeerID   string   `json:"dhtPeerId,omitempty"`
+	RelayAddrs  []string `json:"relayAddrs,omitempty"`
+	MeshHelper  bool     `json:"meshHelper,omitempty"`
+	Reachable   string   `json:"reachable,omitempty"`
+	Online      bool     `json:"online"`
+	LastSeen    string   `json:"lastSeen,omitempty"`
+	Clock       Clock    `json:"clock"`
 }
 
 // Edit is a change queued for one instance UUID. Any replica may carry it.
@@ -262,8 +267,13 @@ func (r *Replica) PublishConnection(conn Connection, wall int64) (Connection, er
 	if err := ValidateInstanceID(conn.InstanceID); err != nil {
 		return Connection{}, err
 	}
-	if err := RejectSecrets(conn.APIURL, conn.Label); err != nil {
+	if err := RejectSecrets(conn.APIURL, conn.Label, conn.DiscoveryID, conn.DHTPeerID, conn.Reachable); err != nil {
 		return Connection{}, err
+	}
+	for _, addr := range append(append([]string{}, conn.Addresses...), conn.RelayAddrs...) {
+		if err := RejectSecrets(addr); err != nil {
+			return Connection{}, err
+		}
 	}
 	conn.Clock = r.Tick(wall)
 	if conn.LastSeen == "" && conn.Online {
@@ -464,6 +474,7 @@ func cloneReplica(in Replica) Replica {
 	out.Connections = map[string]Connection{}
 	for id, conn := range in.Connections {
 		conn.Addresses = append([]string(nil), conn.Addresses...)
+		conn.RelayAddrs = append([]string(nil), conn.RelayAddrs...)
 		out.Connections[id] = conn
 	}
 	out.Pending = append([]Edit(nil), in.Pending...)

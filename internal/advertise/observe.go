@@ -213,11 +213,29 @@ func StartAutoDetect(ctx context.Context, cfg config.Config) {
 		detectCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cancel()
 		ip, port, err := mapExternalPort(detectCtx, internal, external)
-		if err != nil || ip == "" || port == 0 {
+		if err == nil && ip != "" && port != 0 {
+			NoteNAT(ip, port)
+			if mappingHook != nil {
+				mappingHook(ip, port)
+			}
 			return
 		}
-		NoteNAT(ip, port)
+		stunIP, _, stunErr := stunDiscover(detectCtx)
+		if stunErr != nil || stunIP == "" {
+			return
+		}
+		NoteObservedIP(stunIP)
 	}()
+}
+
+var (
+	mappingHook  func(string, int)
+	stunDiscover = DiscoverExternalIP
+)
+
+// SetExternalMappingHook receives a successful UPnP or NAT-PMP mapping.
+func SetExternalMappingHook(fn func(ip string, port int)) {
+	mappingHook = fn
 }
 
 func observationURLs(cfg config.Config, obs Observations) []string {

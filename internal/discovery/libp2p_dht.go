@@ -21,6 +21,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	routingdiscovery "github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"filesyncengine/internal/structuredlog"
@@ -85,17 +86,17 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	if opts.Announce {
 		libp2pOpts = append(libp2pOpts, libp2p.AddrsFactory(announcedAddrs))
 	}
-	// A published port or reachable address is dialable. Stay a DHT server and
-	// tell peers that address works, so AutoNAT does not hide it behind a relay.
-	if mode == dht.ModeServer {
-		libp2pOpts = append(libp2pOpts, libp2p.ForceReachabilityPublic())
-	}
-	if opts.AutoRelay || opts.Announce {
+	// Traversal stays on unless discovery.nat.disabled or FSE_NAT_TRAVERSAL
+	// turns it off. AutoNAT decides whether this node is a public helper.
+	// A published port still selects DHT server mode so pairing records can be
+	// stored, without forcing every published port to look publicly reachable.
+	if NATEnabled() {
 		libp2pOpts = append(libp2pOpts,
 			libp2p.EnableRelay(),
 			libp2p.EnableNATService(),
 			libp2p.EnableAutoNATv2(),
-			libp2p.EnableHolePunching(),
+			libp2p.EnableHolePunching(holepunch.WithTracer(holepunchTracer{})),
+			libp2p.EnableRelayService(helperRelayOptions()...),
 			libp2p.EnableAutoRelayWithPeerSource(func(relayCtx context.Context, num int) <-chan peer.AddrInfo {
 				return relayCandidates(relayCtx, num, &hostBox, &dhtBox)
 			}),
@@ -121,6 +122,9 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		modeReason: reason,
 	}
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
+	h.SetStreamHandler(protocol.ID(ObserveProtocol), router.handleObserve)
+	watchConnections(h.Network())
+	go watchReachability(h)
 	if opts.Announce {
 		structuredlog.Event("info", "libp2p.announce", "libp2p is advertising the published port", map[string]any{
 			"peerId":        h.ID().String(),
@@ -289,6 +293,7 @@ func (r *Libp2pDHTRouter) notePublicReachability() {
 	if r == nil || r.host == nil || r.dht == nil || r.dht.Mode() == dht.ModeServer {
 		return
 	}
+	markSelfReachabilityEmit()
 	emitter, err := r.host.EventBus().Emitter(new(event.EvtLocalReachabilityChanged))
 	if err != nil {
 		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error()})
@@ -306,7 +311,21 @@ func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value
 	ch := make(chan peer.AddrInfo)
 	go func() {
 		defer close(ch)
-		if num <= 0 || hostBox == nil || dhtBox == nil {
+		if num <= 0 {
+			return
+		}
+		for _, info := range preferredRelayInfos() {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- info:
+			}
+			num--
+			if num == 0 {
+				return
+			}
+		}
+		if hostBox == nil || dhtBox == nil {
 			return
 		}
 		h, _ := hostBox.Load().(host.Host)

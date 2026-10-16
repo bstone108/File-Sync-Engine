@@ -136,6 +136,26 @@ func ProductionRouter(ctx context.Context, nodeID string) (*Libp2pDHTRouter, err
 	return router, nil
 }
 
+// SharedPeerID is the libp2p peer id of the process router, when it is up.
+func SharedPeerID() string {
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if sharedRouter == nil {
+		return ""
+	}
+	return sharedRouter.PeerID()
+}
+
+// SharedListenAddrs are the addresses the process router is advertising.
+func SharedListenAddrs() []string {
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if sharedRouter == nil || sharedRouter.host == nil {
+		return nil
+	}
+	return multiaddrStrings(sharedRouter.host.Addrs())
+}
+
 // ResetSharedRouter closes the process router. Tests use it between cases.
 func ResetSharedRouter() {
 	sharedMu.Lock()

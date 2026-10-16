@@ -23,6 +23,7 @@ func (r *runtimeRecordingDHTRouter) FindPeers(ctx context.Context, namespace str
 }
 
 func TestDiscoverySourcesFromConfigWirePublicDHTAndManualPeers(t *testing.T) {
+	discovery.ResetCatalog()
 	router := &runtimeRecordingDHTRouter{peers: []discovery.Peer{{ID: "peer-dht", Addresses: []string{"/ip4/203.0.113.9/tcp/22000/p2p/peer-dht"}}}}
 	cfg := config.Config{
 		NodeName: "node-a",
@@ -36,7 +37,7 @@ func TestDiscoverySourcesFromConfigWirePublicDHTAndManualPeers(t *testing.T) {
 
 	sources := DiscoverySourcesFromConfig(cfg, router)
 	if len(sources) != 2 {
-		t.Fatalf("sources = %d, want manual + public DHT", len(sources))
+		t.Fatalf("sources = %d, want manual + gated DHT", len(sources))
 	}
 	manualPeers, err := sources[0].Peers()
 	if err != nil {
@@ -49,11 +50,32 @@ func TestDiscoverySourcesFromConfigWirePublicDHTAndManualPeers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dht peers: %v", err)
 	}
+	if len(dhtPeers) != 0 || len(router.bootstrap) != 0 {
+		t.Fatalf("routine poll used the DHT: peers=%+v bootstrap=%+v", dhtPeers, router.bootstrap)
+	}
+}
+
+func TestDiscoverySourcesUseDHTWhenNoConnectionDetailsExist(t *testing.T) {
+	discovery.ResetCatalog()
+	router := &runtimeRecordingDHTRouter{peers: []discovery.Peer{{ID: "peer-dht", Addresses: []string{"/ip4/203.0.113.9/tcp/22000/p2p/peer-dht"}}}}
+	cfg := config.Config{
+		NodeName: "node-a",
+		Discovery: config.DiscoveryConfig{
+			DHT:               true,
+			DHTNamespace:      "fse-test",
+			DHTBootstrapPeers: []string{"/dnsaddr/bootstrap.libp2p.io"},
+		},
+	}
+	sources := DiscoverySourcesFromConfig(cfg, router)
+	peers, err := sources[0].Peers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 1 || peers[0].ID != "peer-dht" {
+		t.Fatalf("DHT backup was not used: %+v", peers)
+	}
 	if len(router.bootstrap) != 1 || router.bootstrap[0] != "/dnsaddr/bootstrap.libp2p.io" {
 		t.Fatalf("DHT bootstrap not wired from config: %+v", router.bootstrap)
-	}
-	if len(dhtPeers) != 1 || dhtPeers[0].ID != "peer-dht" {
-		t.Fatalf("DHT peers not returned: %+v", dhtPeers)
 	}
 }
 

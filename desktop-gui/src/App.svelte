@@ -2012,7 +2012,7 @@
         {:else}
           <ul aria-label="Configured peers">
             {#each daemonPeers as peer}
-              <li><strong>{peer.id}</strong> · {peer.endpoint ?? 'endpoint unavailable'} · {peer.status ?? 'configured'}</li>
+              <li><strong>{peer.id}</strong> · {peer.endpoint ?? 'endpoint unavailable'} · {peer.status ?? 'configured'} · <span data-testid="peer-connection-path">{peer.connectionPath || 'path not connected'}</span></li>
             {/each}
           </ul>
         {/if}

@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/discovery"
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/routing"
 )
 
@@ -60,34 +62,102 @@ func HasAPIEndpoint(peer config.PeerConfig) bool {
 	return len(OrderedEndpoints(peer)) > 0
 }
 
-// Dial tries API addresses in order. Connection failures fail over. An HTTP
-// response, including an error status, stops the search because that address
-// is alive.
+// Dial tries saved addresses first, then peer-exchange and same-identity
+// connection details, then LAN discoveries, then DHT addresses. Each stage
+// races its addresses and keeps a relay only until a direct path wins.
+// An HTTP response stops the search because that address is alive.
 func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, string, *http.Client) error) (string, error) {
-	endpoints := OrderedEndpoints(peer)
-	if len(endpoints) == 0 {
-		return "", errors.New("peer has no http endpoint")
-	}
+	stages := endpointStages(peer)
 	var last error
-	for _, endpoint := range endpoints {
-		client, err := verifyPinnedPeerCertificateClient(endpoint.Address, peer.APICertificateSHA256)
-		if err != nil {
-			return "", err
+	tried := 0
+	for _, stage := range stages {
+		if len(stage) == 0 {
+			continue
 		}
-		err = do(ctx, strings.TrimRight(endpoint.Address, "/"), client)
+		tried += len(stage)
+		used, path, err := dialStage(ctx, peer, stage, do)
 		if err == nil {
-			return endpoint.Address, nil
+			discovery.NotePeerReachable(peer.ID)
+			nat.DefaultPaths.Observe(peer.ID, used, path)
+			if peer.DHTPeerID != "" {
+				nat.DefaultPaths.Observe(peer.DHTPeerID, used, path)
+			}
+			return used, nil
 		}
-		if !failoverError(err) {
-			return "", err
+		var answered answeredError
+		if errors.As(err, &answered) {
+			return "", answered.err
 		}
 		last = err
 	}
+	if tried == 0 {
+		return "", errors.New("peer has no http endpoint")
+	}
+	discovery.NotePeerUnreachable(peer.ID)
 	if last == nil {
 		last = errors.New("peer has no reachable endpoint")
 	}
 	return "", last
 }
+
+func endpointStages(peer config.PeerConfig) [][]config.EndpointConfig {
+	exchanged, local, dht := discovery.AddressesFor(peer.ID)
+	return [][]config.EndpointConfig{
+		OrderedEndpoints(peer),
+		httpEndpoints(exchanged, "manual"),
+		httpEndpoints(local, "manual"),
+		httpEndpoints(dht, "relay"),
+	}
+}
+
+func httpEndpoints(addresses []string, kind string) []config.EndpointConfig {
+	out := make([]config.EndpointConfig, 0, len(addresses))
+	seen := map[string]struct{}{}
+	for _, address := range addresses {
+		if !isAPIAddress(address) {
+			continue
+		}
+		if _, ok := seen[address]; ok {
+			continue
+		}
+		seen[address] = struct{}{}
+		out = append(out, config.EndpointConfig{Kind: kind, Address: address, NetworkHint: string(routing.ClassifyEndpointNetwork(address))})
+	}
+	return out
+}
+
+func dialStage(ctx context.Context, peer config.PeerConfig, endpoints []config.EndpointConfig, do func(context.Context, string, *http.Client) error) (string, nat.Path, error) {
+	candidates := make([]nat.Candidate, 0, len(endpoints))
+	byAddress := map[string]config.EndpointConfig{}
+	for _, endpoint := range endpoints {
+		path := nat.Classify(endpoint.Address)
+		if endpoint.Kind == "relay" {
+			path = nat.PathRelay
+		}
+		candidates = append(candidates, nat.Candidate{Address: endpoint.Address, Path: path})
+		byAddress[endpoint.Address] = endpoint
+	}
+	return nat.Race(ctx, candidates, func(ctx context.Context, address string) error {
+		client, err := verifyPinnedPeerCertificateClient(address, peer.APICertificateSHA256)
+		if err != nil {
+			return err
+		}
+		err = do(ctx, strings.TrimRight(address, "/"), client)
+		if err == nil {
+			return nil
+		}
+		if !failoverError(err) {
+			return answeredError{err: err}
+		}
+		return err
+	}, 250*time.Millisecond)
+}
+
+type answeredError struct{ err error }
+
+func (e answeredError) Error() string { return e.err.Error() }
+
+func (e answeredError) Unwrap() error { return nat.ErrAnswered }
 
 // PostJSON dials the peer and posts JSON, failing over when an earlier address dies.
 func PostJSON(ctx context.Context, peer config.PeerConfig, path string, payload []byte) ([]byte, string, error) {

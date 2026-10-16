@@ -283,6 +283,17 @@ type DiscoveryConfig struct {
 	DHTBootstrapPeers []string           `json:"dhtBootstrapPeers,omitempty"`
 	PairingCodeTTL    string             `json:"pairingCodeTTL,omitempty"`
 	NetworkHints      NetworkHintsConfig `json:"networkHints,omitempty"`
+	NAT               NATConfig          `json:"nat,omitempty"`
+}
+
+// NATConfig controls traversal and the same-identity helper. Zero values keep
+// every layer on. Set disabled or meshHelperDisabled to turn a layer off.
+type NATConfig struct {
+	Disabled             bool     `json:"disabled,omitempty"`
+	MeshHelperDisabled   bool     `json:"meshHelperDisabled,omitempty"`
+	STUNServers          []string `json:"stunServers,omitempty"`
+	RelayPeers           []string `json:"relayPeers,omitempty"`
+	MaxRelayReservations int      `json:"maxRelayReservations,omitempty"`
 }
 
 // PairingCodeLifetime is how long an unused pairing code stays redeemable.
@@ -322,6 +333,7 @@ type PeerConfig struct {
 	APIKey                string           `json:"apiKey,omitempty"`
 	APICertificateSHA256  string           `json:"apiCertificateSha256,omitempty"`
 	IdentityPublicKey     string           `json:"identityPublicKey,omitempty"`
+	IdentityGroupID       string           `json:"identityGroupId,omitempty"`
 	DHTPeerID             string           `json:"dhtPeerId,omitempty"`
 	Relays                []string         `json:"relays,omitempty"`
 	EncryptionLevel       int              `json:"encryptionLevel"`
@@ -454,6 +466,9 @@ func (c *Config) Validate() error {
 		return errors.New("metadata.perFolder requires metadata.backend to be badger")
 	}
 	if _, err := c.Discovery.PairingCodeLifetime(); err != nil {
+		return err
+	}
+	if err := validateNATConfig(c.Discovery.NAT); err != nil {
 		return err
 	}
 	for i, peer := range c.Discovery.DHTBootstrapPeers {
@@ -595,6 +610,22 @@ func (c *Config) Validate() error {
 			if !validEndpointNetworkHint(endpoint.NetworkHint) {
 				return fmt.Errorf("peer %q endpoint[%d] has invalid networkHint %q", p.ID, j, endpoint.NetworkHint)
 			}
+		}
+	}
+	return nil
+}
+
+func validateNATConfig(cfg NATConfig) error {
+	if cfg.MaxRelayReservations < 0 || cfg.MaxRelayReservations > 128 {
+		return fmt.Errorf("discovery.nat.maxRelayReservations must be from 0 to 128")
+	}
+	for i, server := range cfg.STUNServers {
+		server = strings.TrimSpace(server)
+		if server == "" {
+			return fmt.Errorf("discovery.nat.stunServers[%d] is required", i)
+		}
+		if _, _, err := net.SplitHostPort(server); err != nil {
+			return fmt.Errorf("discovery.nat.stunServers[%d] must be host:port", i)
 		}
 	}
 	return nil

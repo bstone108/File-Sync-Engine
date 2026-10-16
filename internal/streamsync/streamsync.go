@@ -725,6 +725,7 @@ func PullFolder(ctx context.Context, stream io.ReadWriter, opts PullOptions) (Pu
 			remote := discovery.Peer{ID: msg.Hello.NodeID}
 			plan := discovery.PlanPeerExchange(opts.NodeID, opts.KnownPeers, remote, peersFromProtocol(peerMsg.PeerExchange.Peers))
 			result.LearnedPeers = plan.Learned
+			discovery.NoteExchangedPeers(plan.Learned)
 			remoteGroups := groupsFromProtocol(peerMsg.PeerExchange.IdentityGroups)
 			result.LearnedFolders = planIdentityGroupLearnedFolders(opts.NodeID, opts.IdentityGroups, remote.ID, remoteGroups)
 			learnedSnapshots, err := saveIdentitySnapshotMarkers(opts.SnapshotStore, opts.IdentityGroups, remoteGroups)

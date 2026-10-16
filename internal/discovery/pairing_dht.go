@@ -15,7 +15,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/structuredlog"
+	ma "github.com/multiformats/go-multiaddr"
 )
 
 // pairingAdvertiseTimeout bounds the public DHT provider walk. Routing
@@ -227,7 +229,7 @@ func (r *Libp2pDHTRouter) fetchPairingStream(ctx context.Context, info peer.Addr
 	if len(dialInfo.Addrs) == 0 {
 		return nil, fmt.Errorf("pairing provider has no dialable libp2p address")
 	}
-	if err := r.host.Connect(dialCtx, dialInfo); err != nil {
+	if _, err := r.connectPaths(dialCtx, dialInfo); err != nil {
 		return nil, err
 	}
 	stream, err := r.host.NewStream(dialCtx, info.ID, protocol.ID(PairingProtocol))
@@ -255,6 +257,31 @@ func (r *Libp2pDHTRouter) fetchPairingStream(ctx context.Context, info peer.Addr
 		return nil, err
 	}
 	return payload, nil
+}
+
+// connectPaths dials direct, LAN, hole-punch, and relay addresses together.
+// A relay success is replaced when a better path connects in the same attempt.
+func (r *Libp2pDHTRouter) connectPaths(ctx context.Context, info peer.AddrInfo) (nat.Path, error) {
+	candidates := make([]nat.Candidate, 0, len(info.Addrs))
+	for _, addr := range info.Addrs {
+		if addr == nil {
+			continue
+		}
+		raw := addr.String()
+		candidates = append(candidates, nat.Candidate{Address: raw, Path: nat.Classify(raw)})
+	}
+	used, path, err := nat.Race(ctx, candidates, func(ctx context.Context, address string) error {
+		maddr, err := ma.NewMultiaddr(address)
+		if err != nil {
+			return err
+		}
+		return r.host.Connect(ctx, peer.AddrInfo{ID: info.ID, Addrs: []ma.Multiaddr{maddr}})
+	}, time.Second)
+	if err != nil {
+		return "", err
+	}
+	nat.DefaultPaths.Observe(info.ID.String(), used, path)
+	return path, nil
 }
 
 func (r *Libp2pDHTRouter) storePairing(ctx context.Context, namespace string, payload []byte) error {
