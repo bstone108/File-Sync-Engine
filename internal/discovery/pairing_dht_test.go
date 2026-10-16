@@ -45,7 +45,7 @@ func TestPairingStreamReturnsStoredRecordUntilUnpublished(t *testing.T) {
 	t.Cleanup(func() { _ = looker.Close() })
 	namespace := "filesyncengine/pair/v1/stream-test"
 	payload := []byte(`{"discoveryId":"publisher-key","certificateSha256":"` + "ab" + `"}`)
-	if err := publisher.storePairing(namespace, payload); err != nil {
+	if err := publisher.storePairing(ctx, namespace, payload); err != nil {
 		t.Fatal(err)
 	}
 	info := peer.AddrInfo{ID: publisher.host.ID(), Addrs: publisher.host.Addrs()}

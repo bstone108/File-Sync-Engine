@@ -105,11 +105,12 @@ func Skeleton(cfg Config) string {
   // identity signs peer hello messages. privateKey is local secret; share only publicKey with trusted peers.
   "identity": {"privateKey": %q, "publicKey": %q, "encryptionLevel": %d},
   // discovery is optional. Set disabled true to rely only on configured peers.
+  // dht defaults on so a pairing code can be looked up. FSE_DISCOVERY_DHT=false keeps it off.
   // dhtNamespace/dhtBootstrapPeers are used when public DHT discovery is enabled.
   // networkHints.localContainerGatewayIPs can promote exact Docker host-gateway IPs to true-local paths after the deployment proves they reach LAN peers.
   // networkHints.localCIDRs can promote broader deployment-proven LAN/published-port CIDRs when container bridge/NAT inference is too conservative.
   // networkHints.publishedPortMappings promotes only exact hostIP:hostPort published ports to true-local paths, keeping other Docker bridge ports conservative.
-  "discovery": {"disabled": false, "dht": false, "local": true, "dhtNamespace": %q, "dhtBootstrapPeers": ["/dnsaddr/bootstrap.libp2p.io"], "networkHints": {"localContainerGatewayIPs": [], "localCIDRs": [], "publishedPortMappings": []}},
+  "discovery": {"disabled": false, "dht": true, "local": true, "dhtNamespace": %q, "dhtBootstrapPeers": ["/dnsaddr/bootstrap.libp2p.io"], "networkHints": {"localContainerGatewayIPs": [], "localCIDRs": [], "publishedPortMappings": []}},
   // metadata selects the prototype metadata store. backend is json or badger; path is optional.
   // Badger uses key-level prototype metadata records. Set perFolder true with badger to store each share in a separate DB under path.
   "metadata": {"backend": "json", "perFolder": false},

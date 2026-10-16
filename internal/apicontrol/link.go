@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/api"
@@ -13,6 +14,7 @@ import (
 	"filesyncengine/internal/configops"
 	"filesyncengine/internal/link"
 	"filesyncengine/internal/peeridentity"
+	"filesyncengine/internal/structuredlog"
 )
 
 var (
@@ -61,8 +63,10 @@ func HandleIssuePairCode(configPath string) (api.PairCodeResponse, error) {
 	linkService.SetTTL(ttl)
 	code, expires, err := linkService.Issue(context.Background(), peeridentity.Identity{PublicKey: cfg.Identity.PublicKey, PrivateKey: cfg.Identity.PrivateKey}, gatheredProfile(cfg, certificate))
 	if err != nil {
+		structuredlog.Event("error", "pairing.publish.failed", "pairing code was not published", map[string]any{"error": err.Error()})
 		return api.PairCodeResponse{}, err
 	}
+	structuredlog.Event("info", "pairing.publish.ok", "pairing code published", map[string]any{"expiresAt": expires.UTC().Format(time.RFC3339)})
 	return api.PairCodeResponse{Code: code, ExpiresAt: expires}, nil
 }
 
@@ -75,6 +79,7 @@ func HandleRedeemPairCode(ctx context.Context, configPath string, req api.PairCo
 	}
 	record, err := linkService.Lookup(ctx, req.Code)
 	if err != nil {
+		structuredlog.Event("warn", "pairing.lookup.failed", "pairing code lookup failed", map[string]any{"error": err.Error()})
 		return api.PairCodeRedeemResponse{}, err
 	}
 	certificate, err := localCertificateIfNeeded(configPath, cfg)

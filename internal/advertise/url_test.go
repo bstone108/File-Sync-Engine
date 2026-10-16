@@ -1,6 +1,7 @@
 package advertise
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,33 @@ func TestResolveWithHostKeepsSavedURL(t *testing.T) {
 	}
 	if got != "http://127.0.0.1:22420" {
 		t.Fatalf("saved = %q", got)
+	}
+}
+
+func TestResolveUsesPublishedPortWithDetectedTailscaleAddress(t *testing.T) {
+	t.Setenv(EnvPublishedAPIPort, "22430")
+	cfg := config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}}
+	got, err := ResolveWithHost(cfg, "", "100.64.8.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://100.64.8.8:22430" {
+		t.Fatalf("published tailscale URL = %q", got)
+	}
+}
+
+func TestResolveUsesTailscaleAPIWhenTheInterfaceIsHidden(t *testing.T) {
+	t.Setenv(EnvPublishedAPIPort, "22430")
+	previous := tailscaleIPs
+	tailscaleIPs = func(context.Context) []string { return []string{"100.65.1.2", "fd7a:115c:a1e0::8"} }
+	t.Cleanup(func() { tailscaleIPs = previous })
+	cfg := config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}}
+	got, err := ResolveWithHost(cfg, "", "172.18.0.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://100.65.1.2:22430" {
+		t.Fatalf("tailscale API URL = %q", got)
 	}
 }
 

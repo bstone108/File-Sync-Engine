@@ -79,6 +79,8 @@ func TestApplyFirstRunDefaultsEnablesWebGUIOnlyForCompleteExplicitOptIn(t *testi
 }
 
 func TestDefaultsFromEnvironmentKeepsCoreContainerHeadless(t *testing.T) {
+	t.Setenv("FSE_DISCOVERY_DHT", "")
+	os.Unsetenv("FSE_DISCOVERY_DHT")
 	t.Setenv("FSE_WEB_GUI_ENABLED", "")
 	t.Setenv("FSE_WEB_GUI_PACKAGE", "")
 	t.Setenv("FSE_WEB_GUI_LISTEN", "")
@@ -87,6 +89,9 @@ func TestDefaultsFromEnvironmentKeepsCoreContainerHeadless(t *testing.T) {
 	t.Setenv("FSE_WEB_GUI_CHECKSUM", "")
 
 	defaults := DefaultsFromEnvironment()
+	if !defaults.DiscoveryDHT {
+		t.Fatal("public DHT discovery must default on so pairing codes work")
+	}
 	if defaults.WebGUIEnabled || defaults.WebGUIPackage != "" || defaults.WebGUIListen != "" || defaults.WebGUITLSEnabled || defaults.WebGUIHTTPSListen != "" || defaults.WebGUIChecksum != "" {
 		t.Fatalf("core container web GUI defaults must be disabled and package-free: %+v", defaults)
 	}

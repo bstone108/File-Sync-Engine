@@ -40,7 +40,7 @@ func DefaultsFromEnvironment() RuntimeDefaults {
 		LogLevel:          envOrDefault("FSE_LOG_LEVEL", "info"),
 		LogOutput:         envOrDefault("FSE_LOG_OUTPUT", "/config/logs/fse.jsonl"),
 		DiscoveryLocal:    envBoolOrDefault("FSE_DISCOVERY_LOCAL", true),
-		DiscoveryDHT:      envBoolOrDefault("FSE_DISCOVERY_DHT", false),
+		DiscoveryDHT:      envBoolOrDefault("FSE_DISCOVERY_DHT", true),
 		WebGUIEnabled:     envBoolOrDefault("FSE_WEB_GUI_ENABLED", false),
 		WebGUIVersion:     os.Getenv("FSE_WEB_GUI_VERSION"),
 		WebGUIPackage:     os.Getenv("FSE_WEB_GUI_PACKAGE"),
@@ -64,6 +64,14 @@ func RunFromEnvironment(configPath string) error {
 	}
 	if err != nil {
 		return err
+	}
+	if updated, dhtErr := config.PersistShippedDefaultDHT(configPath, cfg); dhtErr != nil {
+		fmt.Fprintf(os.Stderr, "public DHT discovery was not enabled: %v\n", dhtErr)
+	} else if updated.Discovery.DHT && !cfg.Discovery.DHT {
+		fmt.Fprintln(os.Stderr, "public DHT discovery enabled so pairing codes can be looked up")
+		cfg = updated
+	} else {
+		cfg = updated
 	}
 	if name := strings.TrimSpace(os.Getenv("FSE_NODE_NAME")); name != "" && envBoolOrDefault("FSE_CONTAINER_FIRST_RUN", false) {
 		cfg.NodeName = name

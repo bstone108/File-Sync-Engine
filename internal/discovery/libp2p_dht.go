@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	libp2p "github.com/libp2p/go-libp2p"
@@ -34,24 +35,37 @@ type Libp2pDHTRouter struct {
 	advertise      map[string]struct{}
 	payloads       map[string][]byte
 	bootstrapped   bool
+	bootstrapWait  chan struct{}
+	bootstrapErr   error
 	bootstrapPeers []string
 	resolver       multiaddrResolver
 }
 
 type Libp2pDHTRouterOptions struct {
-	NodeID string
+	NodeID    string
+	AutoRelay bool
 }
 
 func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp2pDHTRouter, error) {
-	h, err := libp2p.New()
+	var hostBox atomic.Value
+	var dhtBox atomic.Value
+	libp2pOpts := []libp2p.Option{}
+	if opts.AutoRelay {
+		libp2pOpts = append(libp2pOpts, libp2p.EnableAutoRelayWithPeerSource(func(relayCtx context.Context, num int) <-chan peer.AddrInfo {
+			return relayCandidates(relayCtx, num, &hostBox, &dhtBox)
+		}))
+	}
+	h, err := libp2p.New(libp2pOpts...)
 	if err != nil {
 		return nil, err
 	}
+	hostBox.Store(h)
 	kad, err := dht.New(ctx, h, dht.Mode(dht.ModeAuto))
 	if err != nil {
 		_ = h.Close()
 		return nil, err
 	}
+	dhtBox.Store(kad)
 	router := &Libp2pDHTRouter{
 		host:      h,
 		dht:       kad,
@@ -150,6 +164,39 @@ func (r *Libp2pDHTRouter) bootstrapPeerList() []string {
 		return append([]string(nil), DefaultPublicDHTBootstrapPeers...)
 	}
 	return append([]string(nil), r.bootstrapPeers...)
+}
+
+// BootstrapPeers is the list Bootstrap uses, including the public default.
+func (r *Libp2pDHTRouter) BootstrapPeers() []string {
+	return r.bootstrapPeerList()
+}
+
+func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value) <-chan peer.AddrInfo {
+	ch := make(chan peer.AddrInfo)
+	go func() {
+		defer close(ch)
+		if num <= 0 || hostBox == nil || dhtBox == nil {
+			return
+		}
+		h, _ := hostBox.Load().(host.Host)
+		kad, _ := dhtBox.Load().(*dht.IpfsDHT)
+		if h == nil || kad == nil || kad.RoutingTable() == nil {
+			return
+		}
+		peers := kad.RoutingTable().ListPeers()
+		if len(peers) > num {
+			peers = peers[:num]
+		}
+		for _, id := range peers {
+			info := peer.AddrInfo{ID: id, Addrs: h.Peerstore().Addrs(id)}
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- info:
+			}
+		}
+	}()
+	return ch
 }
 
 func (r *Libp2pDHTRouter) connectBootstrap(ctx context.Context, infos []peer.AddrInfo) int {

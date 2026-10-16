@@ -84,11 +84,11 @@ Secrets are generated inside `/config/config.jsonc` and are not logged by the en
 | `FSE_LOG_LEVEL` | `info` | Initial structured daemon log level. |
 | `FSE_LOG_OUTPUT` | `/config/logs/fse.jsonl` | Initial log file path. |
 | `FSE_DISCOVERY_LOCAL` | `true` | Initial local discovery switch. |
-| `FSE_DISCOVERY_DHT` | `false` | Initial public-DHT discovery switch. |
+| `FSE_DISCOVERY_DHT` | `true` | Initial public-DHT discovery switch. Pairing codes are looked up on the DHT and on the local network. An existing config that still has the old default (`dht` false, local discovery on, public bootstrap) is turned on at startup unless this variable is set. |
 | `FSE_NODE_NAME` | unset | Node name written on first config creation. |
 | `FSE_ADVERTISE_URL` | unset | Optional override for the reachable API URL other engines use, such as `https://192.168.1.20:22420`. Leave it empty. The engine stores a verified host-reachable `api.advertiseURL` from peer-observed addresses, the host used to open the local GUI, UPnP/NAT-PMP, published port mappings, then LAN or Tailscale detection. Docker bridge addresses are never used. |
 | `FSE_ADVERTISE_URLS` | unset | Optional extra reachable API URLs, comma-separated. The first usable URL is chosen when `FSE_ADVERTISE_URL` is empty. Bridge addresses in the list are ignored. |
-| `FSE_PUBLISHED_API_PORT` | unset | Host port published for the API, usually `22420`. Peer-observed addresses, the GUI host, and NAT mappings are advertised on this port. | 
+| `FSE_PUBLISHED_API_PORT` | unset | Host port published for the API, usually `22420`. Startup advertises `https://<detected-host>:<port>` when a LAN or Tailscale address is known, including a Tailscale address from the local API when the interface is not visible inside the container. Peer-observed addresses, the GUI host, and NAT mappings use this port too. | 
 | `FSE_WEB_GUI_ENABLED` | `false` | Opt in to the web GUI on every start. Unset or `false` disables the GUI listener. |
 | `FSE_WEB_GUI_VERSION` | unset | Explicit version of the separately delivered web-GUI package; required with every other web-GUI delivery field when opt-in is enabled. |
 | `FSE_WEB_GUI_PACKAGE` | unset | Absolute path of a separately mounted trusted GUI package; required with its version and checksum when the GUI is enabled. |

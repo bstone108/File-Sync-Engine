@@ -250,6 +250,23 @@
   };
 
   let activeView: DesktopUIView = 'overview';
+
+  function onPairingButtonClick(event: MouseEvent) {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const button = target.closest('[data-testid="show-pairing-code"], [data-testid="redeem-pairing-code"]');
+    if (!(button instanceof HTMLButtonElement) || button.disabled) {
+      return;
+    }
+    event.preventDefault();
+    if (button.getAttribute('data-testid') === 'show-pairing-code') {
+      void showPairingCode();
+      return;
+    }
+    void redeemRemotePairingCode();
+  }
   let managedDaemonInstances: ManagedDaemonInstance[] = ensureLocalInstanceFirst([defaultLocalDaemonInstance()]);
   let selectedInstanceID = managedDaemonInstances[0].id;
   let expandedInstanceGroups: Record<string, boolean> = defaultExpandedInstanceGroups(managedDaemonInstances);
@@ -758,7 +775,11 @@
   }
 
   async function showPairingCode() {
+    if (pairingLoading) {
+      return;
+    }
     pairingLoading = true;
+    pairingMessage = 'Requesting a pairing code from this engine…';
     try {
       const issued = await issuePairingCode(daemonConnectionSettings);
       pairingCode = issued.code;
@@ -771,7 +792,11 @@
   }
 
   async function redeemRemotePairingCode() {
+    if (pairingLoading) {
+      return;
+    }
     pairingLoading = true;
+    pairingMessage = 'Linking with that pairing code…';
     try {
       const response = await redeemPairingCode(daemonConnectionSettings, remotePairingCode);
       const addresses = (response.addresses ?? []).map((address) => address.address).join(', ');
@@ -1401,6 +1426,7 @@
   }
 
   onMount(() => {
+    document.addEventListener('click', onPairingButtonClick);
     if (window.matchMedia('(prefers-color-scheme: light)').matches) {
       theme = 'light';
     }
@@ -1411,7 +1437,10 @@
       const timer = setInterval(() => {
         void tick();
       }, 3000);
-      return () => clearInterval(timer);
+      return () => {
+        document.removeEventListener('click', onPairingButtonClick);
+        clearInterval(timer);
+      };
     }
     void (async () => {
       await loadRemoteRegistry();
@@ -1422,7 +1451,10 @@
     const statusTimer = setInterval(() => {
       void refreshDesktopAppUpdateStatus();
     }, 15000);
-    return () => clearInterval(statusTimer);
+    return () => {
+      document.removeEventListener('click', onPairingButtonClick);
+      clearInterval(statusTimer);
+    };
   });
 </script>
 
@@ -2053,7 +2085,7 @@
         <p>
           This GUI is connected to the local engine automatically. Link a remote engine with a short pairing code or by pasting its pairing package. After either method, the engines store every reachable address, DHT identity, relay, and certificate pin, and fail over if the first address dies.
         </p>
-        <button type="button" data-testid="show-pairing-code" on:click={showPairingCode} disabled={pairingLoading}>Show pairing code</button>
+        <button type="button" data-testid="show-pairing-code" disabled={pairingLoading}>Show pairing code</button>
         {#if pairingCode}
           <p data-testid="pairing-code">Pairing code {pairingCode}. Enter this one code on the other engine. It works once and expires if unused. The other engine looks it up on the DHT.</p>
         {/if}
@@ -2061,7 +2093,7 @@
           Remote pairing code
           <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
         </label>
-        <button type="button" data-testid="redeem-pairing-code" on:click={redeemRemotePairingCode} disabled={pairingLoading}>Link with pairing code</button>
+        <button type="button" data-testid="redeem-pairing-code" disabled={pairingLoading}>Link with pairing code</button>
         <p data-testid="pairing-advertise-url">
           This local engine advertises {status?.advertiseURL || 'its reachable API URL'}. Other engines use that address from the pairing package. You do not enter this engine's URL.
         </p>

@@ -14,6 +14,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+
+	"filesyncengine/internal/structuredlog"
 )
 
 // pairingAdvertiseTimeout bounds the public DHT provider walk. Routing
@@ -39,18 +41,21 @@ func (r *Libp2pDHTRouter) PeerID() string {
 // PublishPairing advertises the code namespace on the existing DHT and serves
 // the signed record to peers that look the namespace up.
 func (r *Libp2pDHTRouter) PublishPairing(ctx context.Context, namespace string, payload []byte) error {
-	if err := r.storePairing(namespace, payload); err != nil {
+	if err := r.storePairing(ctx, namespace, payload); err != nil {
 		return err
 	}
 	if err := r.ensureBootstrapped(ctx); err != nil {
+		structuredlog.Event("error", "pairing.publish.failed", "pairing DHT bootstrap failed", map[string]any{"namespace": namespace, "error": err.Error()})
 		return err
 	}
 	if err := r.advertisePairing(ctx, namespace); err != nil {
+		structuredlog.Event("error", "pairing.publish.failed", "pairing code was not advertised on the DHT", map[string]any{"namespace": namespace, "error": err.Error()})
 		return err
 	}
 	r.mu.Lock()
 	r.advertise[namespace] = struct{}{}
 	r.mu.Unlock()
+	structuredlog.Event("info", "pairing.publish.ok", "pairing code advertised on the DHT", map[string]any{"namespace": namespace, "routingPeers": r.routingTableSize()})
 	return nil
 }
 
@@ -82,6 +87,7 @@ func acceptPartialAdvertise(err error, peers int, parent context.Context) error 
 		return err
 	}
 	if errors.Is(err, context.DeadlineExceeded) && peers > 0 {
+		structuredlog.Event("warn", "pairing.publish.partial", "pairing DHT advertise reached its deadline after contacting peers", map[string]any{"routingPeers": peers})
 		return nil
 	}
 	return err
@@ -97,25 +103,45 @@ func (r *Libp2pDHTRouter) LookupPairing(ctx context.Context, namespace string) (
 		return nil, fmt.Errorf("pairing namespace is required")
 	}
 	if err := r.ensureBootstrapped(ctx); err != nil {
+		structuredlog.Event("error", "pairing.lookup.failed", "pairing DHT bootstrap failed", map[string]any{"namespace": namespace, "error": err.Error()})
 		return nil, err
 	}
 	peerCh, err := r.discovery.FindPeers(ctx, namespace, corediscovery.Limit(16))
 	if err != nil {
+		structuredlog.Event("error", "pairing.lookup.failed", "pairing DHT provider lookup failed", map[string]any{"namespace": namespace, "error": err.Error()})
 		return nil, err
 	}
 	payloads := [][]byte{}
+	var lastFetch error
 	for info := range peerCh {
 		if info.ID == "" || info.ID == r.host.ID() {
 			continue
 		}
 		payload, fetchErr := r.FetchPairing(ctx, info, namespace)
 		if fetchErr != nil || len(payload) == 0 {
+			if fetchErr != nil {
+				lastFetch = fetchErr
+				structuredlog.Event("warn", "pairing.lookup.fetch_failed", "pairing record fetch failed", map[string]any{
+					"namespace": namespace,
+					"peer":      info.ID.String(),
+					"error":     fetchErr.Error(),
+				})
+			}
 			continue
 		}
 		payloads = append(payloads, payload)
 		if len(payloads) >= 8 {
 			break
 		}
+	}
+	if len(payloads) == 0 {
+		fields := map[string]any{"namespace": namespace, "routingPeers": r.routingTableSize()}
+		if lastFetch != nil {
+			fields["error"] = lastFetch.Error()
+			structuredlog.Event("warn", "pairing.lookup.empty", "pairing code lookup found no record", fields)
+			return nil, fmt.Errorf("pairing code lookup failed: %w", lastFetch)
+		}
+		structuredlog.Event("warn", "pairing.lookup.empty", "pairing code lookup found no record", fields)
 	}
 	return payloads, nil
 }
@@ -170,7 +196,7 @@ func (r *Libp2pDHTRouter) FetchPairing(ctx context.Context, info peer.AddrInfo, 
 	return payload, nil
 }
 
-func (r *Libp2pDHTRouter) storePairing(namespace string, payload []byte) error {
+func (r *Libp2pDHTRouter) storePairing(ctx context.Context, namespace string, payload []byte) error {
 	if r == nil || r.host == nil {
 		return fmt.Errorf("libp2p DHT router is not initialized")
 	}
@@ -182,6 +208,9 @@ func (r *Libp2pDHTRouter) storePairing(namespace string, payload []byte) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if r.payloads == nil {
 		r.payloads = map[string][]byte{}
 	}
@@ -189,20 +218,48 @@ func (r *Libp2pDHTRouter) storePairing(namespace string, payload []byte) error {
 	return nil
 }
 
+// EnsureBootstrapped connects the pairing DHT. Concurrent callers share one attempt.
+func (r *Libp2pDHTRouter) EnsureBootstrapped(ctx context.Context) error {
+	return r.ensureBootstrapped(ctx)
+}
+
 func (r *Libp2pDHTRouter) ensureBootstrapped(ctx context.Context) error {
-	r.mu.Lock()
-	ready := r.bootstrapped
-	r.mu.Unlock()
-	if ready {
-		return nil
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if err := r.Bootstrap(ctx, r.bootstrapPeerList()); err != nil {
+	for {
+		r.mu.Lock()
+		if r.bootstrapped {
+			r.mu.Unlock()
+			return nil
+		}
+		if r.bootstrapWait != nil {
+			wait := r.bootstrapWait
+			r.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		wait := make(chan struct{})
+		r.bootstrapWait = wait
+		r.mu.Unlock()
+
+		err := r.Bootstrap(ctx, r.bootstrapPeerList())
+		r.mu.Lock()
+		if err == nil {
+			r.bootstrapped = true
+			r.bootstrapErr = nil
+		} else {
+			r.bootstrapErr = err
+		}
+		r.bootstrapWait = nil
+		close(wait)
+		r.mu.Unlock()
 		return err
 	}
-	r.mu.Lock()
-	r.bootstrapped = true
-	r.mu.Unlock()
-	return nil
 }
 
 func (r *Libp2pDHTRouter) handlePairingStream(stream network.Stream) {

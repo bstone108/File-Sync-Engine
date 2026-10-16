@@ -32,6 +32,9 @@ func TestResolveUsesVerifiedGUIHostWhenBridgeIsTheOnlyLocalAddress(t *testing.T)
 
 func TestResolveUsesPublishedPortForGUIHost(t *testing.T) {
 	t.Setenv(EnvPublishedAPIPort, "32420")
+	previous := tailscaleIPs
+	tailscaleIPs = func(context.Context) []string { return nil }
+	t.Cleanup(func() { tailscaleIPs = previous })
 	cfg := config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}}
 	obs := Observations{GUIHost: "files.example", Probe: func(context.Context, string, int) error { return nil }}
 	got, err := ResolveWithObservations(cfg, "", "", obs)
