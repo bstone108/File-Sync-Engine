@@ -5,6 +5,7 @@ go 1.25.7
 toolchain go1.25.11
 
 require (
+	github.com/cloudflare/circl v1.6.3
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/huin/goupnp v1.3.0
 	github.com/jackpal/go-nat-pmp v1.0.2

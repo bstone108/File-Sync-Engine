@@ -115,6 +115,11 @@ func applyStructConfigPatch(cfg *config.Config, req api.ConfigUpdateRequest) err
 	if req.Maintenance != nil {
 		cfg.Maintenance = *req.Maintenance
 	}
+	if req.EncryptionLevel != nil {
+		if err := cfg.SetIdentityEncryptionLevel(*req.EncryptionLevel); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -122,6 +127,15 @@ func applyRawConfigPatch(cfg *config.Config, raw []byte) error {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return fmt.Errorf("invalid config update request")
+	}
+	if value, ok := root["encryptionLevel"]; ok {
+		var level int
+		if err := json.Unmarshal(value, &level); err != nil {
+			return err
+		}
+		if err := cfg.SetIdentityEncryptionLevel(level); err != nil {
+			return err
+		}
 	}
 	if value, ok := root["nodeName"]; ok {
 		if err := json.Unmarshal(value, &cfg.NodeName); err != nil {
@@ -273,6 +287,9 @@ func localSettingsDocumentPatch(req api.ConfigUpdateRequest, cfg config.Config) 
 	}
 	if req.Maintenance != nil {
 		settings["maintenance"] = cfg.Maintenance
+	}
+	if req.EncryptionLevel != nil {
+		settings["identity.encryptionLevel"] = cfg.Identity.EncryptionLevel
 	}
 	return settings
 }

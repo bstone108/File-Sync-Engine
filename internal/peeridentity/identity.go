@@ -10,41 +10,49 @@ import (
 
 const DefaultEncryptionLevel = 4
 
+// IdentityExchangeEncryptionLevel is the required strength for identity
+// introduction, pairing, and session negotiation. Ordinary file payloads use
+// DefaultEncryptionLevel unless a peer asks for more.
+const IdentityExchangeEncryptionLevel = 10
+
+// EncryptionRetryCode is the stream error code a peer returns when the offered
+// handshake is missing material for the negotiated level. The message is
+// "retry handshake at encryption level N". Callers retry once at N. They do
+// not continue with a weaker cipher.
+const EncryptionRetryCode = "encryption_retry"
+
 type EncryptionProfileSpec struct {
 	Level             int
 	Name              string
 	Description       string
+	Explanation       string
+	Plaintext         bool
 	DebugVisible      bool
 	RequiresAEAD      bool
 	KeyAgreement      string
 	KDF               string
 	AEAD              string
+	MAC               string
+	Signatures        string
 	RekeyEveryMiB     int
 	MemoryCostMiB     int
 	Iterations        int
 	CompatibilityNote string
 }
 
-var encryptionProfiles = map[int]EncryptionProfileSpec{
-	0:  {Level: 0, Name: "none-debug", Description: "No payload encryption for local debugging or protocol inspection.", DebugVisible: true, RequiresAEAD: false, KeyAgreement: "none", KDF: "none", AEAD: "none", CompatibilityNote: "Never use on untrusted links."},
-	1:  {Level: 1, Name: "minimal-permissive", Description: "Minimal authenticated encryption for lawful-compatibility and low-end drop-in deployments.", RequiresAEAD: true, KeyAgreement: "x25519", KDF: "hkdf-sha256", AEAD: "aes-128-gcm", RekeyEveryMiB: 1024, CompatibilityNote: "Use only when stronger levels are not permitted or practical."},
-	2:  {Level: 2, Name: "basic", Description: "Baseline authenticated encryption with broad hardware/software support.", RequiresAEAD: true, KeyAgreement: "x25519", KDF: "hkdf-sha256", AEAD: "chacha20-poly1305", RekeyEveryMiB: 512},
-	3:  {Level: 3, Name: "balanced", Description: "Balanced modern authenticated encryption for ordinary private links.", RequiresAEAD: true, KeyAgreement: "x25519", KDF: "hkdf-sha256", AEAD: "chacha20-poly1305", RekeyEveryMiB: 256},
-	4:  {Level: 4, Name: "strong", Description: "Default bank-equivalent strong encryption suitable for ordinary peer-pair sessions.", RequiresAEAD: true, KeyAgreement: "x25519", KDF: "hkdf-sha256", AEAD: "xchacha20-poly1305", RekeyEveryMiB: 256},
-	5:  {Level: 5, Name: "standard-strong", Description: "Stronger production session profile with tighter rekeying than the default.", RequiresAEAD: true, KeyAgreement: "x25519", KDF: "hkdf-sha256", AEAD: "xchacha20-poly1305", RekeyEveryMiB: 128},
-	6:  {Level: 6, Name: "strong-plus", Description: "Strong encryption with tighter rekeying for higher-risk links.", RequiresAEAD: true, KeyAgreement: "x25519", KDF: "hkdf-sha384", AEAD: "xchacha20-poly1305", RekeyEveryMiB: 64},
-	7:  {Level: 7, Name: "hardened", Description: "Hardened session profile with SHA-512 key schedule and frequent rekeying.", RequiresAEAD: true, KeyAgreement: "x25519", KDF: "hkdf-sha512", AEAD: "xchacha20-poly1305", RekeyEveryMiB: 32},
-	8:  {Level: 8, Name: "high-security", Description: "High-security profile with hybrid key agreement planning and low rekey interval.", RequiresAEAD: true, KeyAgreement: "x25519+ml-kem-768-planned", KDF: "hkdf-sha512", AEAD: "xchacha20-poly1305", RekeyEveryMiB: 16},
-	9:  {Level: 9, Name: "paranoid", Description: "Paranoid profile with hybrid key agreement planning and memory-hard key stretching.", RequiresAEAD: true, KeyAgreement: "x25519+ml-kem-1024-planned", KDF: "argon2id+hkdf-sha512", AEAD: "xchacha20-poly1305", RekeyEveryMiB: 8, MemoryCostMiB: 64, Iterations: 2},
-	10: {Level: 10, Name: "maximum-high-cpu", Description: "Maximum protection target with high CPU/memory cost accepted.", RequiresAEAD: true, KeyAgreement: "x25519+ml-kem-1024-planned", KDF: "argon2id+hkdf-sha512", AEAD: "xchacha20-poly1305", RekeyEveryMiB: 4, MemoryCostMiB: 256, Iterations: 4, CompatibilityNote: "Expect higher CPU and memory use."},
+func EncryptionProfile(level int) (EncryptionProfileSpec, error) {
+	if err := ValidateEncryptionLevel(level); err != nil {
+		return EncryptionProfileSpec{}, err
+	}
+	return profileFor(level), nil
 }
 
-func EncryptionProfile(level int) (EncryptionProfileSpec, error) {
-	profile, ok := encryptionProfiles[level]
-	if !ok {
-		return EncryptionProfileSpec{}, fmt.Errorf("encryption level must be between 0 and 10")
+func EncryptionProfiles() []EncryptionProfileSpec {
+	profiles := make([]EncryptionProfileSpec, 0, 11)
+	for level := 0; level <= 10; level++ {
+		profiles = append(profiles, profileFor(level))
 	}
-	return profile, nil
+	return profiles
 }
 
 type Identity struct {
@@ -53,11 +61,17 @@ type Identity struct {
 }
 
 type SignedHello struct {
-	NodeID           string
-	PublicKey        string
-	SessionPublicKey string
-	EncryptionLevel  int
-	Signature        string
+	NodeID               string
+	PublicKey            string
+	SessionPublicKey     string
+	SessionKEMPublic     string
+	SessionKEMCiphertext string
+	SessionPQPublic      string
+	SessionPQSignature   string
+	SessionSLHPublic     string
+	SessionSLHSignature  string
+	EncryptionLevel      int
+	Signature            string
 }
 
 // Sign returns a base64 signature over payload using the identity private key.
@@ -104,14 +118,18 @@ func SignHello(identity Identity, nodeID string, encryptionLevel int, nonce []by
 }
 
 func SignSessionHello(identity Identity, nodeID string, encryptionLevel int, sessionPublicKey string, nonce []byte) (SignedHello, error) {
-	if err := ValidateEncryptionLevel(encryptionLevel); err != nil {
+	return SignBoundHello(identity, SignedHello{NodeID: nodeID, SessionPublicKey: sessionPublicKey, EncryptionLevel: encryptionLevel}, nonce)
+}
+
+func SignBoundHello(identity Identity, hello SignedHello, nonce []byte) (SignedHello, error) {
+	if err := ValidateEncryptionLevel(hello.EncryptionLevel); err != nil {
 		return SignedHello{}, err
 	}
 	privateKey, err := decodePrivateKey(identity.PrivateKey)
 	if err != nil {
 		return SignedHello{}, err
 	}
-	hello := SignedHello{NodeID: nodeID, PublicKey: identity.PublicKey, SessionPublicKey: sessionPublicKey, EncryptionLevel: encryptionLevel}
+	hello.PublicKey = identity.PublicKey
 	hello.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, helloPayload(hello, nonce)))
 	return hello, nil
 }
@@ -157,7 +175,19 @@ func ValidateEncryptionLevel(level int) error {
 }
 
 func helloPayload(hello SignedHello, nonce []byte) []byte {
-	return []byte(fmt.Sprintf("fse-peer-hello-v1\n%s\n%s\n%s\n%d\n%s", hello.NodeID, hello.PublicKey, hello.SessionPublicKey, hello.EncryptionLevel, string(nonce)))
+	return []byte(fmt.Sprintf("fse-peer-hello-v2\n%s\n%s\n%s\n%d\n%s\n%s\n%s\n%s\n%s\n%s\n%s",
+		hello.NodeID,
+		hello.PublicKey,
+		hello.SessionPublicKey,
+		hello.EncryptionLevel,
+		string(nonce),
+		hello.SessionKEMPublic,
+		hello.SessionKEMCiphertext,
+		hello.SessionPQPublic,
+		hello.SessionPQSignature,
+		hello.SessionSLHPublic,
+		hello.SessionSLHSignature,
+	))
 }
 
 func decodePublicKey(encoded string) (ed25519.PublicKey, error) {

@@ -600,6 +600,17 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// SetIdentityEncryptionLevel records the operating data level, including an
+// explicit 0. Identity introduction and pairing stay at level 10.
+func (c *Config) SetIdentityEncryptionLevel(level int) error {
+	if err := peeridentity.ValidateEncryptionLevel(level); err != nil {
+		return fmt.Errorf("identity.%w", err)
+	}
+	c.Identity.EncryptionLevel = level
+	c.Identity.encryptionLevelSet = true
+	return nil
+}
+
 func validEndpointKind(kind string) bool {
 	switch kind {
 	case "manual", "relay", "proxy", "vpn", "pipe", "sidecar":

@@ -80,6 +80,27 @@ func TestHandleConfigUpdateMergesLoggingLevelAndRestoresOutput(t *testing.T) {
 	}
 }
 
+func TestHandleConfigUpdateSetsExplicitEncryptionLevel(t *testing.T) {
+	configPath := writeConfigUpdateConfig(t)
+	if _, err := HandleConfigUpdate(configPath, api.ConfigUpdateRequest{
+		Raw: []byte(`{"encryptionLevel":0}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Identity.EncryptionLevel != 0 || cfg.Identity.PrivateKey != "identity-secret" {
+		t.Fatalf("explicit plaintext level was not stored: %+v", cfg.Identity)
+	}
+	if _, err := HandleConfigUpdate(configPath, api.ConfigUpdateRequest{
+		Raw: []byte(`{"encryptionLevel":11}`),
+	}); err == nil {
+		t.Fatal("expected encryption level 11 to be rejected")
+	}
+}
+
 func TestHandleConfigUpdateRejectsDockerBridgeAdvertiseURL(t *testing.T) {
 	configPath := writeConfigUpdateConfig(t)
 	bridge := "https://172.17.0.4:22420"
