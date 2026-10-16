@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,7 +14,9 @@ import (
 	libp2p "github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	corediscovery "github.com/libp2p/go-libp2p/core/discovery"
+	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/protocol"
@@ -42,6 +45,7 @@ type Libp2pDHTRouter struct {
 	bootstrapErr   error
 	bootstrapPeers []string
 	resolver       multiaddrResolver
+	modeReason     string
 }
 
 type Libp2pDHTRouterOptions struct {
@@ -51,6 +55,10 @@ type Libp2pDHTRouterOptions struct {
 	// Announce replaces container-internal listen addresses with the
 	// host-reachable published port and the HTTPS API URL.
 	Announce bool
+	// DHTMode overrides the default. Empty means server when a published
+	// libp2p port or reachable advertise address is already known, and auto
+	// otherwise. A client can still look pairing records up.
+	DHTMode string
 }
 
 func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp2pDHTRouter, error) {
@@ -70,8 +78,17 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", opts.ListenPort),
 		))
 	}
+	mode, reason, err := libp2pDHTMode(opts.DHTMode)
+	if err != nil {
+		return nil, err
+	}
 	if opts.Announce {
 		libp2pOpts = append(libp2pOpts, libp2p.AddrsFactory(announcedAddrs))
+	}
+	// A published port or reachable address is dialable. Stay a DHT server and
+	// tell peers that address works, so AutoNAT does not hide it behind a relay.
+	if mode == dht.ModeServer {
+		libp2pOpts = append(libp2pOpts, libp2p.ForceReachabilityPublic())
 	}
 	if opts.AutoRelay || opts.Announce {
 		libp2pOpts = append(libp2pOpts,
@@ -89,11 +106,6 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		return nil, err
 	}
 	hostBox.Store(h)
-	mode, err := libp2pDHTMode()
-	if err != nil {
-		_ = h.Close()
-		return nil, err
-	}
 	kad, err := dht.New(ctx, h, dht.Mode(mode))
 	if err != nil {
 		_ = h.Close()
@@ -101,11 +113,12 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	}
 	dhtBox.Store(kad)
 	router := &Libp2pDHTRouter{
-		host:      h,
-		dht:       kad,
-		discovery: routingdiscovery.NewRoutingDiscovery(kad),
-		advertise: map[string]struct{}{},
-		payloads:  map[string][]byte{},
+		host:       h,
+		dht:        kad,
+		discovery:  routingdiscovery.NewRoutingDiscovery(kad),
+		advertise:  map[string]struct{}{},
+		payloads:   map[string][]byte{},
+		modeReason: reason,
 	}
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
 	if opts.Announce {
@@ -113,6 +126,8 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			"peerId":        h.ID().String(),
 			"listenPort":    opts.ListenPort,
 			"publishedPort": PublishedLibp2pPort(opts.ListenPort),
+			"dhtMode":       dhtModeName(mode),
+			"dhtModeReason": reason,
 			"addresses":     multiaddrStrings(h.Addrs()),
 		})
 	}
@@ -213,21 +228,78 @@ func (r *Libp2pDHTRouter) BootstrapPeers() []string {
 	return r.bootstrapPeerList()
 }
 
-// libp2pDHTMode is ModeAuto unless FSE_LIBP2P_DHT_MODE says otherwise.
-// Two engines that bootstrap only to each other need server mode: an
-// unreachable AutoNAT result leaves ModeAuto as a client, and clients are
-// not added to the routing table, so the pairing record is never stored.
-func libp2pDHTMode() (dht.ModeOpt, error) {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("FSE_LIBP2P_DHT_MODE"))) {
-	case "", "auto":
-		return dht.ModeAuto, nil
-	case "auto-server":
-		return dht.ModeAutoServer, nil
-	case "server":
-		return dht.ModeServer, nil
-	default:
-		return 0, fmt.Errorf("FSE_LIBP2P_DHT_MODE must be auto, auto-server, or server")
+// libp2pDHTMode chooses who answers DHT queries. An explicit FSE_LIBP2P_DHT_MODE
+// wins. Otherwise a published libp2p port or a reachable advertise address
+// makes this node a server, so public peers can dial it and store provider
+// records. With neither, ModeAuto stays a client behind NAT and uses relay
+// addresses; it can still look pairing records up.
+func libp2pDHTMode(override string) (dht.ModeOpt, string, error) {
+	envMode := override
+	if strings.TrimSpace(override) == "" {
+		envMode = os.Getenv("FSE_LIBP2P_DHT_MODE")
 	}
+	return selectLibp2pDHTMode(envMode, publishedLibp2pPortConfigured(), len(announceHosts()) > 0)
+}
+
+func selectLibp2pDHTMode(envMode string, publishedPort bool, reachableHost bool) (dht.ModeOpt, string, error) {
+	switch strings.ToLower(strings.TrimSpace(envMode)) {
+	case "auto":
+		return dht.ModeAuto, "env", nil
+	case "auto-server":
+		return dht.ModeAutoServer, "env", nil
+	case "server":
+		return dht.ModeServer, "env", nil
+	case "":
+	default:
+		return 0, "", fmt.Errorf("FSE_LIBP2P_DHT_MODE must be auto, auto-server, or server")
+	}
+	if publishedPort {
+		return dht.ModeServer, "published-port", nil
+	}
+	if reachableHost {
+		return dht.ModeServer, "advertise-address", nil
+	}
+	return dht.ModeAuto, "auto", nil
+}
+
+func publishedLibp2pPortConfigured() bool {
+	raw := strings.TrimSpace(os.Getenv(EnvPublishedLibp2pPort))
+	if raw == "" {
+		return false
+	}
+	port, err := strconv.Atoi(raw)
+	return err == nil && port >= 1 && port <= 65535
+}
+
+func dhtModeName(mode dht.ModeOpt) string {
+	switch mode {
+	case dht.ModeServer:
+		return "server"
+	case dht.ModeAutoServer:
+		return "auto-server"
+	default:
+		return "auto"
+	}
+}
+
+// notePublicReachability tells a ModeAuto node that its published address is
+// dialable, so it starts answering DHT queries. A node that already started
+// as a server does not need this.
+func (r *Libp2pDHTRouter) notePublicReachability() {
+	if r == nil || r.host == nil || r.dht == nil || r.dht.Mode() == dht.ModeServer {
+		return
+	}
+	emitter, err := r.host.EventBus().Emitter(new(event.EvtLocalReachabilityChanged))
+	if err != nil {
+		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error()})
+		return
+	}
+	defer emitter.Close()
+	if err := emitter.Emit(event.EvtLocalReachabilityChanged{Reachability: network.ReachabilityPublic}); err != nil {
+		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error()})
+		return
+	}
+	structuredlog.Event("info", "libp2p.dht.reachable", "reachable address is advertised to the DHT", map[string]any{"dhtModeReason": r.modeReason})
 }
 
 func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value) <-chan peer.AddrInfo {

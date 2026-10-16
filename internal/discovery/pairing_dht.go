@@ -119,6 +119,8 @@ func acceptPartialAdvertise(err error, peers int, parent context.Context) error 
 }
 
 // LookupPairing finds DHT providers for the namespace and fetches each record.
+// The caller does not have to be a DHT server; a client behind NAT can query
+// peers it has dialed and then open the stream or the advertised API URL.
 // Callers must verify the code MAC and identity signature before trusting one.
 func (r *Libp2pDHTRouter) LookupPairing(ctx context.Context, namespace string) ([][]byte, error) {
 	if r == nil || r.discovery == nil || r.host == nil {

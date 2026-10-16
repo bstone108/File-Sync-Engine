@@ -60,6 +60,22 @@ func SetAnnounceAPIURL(raw string) {
 	announceMu.Lock()
 	announceAPIURL = strings.TrimSpace(raw)
 	announceMu.Unlock()
+	promoteSharedRouterIfReachable()
+}
+
+// promoteSharedRouterIfReachable starts DHT server behavior when a reachable
+// address shows up after startup. A client can look records up either way.
+func promoteSharedRouterIfReachable() {
+	if !publishedLibp2pPortConfigured() && len(announceHosts()) == 0 {
+		return
+	}
+	sharedMu.Lock()
+	router := sharedRouter
+	sharedMu.Unlock()
+	if router == nil {
+		return
+	}
+	router.notePublicReachability()
 }
 
 func currentAnnounceAPIURL() string {

@@ -61,6 +61,7 @@ test('pairing works when only published ports connect the containers', async ({ 
   expect(logs).not.toContain('reachable API URL not configured');
   expect(logs).toContain('reachable API URL https://published-a:22420');
   await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('"listenPort":22421');
+  await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('"dhtModeReason":"published-port"');
   await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU');
 
   const a = await browser.newPage();
