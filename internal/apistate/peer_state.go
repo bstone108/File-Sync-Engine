@@ -10,6 +10,7 @@ import (
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/engine"
 	"filesyncengine/internal/metadatastore"
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/routing"
 	"filesyncengine/internal/schemaversion"
 	"filesyncengine/internal/snapshotcontrol"
@@ -130,7 +131,7 @@ func BuildPeerState(cfg config.Config, peer config.PeerConfig, store state.JSONS
 	} else if len(peer.Addresses) > 0 {
 		endpoint = "manual:" + peer.Addresses[0]
 	}
-	peerState := api.PeerState{ID: peer.ID, Status: "configured", Endpoint: endpoint, Transfer: PeerTransferState(cfg.Transfer, peer), NetworkDiagnostics: PeerNetworkDiagnostics(peer, cfg)}
+	peerState := api.PeerState{ID: peer.ID, Status: "configured", Endpoint: endpoint, ConnectionPath: peerConnectionPath(peer), Transfer: PeerTransferState(cfg.Transfer, peer), NetworkDiagnostics: PeerNetworkDiagnostics(peer, cfg)}
 	if statuses, err := store.PeerFolderStatuses(peer.ID); err == nil {
 		peerState.Metadata = PeerMetadataState(statuses)
 	}
@@ -148,6 +149,16 @@ func MaintenanceEnabled(cfg config.Config) bool {
 		}
 	}
 	return false
+}
+
+func peerConnectionPath(peer config.PeerConfig) string {
+	if obs, ok := nat.DefaultPaths.Active(peer.DHTPeerID); ok {
+		return string(obs.Path)
+	}
+	if obs, ok := nat.DefaultPaths.Active(peer.ID); ok {
+		return string(obs.Path)
+	}
+	return ""
 }
 
 // PeerTransferState projects configured local transfer caps into the API peer state.

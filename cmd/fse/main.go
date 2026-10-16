@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,6 +164,9 @@ func run(configPath string) {
 	} else if message := advertise.StartupMessage("", advErr); message != "" {
 		fmt.Fprintln(os.Stderr, message)
 	}
+	discovery.ConfigureNAT(cfg.Discovery.NAT)
+	advertise.SetSTUNServers(cfg.Discovery.NAT.STUNServers)
+	discovery.RefreshIdentityMembers(cfg)
 	discovery.SetAnnounceAPIURL(cfg.API.AdvertiseURL)
 	if err := daemonlogging.Configure(cfg, configPath); err != nil {
 		exitCLIF("configure logging: %v", err)
@@ -202,6 +206,13 @@ func run(configPath string) {
 		if localPairing != nil {
 			dirs = append(dirs, localPairing)
 		}
+		dirs = append(dirs, link.PeerAPIDirectory{Endpoints: func() []string {
+			loaded := current
+			if fresh, loadErr := config.LoadFile(configPath); loadErr == nil {
+				loaded = fresh
+			}
+			return connectedPeerAPIURLs(loaded)
+		}})
 		router, err := discovery.ProductionRouter(context.Background(), current.NodeName)
 		if err != nil {
 			structuredlog.Event("error", "pairing.dht.start", "pairing DHT router did not start", map[string]any{"error": err.Error()})
@@ -337,6 +348,10 @@ func run(configPath string) {
 		apiServer.SetAdvertiseURL(url)
 	})
 	go discovery.WatchObservedAddresses(detectCtx, append([]string(nil), cfg.Discovery.DHTBootstrapPeers...), advertise.NoteObservedIP)
+	advertise.SetExternalMappingHook(func(string, int) { discovery.NotePortExposed() })
+	if cfg.Discovery.Local && !cfg.Discovery.Disabled {
+		startLocalDiscovery(cfg)
+	}
 	advertise.StartAutoDetect(detectCtx, cfg)
 	schedule := daemonloop.NewPollSchedule(time.Now(), time.Now())
 	ticker := time.NewTicker(pollInterval)
@@ -493,6 +508,51 @@ func planRuntimeCooperativeBlockFetches(folderID string, pulls []peerPull) []rou
 
 func peerPullsWithEndpointObservations(cfg config.Config, folderID string, sidecarObservations []routing.EndpointObservation) []peerPull {
 	return peerpullplan.Plan(cfg, folderID, sidecarObservations)
+}
+
+func startLocalDiscovery(cfg config.Config) {
+	addresses := []string{}
+	if cfg.API.AdvertiseURL != "" {
+		addresses = append(addresses, cfg.API.AdvertiseURL)
+	}
+	for _, listen := range cfg.Listen {
+		if listen != "" {
+			addresses = append(addresses, listen)
+		}
+	}
+	if len(addresses) == 0 {
+		return
+	}
+	source, err := discovery.NewLocalUDPSource("", "", discovery.LocalAnnouncement{NodeID: cfg.NodeName, Addresses: addresses}, time.Second)
+	if err != nil {
+		structuredlog.Event("warn", "discovery.local.listen", "LAN discovery did not start", map[string]any{"error": err.Error()})
+		return
+	}
+	discovery.UseLocalSource(source)
+}
+
+func connectedPeerAPIURLs(cfg config.Config) []string {
+	var urls []string
+	seen := map[string]struct{}{}
+	add := func(raw string) {
+		if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+			return
+		}
+		if _, ok := seen[raw]; ok {
+			return
+		}
+		seen[raw] = struct{}{}
+		urls = append(urls, raw)
+	}
+	for _, peer := range cfg.Peers {
+		for _, endpoint := range peer.Endpoints {
+			add(endpoint.Address)
+		}
+		for _, address := range peer.Addresses {
+			add(address)
+		}
+	}
+	return urls
 }
 
 func runtimeDiscoverySources(cfg config.Config) []discovery.Source {

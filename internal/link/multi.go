@@ -80,31 +80,26 @@ func (m *MultiDirectory) Publish(ctx context.Context, namespace string, payload 
 	return errors.Join(errs...)
 }
 
+// Lookup tries directories in order and stops at the first record.
+// Callers pass LAN, then connected peers, then the public DHT, so a local
+// hit does not wait on a DHT walk.
 func (m *MultiDirectory) Lookup(ctx context.Context, namespace string) ([][]byte, error) {
 	if m == nil || len(m.dirs) == 0 {
 		return nil, errors.New("pairing directory is not configured")
 	}
-	type result struct {
-		payloads [][]byte
-		err      error
-	}
-	ch := make(chan result, len(m.dirs))
-	for _, dir := range m.dirs {
-		go func(dir Directory) {
-			payloads, err := dir.Lookup(ctx, namespace)
-			ch <- result{payloads: payloads, err: err}
-		}(dir)
-	}
 	var errs []error
-	for range m.dirs {
-		res := <-ch
-		if res.err != nil {
-			errs = append(errs, res.err)
-			structuredlog.Event("warn", "pairing.lookup.failed", "pairing directory lookup failed", map[string]any{"error": res.err.Error()})
+	for _, dir := range m.dirs {
+		if ctx != nil && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		payloads, err := dir.Lookup(ctx, namespace)
+		if err != nil {
+			errs = append(errs, err)
+			structuredlog.Event("warn", "pairing.lookup.failed", "pairing directory lookup failed", map[string]any{"error": err.Error()})
 			continue
 		}
-		if len(res.payloads) > 0 {
-			return res.payloads, nil
+		if len(payloads) > 0 {
+			return payloads, nil
 		}
 	}
 	if len(errs) > 0 {

@@ -646,6 +646,7 @@ type PeerState struct {
 	ID                 string                  `json:"id"`
 	Status             string                  `json:"status"`
 	Endpoint           string                  `json:"endpoint,omitempty"`
+	ConnectionPath     string                  `json:"connectionPath,omitempty"`
 	Transfer           PeerTransferState       `json:"transfer,omitempty"`
 	Metadata           PeerMetadataState       `json:"metadata,omitempty"`
 	NetworkDiagnostics []PeerNetworkDiagnostic `json:"networkDiagnostics,omitempty"`
