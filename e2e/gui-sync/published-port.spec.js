@@ -51,7 +51,14 @@ test('pairing works when only published ports connect the containers', async ({ 
 
   const logs = compose(['logs', 'published-a'], true);
   expect(logs).not.toContain('reachable API URL not configured');
-  expect(logs).toContain('22421');
+  expect(logs).toContain('reachable API URL https://published-a:22420');
+  await expect.poll(() => {
+    try {
+      return compose(['exec', '-T', 'published-a', 'cat', '/config/logs/fse.jsonl'], true);
+    } catch {
+      return '';
+    }
+  }, { timeout: 20000 }).toContain('"listenPort":22421');
 
   const a = await browser.newPage();
   const b = await browser.newPage();

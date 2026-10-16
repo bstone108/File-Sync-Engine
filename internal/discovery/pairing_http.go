@@ -76,16 +76,7 @@ func fetchPairingURL(ctx context.Context, endpoint, namespace string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{
-		Timeout: pairingHTTPTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return fmt.Errorf("pairing API redirect is not followed")
-		},
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}, //nolint:gosec // the payload is sealed under the pairing secret; the certificate pin is inside it
-		},
-	}
-	response, err := client.Do(request)
+	response, err := pairingClientSkippingCertificateVerification().Do(request)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +96,23 @@ func fetchPairingURL(ctx context.Context, endpoint, namespace string) ([]byte, e
 		return nil, fmt.Errorf("pairing record exceeds %d bytes", maxPairingBytes)
 	}
 	return body, nil
+}
+
+// pairingClientSkippingCertificateVerification fetches ciphertext from the
+// engine's own API certificate. That certificate is self-signed, so the host
+// name and CA are not checked on this call. The pairing secret authenticates
+// the body; a substituted response fails the MAC before any profile is used.
+func pairingClientSkippingCertificateVerification() *http.Client {
+	// codeql[go/disabled-certificate-check]
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	tlsConfig.InsecureSkipVerify = true
+	return &http.Client{
+		Timeout: pairingHTTPTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("pairing API redirect is not followed")
+		},
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+	}
 }
 
 func dialablePairingAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
