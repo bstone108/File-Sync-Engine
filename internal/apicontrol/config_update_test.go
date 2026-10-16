@@ -82,7 +82,6 @@ func TestHandleConfigUpdateMergesLoggingLevelAndRestoresOutput(t *testing.T) {
 
 func TestHandleConfigUpdateSetsExplicitEncryptionLevel(t *testing.T) {
 	configPath := writeConfigUpdateConfig(t)
-	level := 0
 	if _, err := HandleConfigUpdate(configPath, api.ConfigUpdateRequest{
 		Raw: []byte(`{"encryptionLevel":0}`),
 	}); err != nil {
