@@ -251,6 +251,11 @@
 
   let activeView: DesktopUIView = 'overview';
 
+  function pairingLooksFailed(message: string): boolean {
+    return /not found|already used|expired|failed|unavailable|invalid|deadline|502|error/i.test(message)
+      && !/is ready|paired by code/i.test(message);
+  }
+
   function onPairingButtonClick(event: MouseEvent) {
     const target = event.target;
     if (!(target instanceof Element)) {
@@ -2094,6 +2099,9 @@
           <input data-testid="pairing-code-input" bind:value={remotePairingCode} autocomplete="off" placeholder="ABCD-EFGH-JKMN-PQRS" />
         </label>
         <button type="button" data-testid="redeem-pairing-code" disabled={pairingLoading}>Link with pairing code</button>
+        {#if pairingMessage}
+          <p data-testid="pairing-message" class:pairing-error={pairingLooksFailed(pairingMessage)} role={pairingLooksFailed(pairingMessage) ? 'alert' : 'status'}>{pairingMessage}</p>
+        {/if}
         <p data-testid="pairing-advertise-url">
           This local engine advertises {status?.advertiseURL || 'its reachable API URL'}. Other engines use that address from the pairing package. You do not enter this engine's URL.
         </p>
@@ -2160,9 +2168,6 @@
         <p>Import uses daemon-owned import execution over the authenticated encrypted API and returns only redacted peer-pair identifiers.</p>
         {#if pairingImportSummary}
           <p class="success">{pairingImportSummary}</p>
-        {/if}
-        {#if pairingMessage}
-          <p data-testid="pairing-message">{pairingMessage}</p>
         {/if}
       </section>
     {/if}
@@ -2577,8 +2582,10 @@
   button {
     cursor: pointer;
   }
-  .error {
+  .error,
+  .pairing-error {
     color: var(--danger);
+    font-weight: 600;
   }
   .success {
     color: var(--ok);

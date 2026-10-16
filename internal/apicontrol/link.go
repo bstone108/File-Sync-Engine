@@ -3,6 +3,7 @@ package apicontrol
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -33,6 +34,16 @@ func SetLinkService(service *link.Service) {
 	if service != nil {
 		linkService = service
 	}
+}
+
+// ServedPairingPayload is the sealed record for an unauthenticated API fetch.
+// The redeemer still opens it with the pairing secret.
+func ServedPairingPayload(namespace string) ([]byte, error) {
+	payload, ok := linkService.ServedPayload(namespace)
+	if !ok || len(payload) == 0 {
+		return nil, errors.New("pairing code was not found")
+	}
+	return payload, nil
 }
 
 func gatheredProfile(cfg config.Config, certificate string) link.Profile {

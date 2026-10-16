@@ -255,7 +255,13 @@ jobs:
           printf 'FSE_WEB_GUI_CHECKSUM=%s\n' "$checksum" >> "$GITHUB_ENV"
           printf 'FSE_WEB_GUI_PACKAGE_HOST_PATH=%s\n' "$PWD/web-gui/dist/fse-web-container-default.zip" >> "$GITHUB_ENV"
           docker compose -f e2e/gui-sync/compose.yaml up -d
-          (cd e2e/gui-sync && npm install && npx playwright install --with-deps chromium && npx playwright test)
+          (cd e2e/gui-sync && npm install && npx playwright install --with-deps chromium && npx playwright test sync.spec.js)
+      - name: Pair across published ports only
+        run: |
+          set -euo pipefail
+          docker compose -f e2e/gui-sync/compose.yaml down -v || true
+          docker compose -f e2e/gui-sync/compose.published.yaml up -d
+          (cd e2e/gui-sync && FSE_PUBLISHED_PORT_E2E=1 npx playwright test published-port.spec.js)
       - name: Upload GUI screenshots
         if: always()
         uses: actions/upload-artifact@v7
@@ -265,4 +271,6 @@ jobs:
           if-no-files-found: warn
       - name: Collect container logs
         if: always()
-        run: docker compose -f e2e/gui-sync/compose.yaml logs || true
+        run: |
+          docker compose -f e2e/gui-sync/compose.yaml logs || true
+          docker compose -f e2e/gui-sync/compose.published.yaml logs || true

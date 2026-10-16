@@ -56,6 +56,23 @@ func loadPatchedConfig(configPath string, req api.ConfigUpdateRequest) (config.C
 	if err != nil {
 		return config.Config{}, err
 	}
+	if len(req.Raw) > 0 {
+		if err := applyRawConfigPatch(&cfg, req.Raw); err != nil {
+			return config.Config{}, err
+		}
+	} else if err := applyStructConfigPatch(&cfg, req); err != nil {
+		return config.Config{}, err
+	}
+	if strings.TrimSpace(cfg.Logging.Output) == "" {
+		cfg.Logging.Output = config.DefaultLogOutput()
+	}
+	if err := cfg.Validate(); err != nil {
+		return config.Config{}, err
+	}
+	return cfg, nil
+}
+
+func applyStructConfigPatch(cfg *config.Config, req api.ConfigUpdateRequest) error {
 	if req.NodeName != nil {
 		cfg.NodeName = *req.NodeName
 	}
@@ -67,16 +84,8 @@ func loadPatchedConfig(configPath string, req api.ConfigUpdateRequest) (config.C
 			cfg.API.Listen = *req.API.Listen
 		}
 		if req.API.AdvertiseURL != nil {
-			cfg.API.AdvertiseURL = strings.TrimSpace(*req.API.AdvertiseURL)
-			if cfg.API.AdvertiseURL != "" {
-				normalized, err := advertise.Normalize(cfg.API.AdvertiseURL, cfg)
-				if err != nil {
-					return config.Config{}, err
-				}
-				if advertise.ContainerInternalURL(normalized) {
-					return config.Config{}, fmt.Errorf("advertise URL %s is a container-internal address; set %s to a host-reachable URL", normalized, advertise.EnvVar)
-				}
-				cfg.API.AdvertiseURL = normalized
+			if err := setAdvertiseURL(cfg, *req.API.AdvertiseURL); err != nil {
+				return err
 			}
 		}
 		if req.API.Encryption != nil {
@@ -84,7 +93,12 @@ func loadPatchedConfig(configPath string, req api.ConfigUpdateRequest) (config.C
 		}
 	}
 	if req.Logging != nil {
-		cfg.Logging = *req.Logging
+		if req.Logging.Level != "" {
+			cfg.Logging.Level = req.Logging.Level
+		}
+		if strings.TrimSpace(req.Logging.Output) != "" {
+			cfg.Logging.Output = req.Logging.Output
+		}
 	}
 	if req.Transfer != nil {
 		cfg.Transfer = *req.Transfer
@@ -101,10 +115,102 @@ func loadPatchedConfig(configPath string, req api.ConfigUpdateRequest) (config.C
 	if req.Maintenance != nil {
 		cfg.Maintenance = *req.Maintenance
 	}
-	if err := cfg.Validate(); err != nil {
-		return config.Config{}, err
+	return nil
+}
+
+func applyRawConfigPatch(cfg *config.Config, raw []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return fmt.Errorf("invalid config update request")
 	}
-	return cfg, nil
+	if value, ok := root["nodeName"]; ok {
+		if err := json.Unmarshal(value, &cfg.NodeName); err != nil {
+			return err
+		}
+	}
+	if value, ok := root["listen"]; ok {
+		if err := json.Unmarshal(value, &cfg.Listen); err != nil {
+			return err
+		}
+	}
+	for _, field := range []struct {
+		key string
+		dst any
+	}{
+		{"api", &cfg.API},
+		{"logging", &cfg.Logging},
+		{"transfer", &cfg.Transfer},
+		{"backup", &cfg.Backup},
+		{"discovery", &cfg.Discovery},
+		{"metadata", &cfg.Metadata},
+		{"maintenance", &cfg.Maintenance},
+	} {
+		value, ok := root[field.key]
+		if !ok {
+			continue
+		}
+		if err := mergeJSON(field.dst, value); err != nil {
+			return err
+		}
+	}
+	if _, ok := root["api"]; ok {
+		return setAdvertiseURL(cfg, cfg.API.AdvertiseURL)
+	}
+	return nil
+}
+
+func setAdvertiseURL(cfg *config.Config, raw string) error {
+	cfg.API.AdvertiseURL = strings.TrimSpace(raw)
+	if cfg.API.AdvertiseURL == "" {
+		return nil
+	}
+	normalized, err := advertise.Normalize(cfg.API.AdvertiseURL, *cfg)
+	if err != nil {
+		return err
+	}
+	if advertise.ContainerInternalURL(normalized) {
+		return fmt.Errorf("advertise URL %s is a container-internal address; set %s to a host-reachable URL", normalized, advertise.EnvVar)
+	}
+	cfg.API.AdvertiseURL = normalized
+	return nil
+}
+
+func mergeJSON(dst any, patch json.RawMessage) error {
+	base, err := json.Marshal(dst)
+	if err != nil {
+		return err
+	}
+	var baseMap map[string]any
+	if len(base) > 0 && string(base) != "null" {
+		if err := json.Unmarshal(base, &baseMap); err != nil {
+			return err
+		}
+	}
+	var patchMap map[string]any
+	if err := json.Unmarshal(patch, &patchMap); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(mergeMaps(baseMap, patchMap))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(encoded, dst)
+}
+
+func mergeMaps(base, patch map[string]any) map[string]any {
+	if base == nil {
+		base = map[string]any{}
+	}
+	for key, value := range patch {
+		child, ok := value.(map[string]any)
+		if !ok {
+			base[key] = value
+			continue
+		}
+		existing, _ := base[key].(map[string]any)
+		base[key] = mergeMaps(existing, child)
+	}
+	return base
 }
 
 func writePatchedConfig(configPath string, cfg config.Config) error {

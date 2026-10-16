@@ -17,10 +17,11 @@ ENV FSE_CONFIG_PATH=/config/config.jsonc \
     FSE_LOG_OUTPUT=/config/logs/fse.jsonl \
     FSE_DISCOVERY_LOCAL=true \
     FSE_DISCOVERY_DHT=true \
+    FSE_LIBP2P_PORT=22421 \
     FSE_WEB_GUI_ENABLED=false \
     FSE_UMASK=002
 
 VOLUME ["/config"]
-EXPOSE 22420 22000
+EXPOSE 22420 22000 22421/tcp 22421/udp
 ENTRYPOINT ["/usr/local/bin/fse-container-entrypoint"]
 CMD ["start"]

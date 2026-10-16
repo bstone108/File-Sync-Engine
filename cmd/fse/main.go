@@ -82,7 +82,7 @@ var newRuntimeDHTRouter = func(cfg config.Config) discovery.DHTRouter {
 	if runtimeDHTRouter != nil {
 		return runtimeDHTRouter
 	}
-	router, err := discovery.NewLibp2pDHTRouter(context.Background(), discovery.Libp2pDHTRouterOptions{NodeID: cfg.NodeName})
+	router, err := discovery.ProductionRouter(context.Background(), cfg.NodeName)
 	if err != nil {
 		daemonlogging.DiscoveryRouterUnavailable(err)
 		return nil
@@ -150,14 +150,20 @@ func run(configPath string) {
 	} else {
 		cfg = updated
 	}
-	if ensured, advErr := advertise.Ensure(configPath); advErr != nil {
-		fmt.Fprintf(os.Stderr, "reachable API URL not configured: %v\n", advErr)
+	if repaired, logErr := config.PersistLoggingOutput(configPath, cfg); logErr != nil {
+		fmt.Fprintf(os.Stderr, "log output was not restored: %v\n", logErr)
 	} else {
-		cfg = ensured
-		if cfg.API.AdvertiseURL != "" {
-			fmt.Fprintf(os.Stderr, "reachable API URL %s\n", cfg.API.AdvertiseURL)
-		}
+		cfg = repaired
 	}
+	if ensured, advErr := advertise.Ensure(configPath); ensured.NodeName != "" {
+		cfg = ensured
+		if message := advertise.StartupMessage(cfg.API.AdvertiseURL, advErr); message != "" {
+			fmt.Fprintln(os.Stderr, message)
+		}
+	} else if message := advertise.StartupMessage("", advErr); message != "" {
+		fmt.Fprintln(os.Stderr, message)
+	}
+	discovery.SetAnnounceAPIURL(cfg.API.AdvertiseURL)
 	if err := daemonlogging.Configure(cfg, configPath); err != nil {
 		exitCLIF("configure logging: %v", err)
 	}
@@ -196,7 +202,7 @@ func run(configPath string) {
 		if localPairing != nil {
 			dirs = append(dirs, localPairing)
 		}
-		router, err := discovery.NewLibp2pDHTRouter(context.Background(), discovery.Libp2pDHTRouterOptions{NodeID: current.NodeName, AutoRelay: true})
+		router, err := discovery.ProductionRouter(context.Background(), current.NodeName)
 		if err != nil {
 			structuredlog.Event("error", "pairing.dht.start", "pairing DHT router did not start", map[string]any{"error": err.Error()})
 			if len(dirs) == 0 {
@@ -233,6 +239,9 @@ func run(configPath string) {
 	})
 	apiServer.SetPairCodeClaimHandler(func(ctx context.Context, req link.ClaimRequest) (link.ClaimResponse, error) {
 		return apicontrol.HandlePairCodeClaim(configPath, req)
+	})
+	apiServer.SetPairCodeRecordHandler(func(ctx context.Context, namespace string) ([]byte, error) {
+		return apicontrol.ServedPairingPayload(namespace)
 	})
 	apiServer.SetLinkProfileHandler(func(ctx context.Context) (link.Profile, error) {
 		return apicontrol.HandleLinkProfile(configPath)
@@ -324,6 +333,7 @@ func run(configPath string) {
 	advertise.BindConfigPath(configPath)
 	advertise.SetOnChange(func(url string) {
 		fmt.Fprintf(os.Stderr, "reachable API URL %s\n", url)
+		discovery.SetAnnounceAPIURL(url)
 		apiServer.SetAdvertiseURL(url)
 	})
 	go discovery.WatchObservedAddresses(detectCtx, append([]string(nil), cfg.Discovery.DHTBootstrapPeers...), advertise.NoteObservedIP)

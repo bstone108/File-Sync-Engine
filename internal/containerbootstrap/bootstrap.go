@@ -12,6 +12,7 @@ import (
 
 	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/guischema"
 	"filesyncengine/internal/schemaversion"
 )
@@ -79,11 +80,19 @@ func RunFromEnvironment(configPath string) error {
 			return err
 		}
 	}
-	if err := advertise.Apply(&cfg, os.Getenv(advertise.EnvVar)); err != nil {
-		fmt.Fprintf(os.Stderr, "reachable API URL not configured: %v\n", err)
-	} else if cfg.API.AdvertiseURL != "" {
-		fmt.Fprintf(os.Stderr, "reachable API URL %s\n", cfg.API.AdvertiseURL)
+	if repaired, logErr := config.PersistLoggingOutput(configPath, cfg); logErr != nil {
+		fmt.Fprintf(os.Stderr, "log output was not restored: %v\n", logErr)
+	} else {
+		cfg = repaired
 	}
+	if err := advertise.Apply(&cfg, os.Getenv(advertise.EnvVar)); err != nil {
+		if message := advertise.StartupMessage(cfg.API.AdvertiseURL, err); message != "" {
+			fmt.Fprintln(os.Stderr, message)
+		}
+	} else if message := advertise.StartupMessage(cfg.API.AdvertiseURL, nil); message != "" {
+		fmt.Fprintln(os.Stderr, message)
+	}
+	discovery.SetAnnounceAPIURL(cfg.API.AdvertiseURL)
 	cfg, err = ReconcileWebGUI(configPath, cfg, DefaultsFromEnvironment())
 	if err != nil {
 		return err

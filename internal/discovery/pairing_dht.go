@@ -26,7 +26,11 @@ const pairingAdvertiseTimeout = 25 * time.Second
 // pairingLookupTimeout bounds a redeemer's public DHT walk. The local
 // directory answers same-LAN pairing on its own, and a second redeem must
 // be rejected without waiting out a full provider search.
-const pairingLookupTimeout = 8 * time.Second
+const pairingLookupTimeout = 20 * time.Second
+
+// pairingStreamTimeout keeps a dead libp2p dial from consuming the lookup.
+// The advertised HTTPS API is tried next.
+const pairingStreamTimeout = 4 * time.Second
 
 const (
 	// PairingProtocol serves the MAC-bound pairing record after DHT provider
@@ -177,13 +181,35 @@ func (r *Libp2pDHTRouter) UnpublishPairing(_ context.Context, namespace string) 
 }
 
 // FetchPairing dials one discovered peer and reads its pairing record.
+// When the libp2p stream cannot be opened, it fetches the same sealed record
+// from the HTTPS API URL carried in the provider addresses.
 func (r *Libp2pDHTRouter) FetchPairing(ctx context.Context, info peer.AddrInfo, namespace string) ([]byte, error) {
 	if r == nil || r.host == nil {
 		return nil, fmt.Errorf("libp2p DHT router is not initialized")
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	payload, err := r.fetchPairingStream(ctx, info, namespace)
+	if err == nil {
+		return payload, nil
+	}
+	httpPayload, httpErr := fetchPairingHTTP(ctx, info.Addrs, namespace)
+	if httpErr == nil && len(httpPayload) > 0 {
+		return httpPayload, nil
+	}
+	return nil, err
+}
+
+func (r *Libp2pDHTRouter) fetchPairingStream(ctx context.Context, info peer.AddrInfo, namespace string) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, pairingStreamTimeout)
 	defer cancel()
-	if err := r.host.Connect(dialCtx, info); err != nil {
+	dialInfo := info
+	dialInfo.Addrs = dialablePairingAddrs(info.Addrs)
+	if len(dialInfo.Addrs) == 0 {
+		return nil, fmt.Errorf("pairing provider has no dialable libp2p address")
+	}
+	if err := r.host.Connect(dialCtx, dialInfo); err != nil {
 		return nil, err
 	}
 	stream, err := r.host.NewStream(dialCtx, info.ID, protocol.ID(PairingProtocol))
@@ -191,7 +217,7 @@ func (r *Libp2pDHTRouter) FetchPairing(ctx context.Context, info peer.AddrInfo, 
 		return nil, err
 	}
 	defer stream.Close()
-	_ = stream.SetDeadline(time.Now().Add(8 * time.Second))
+	_ = stream.SetDeadline(time.Now().Add(pairingStreamTimeout))
 	if _, err := io.WriteString(stream, namespace+"\n"); err != nil {
 		return nil, err
 	}

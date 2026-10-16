@@ -18,6 +18,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	routingdiscovery "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	ma "github.com/multiformats/go-multiaddr"
+
+	"filesyncengine/internal/structuredlog"
 )
 
 const dhtQueryLimit = 64
@@ -42,18 +44,37 @@ type Libp2pDHTRouter struct {
 }
 
 type Libp2pDHTRouterOptions struct {
-	NodeID    string
-	AutoRelay bool
+	NodeID     string
+	AutoRelay  bool
+	ListenPort int
+	// Announce replaces container-internal listen addresses with the
+	// host-reachable published port and the HTTPS API URL.
+	Announce bool
 }
 
 func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp2pDHTRouter, error) {
 	var hostBox atomic.Value
 	var dhtBox atomic.Value
 	libp2pOpts := []libp2p.Option{}
-	if opts.AutoRelay {
-		libp2pOpts = append(libp2pOpts, libp2p.EnableAutoRelayWithPeerSource(func(relayCtx context.Context, num int) <-chan peer.AddrInfo {
-			return relayCandidates(relayCtx, num, &hostBox, &dhtBox)
-		}))
+	if opts.ListenPort > 0 {
+		libp2pOpts = append(libp2pOpts, libp2p.ListenAddrStrings(
+			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", opts.ListenPort),
+			fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", opts.ListenPort),
+		))
+	}
+	if opts.Announce {
+		libp2pOpts = append(libp2pOpts, libp2p.AddrsFactory(announcedAddrs))
+	}
+	if opts.AutoRelay || opts.Announce {
+		libp2pOpts = append(libp2pOpts,
+			libp2p.EnableRelay(),
+			libp2p.EnableNATService(),
+			libp2p.EnableAutoNATv2(),
+			libp2p.EnableHolePunching(),
+			libp2p.EnableAutoRelayWithPeerSource(func(relayCtx context.Context, num int) <-chan peer.AddrInfo {
+				return relayCandidates(relayCtx, num, &hostBox, &dhtBox)
+			}),
+		)
 	}
 	h, err := libp2p.New(libp2pOpts...)
 	if err != nil {
@@ -74,6 +95,13 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		payloads:  map[string][]byte{},
 	}
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
+	if opts.Announce {
+		structuredlog.Event("info", "libp2p.announce", "libp2p is advertising the published port", map[string]any{
+			"listenPort":    opts.ListenPort,
+			"publishedPort": PublishedLibp2pPort(opts.ListenPort),
+			"addresses":     multiaddrStrings(h.Addrs()),
+		})
+	}
 	return router, nil
 }
 

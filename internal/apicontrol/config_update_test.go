@@ -41,6 +41,45 @@ func TestHandleConfigUpdatePatchesOnlyNonSecretSettings(t *testing.T) {
 	}
 }
 
+func TestHandleConfigUpdateMergesLoggingLevelAndRestoresOutput(t *testing.T) {
+	configPath := writeConfigUpdateConfig(t)
+	output := "/config/logs/fse.jsonl"
+	if _, err := HandleConfigUpdate(configPath, api.ConfigUpdateRequest{
+		Logging:  &config.LoggingConfig{Level: config.LogLevelInfo, Output: output},
+		Transfer: &config.TransferConfig{SendBytesPerSecond: 4096, ReceiveBytesPerSecond: 8192},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := HandleConfigUpdate(configPath, api.ConfigUpdateRequest{
+		Raw: []byte(`{"logging":{"level":"debug"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Logging.Level != config.LogLevelDebug || cfg.Logging.Output != output {
+		t.Fatalf("logging = %+v", cfg.Logging)
+	}
+	if cfg.Transfer.SendBytesPerSecond != 4096 || cfg.Transfer.ReceiveBytesPerSecond != 8192 {
+		t.Fatalf("transfer was replaced: %+v", cfg.Transfer)
+	}
+	t.Setenv("FSE_LOG_OUTPUT", "/tmp/fse-restored.jsonl")
+	if _, err := HandleConfigUpdate(configPath, api.ConfigUpdateRequest{
+		Raw: []byte(`{"logging":{"output":""}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = config.LoadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Logging.Output != "/tmp/fse-restored.jsonl" || cfg.Logging.Level != config.LogLevelDebug {
+		t.Fatalf("restored logging = %+v", cfg.Logging)
+	}
+}
+
 func TestHandleConfigUpdateRejectsDockerBridgeAdvertiseURL(t *testing.T) {
 	configPath := writeConfigUpdateConfig(t)
 	bridge := "https://172.17.0.4:22420"

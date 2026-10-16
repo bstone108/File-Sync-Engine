@@ -2,6 +2,7 @@ package advertise
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,6 +68,25 @@ func TestResolveWithHostUsesDetectedAddress(t *testing.T) {
 	}
 	if got != "https://192.0.2.30:22421" {
 		t.Fatalf("detected = %q", got)
+	}
+}
+
+func TestResolvePendingWhenPublishedPortHasNoHost(t *testing.T) {
+	t.Setenv(EnvPublishedAPIPort, "22420")
+	previous := tailscaleIPs
+	tailscaleIPs = func(context.Context) []string { return nil }
+	t.Cleanup(func() { tailscaleIPs = previous })
+	cfg := config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}}
+	_, err := ResolveWithHost(cfg, "", "172.17.0.4")
+	if !errors.Is(err, ErrPendingHost) {
+		t.Fatalf("err = %v", err)
+	}
+	message := StartupMessage("", err)
+	if strings.Contains(message, "not configured") || !strings.Contains(message, "published port 22420") {
+		t.Fatalf("message = %q", message)
+	}
+	if other := StartupMessage("", errors.New("could not detect a host-reachable address; set FSE_ADVERTISE_URL")); !strings.Contains(other, "not configured") {
+		t.Fatalf("unconfigured message = %q", other)
 	}
 }
 
