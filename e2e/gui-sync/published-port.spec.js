@@ -20,6 +20,14 @@ function containerIP(service) {
   }).trim();
 }
 
+function engineLog(service) {
+  try {
+    return compose(['exec', '-T', service, 'cat', '/config/logs/fse.jsonl'], true);
+  } catch (error) {
+    return error && error.stdout ? String(error.stdout) : '';
+  }
+}
+
 function probe(service, host, port) {
   try {
     compose(['exec', '-T', service, 'sh', '-c', `nc -w 2 ${host} ${port} </dev/null`], true);
@@ -52,13 +60,8 @@ test('pairing works when only published ports connect the containers', async ({ 
   const logs = compose(['logs', 'published-a'], true);
   expect(logs).not.toContain('reachable API URL not configured');
   expect(logs).toContain('reachable API URL https://published-a:22420');
-  await expect.poll(() => {
-    try {
-      return compose(['exec', '-T', 'published-a', 'cat', '/config/logs/fse.jsonl'], true);
-    } catch {
-      return '';
-    }
-  }, { timeout: 20000 }).toContain('"listenPort":22421');
+  await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('"listenPort":22421');
+  await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU');
 
   const a = await browser.newPage();
   const b = await browser.newPage();
@@ -71,6 +74,14 @@ test('pairing works when only published ports connect the containers', async ({ 
   for (let attempt = 0; attempt < 2 && !/paired by code/i.test(paired); attempt += 1) {
     const code = await showCode(a);
     expect(code).toMatch(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/);
+    await expect.poll(() => {
+      const raw = engineLog('published-a');
+      if (raw.includes('pairing.publish.ok')) {
+        return 'ok';
+      }
+      const failed = raw.split('\n').filter((line) => line.includes('pairing.publish.failed')).pop();
+      return failed || '';
+    }, { timeout: 50000 }).toBe('ok');
     await b.getByTestId('nav-peers').click();
     await b.getByTestId('pairing-code-input').fill(code);
     await b.getByTestId('redeem-pairing-code').click();
@@ -82,6 +93,9 @@ test('pairing works when only published ports connect the containers', async ({ 
     if (/failed to open stream|context deadline/i.test(paired)) {
       throw new Error(`published-port dial failed: ${paired}`);
     }
+  }
+  if (!/paired by code/i.test(paired)) {
+    throw new Error(`${paired}\n--- published-a ---\n${engineLog('published-a').slice(-2500)}\n--- published-b ---\n${engineLog('published-b').slice(-2500)}`);
   }
   expect(paired).toMatch(/paired by code/i);
   await expect(b.getByTestId('pairing-message')).toHaveAttribute('role', 'status');

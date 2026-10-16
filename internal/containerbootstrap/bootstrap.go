@@ -208,6 +208,23 @@ func envOrDefault(name string, fallback string) string {
 	return fallback
 }
 
+func bootstrapPeersFromEnv() []string {
+	raw := strings.TrimSpace(os.Getenv("FSE_DHT_BOOTSTRAP_PEERS"))
+	if raw == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\n'
+	})
+	peers := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field = strings.TrimSpace(field); field != "" {
+			peers = append(peers, field)
+		}
+	}
+	return peers
+}
+
 func envBoolOrDefault(name string, fallback bool) bool {
 	value := os.Getenv(name)
 	if value == "" {
@@ -235,6 +252,9 @@ func ApplyFirstRunDefaults(cfg config.Config, defaults RuntimeDefaults) config.C
 	cfg.Metadata = config.MetadataConfig{Backend: config.MetadataBackendBadger, Path: "/config/metadata", PerFolder: true}
 	cfg.Discovery.Local = defaults.DiscoveryLocal
 	cfg.Discovery.DHT = defaults.DiscoveryDHT
+	if peers := bootstrapPeersFromEnv(); len(peers) > 0 {
+		cfg.Discovery.DHTBootstrapPeers = peers
+	}
 	if defaults.webGUIOptInComplete() {
 		cfg.WebGUI.Enabled = true
 		cfg.WebGUI.Version = defaults.WebGUIVersion

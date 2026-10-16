@@ -56,6 +56,13 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	var hostBox atomic.Value
 	var dhtBox atomic.Value
 	libp2pOpts := []libp2p.Option{}
+	identity, err := configuredLibp2pIdentity()
+	if err != nil {
+		return nil, err
+	}
+	if identity != nil {
+		libp2pOpts = append(libp2pOpts, identity)
+	}
 	if opts.ListenPort > 0 {
 		libp2pOpts = append(libp2pOpts, libp2p.ListenAddrStrings(
 			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", opts.ListenPort),
@@ -97,6 +104,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
 	if opts.Announce {
 		structuredlog.Event("info", "libp2p.announce", "libp2p is advertising the published port", map[string]any{
+			"peerId":        h.ID().String(),
 			"listenPort":    opts.ListenPort,
 			"publishedPort": PublishedLibp2pPort(opts.ListenPort),
 			"addresses":     multiaddrStrings(h.Addrs()),

@@ -14,6 +14,20 @@ import (
 	"filesyncengine/internal/advertise"
 )
 
+func TestLibp2pIdentityEnvUsesTheProvidedKey(t *testing.T) {
+	t.Setenv("FSE_LIBP2P_PRIVATE_KEY", "CAESQEJDZ+N7os4cl6ICoZdZTNr5kYkeVxBxnQHp0WD798pTTu5F0fYA5fqAt9f59jrDBJ8m/Z3zpnUPmtq5Di9ml+E=")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	router, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "stable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = router.Close() })
+	if router.PeerID() != "12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU" {
+		t.Fatalf("peer id = %s", router.PeerID())
+	}
+}
+
 func TestLibp2pPortEnvFallsBackAndPublishes(t *testing.T) {
 	t.Setenv(EnvLibp2pPort, "nope")
 	if Libp2pListenPort() != DefaultLibp2pPort {

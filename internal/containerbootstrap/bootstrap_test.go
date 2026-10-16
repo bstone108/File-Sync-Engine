@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"filesyncengine/internal/config"
@@ -52,6 +53,14 @@ func TestApplyFirstRunDefaultsUsesContainerRuntimeValues(t *testing.T) {
 	}
 	if !updated.WebGUI.Enabled || updated.WebGUI.PackagePath != "/opt/fse/web/default.zip" || updated.WebGUI.HTTPSListen != "0.0.0.0:8943" || updated.WebGUI.ChecksumSHA256 != "abc123" {
 		t.Fatalf("container web GUI defaults not applied: %+v", updated.WebGUI)
+	}
+}
+
+func TestApplyFirstRunDefaultsUsesBootstrapPeerEnv(t *testing.T) {
+	t.Setenv("FSE_DHT_BOOTSTRAP_PEERS", "/dns4/published-b/tcp/22423/p2p/12D3KooWR2CG2NKZoAJoUyzULR6JgFgjTTeBEAVXx9qjN7gWGJUY, /dns4/other/tcp/1")
+	updated := ApplyFirstRunDefaults(config.Config{}, RuntimeDefaults{DiscoveryDHT: true, DiscoveryLocal: true})
+	if len(updated.Discovery.DHTBootstrapPeers) != 2 || !strings.Contains(updated.Discovery.DHTBootstrapPeers[0], "/dns4/published-b/") {
+		t.Fatalf("bootstrap peers = %#v", updated.Discovery.DHTBootstrapPeers)
 	}
 }
 

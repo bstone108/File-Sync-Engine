@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
@@ -9,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	libp2p "github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
 
 	"filesyncengine/internal/advertise"
 	ma "github.com/multiformats/go-multiaddr"
@@ -32,6 +36,24 @@ var (
 	announceMu     sync.Mutex
 	announceAPIURL string
 )
+
+// configuredLibp2pIdentity loads FSE_LIBP2P_PRIVATE_KEY when a deployment or
+// test needs a stable peer id. Empty means libp2p generates one at start.
+func configuredLibp2pIdentity() (libp2p.Option, error) {
+	raw := strings.TrimSpace(os.Getenv("FSE_LIBP2P_PRIVATE_KEY"))
+	if raw == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("FSE_LIBP2P_PRIVATE_KEY is not base64")
+	}
+	key, err := crypto.UnmarshalPrivateKey(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("FSE_LIBP2P_PRIVATE_KEY is not a libp2p private key")
+	}
+	return libp2p.Identity(key), nil
+}
 
 // SetAnnounceAPIURL is the reachable API URL included in DHT provider records.
 func SetAnnounceAPIURL(raw string) {
