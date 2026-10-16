@@ -23,6 +23,11 @@ import (
 // walk still returns context.DeadlineExceeded after storing provider records.
 const pairingAdvertiseTimeout = 25 * time.Second
 
+// pairingLookupTimeout bounds a redeemer's public DHT walk. The local
+// directory answers same-LAN pairing on its own, and a second redeem must
+// be rejected without waiting out a full provider search.
+const pairingLookupTimeout = 8 * time.Second
+
 const (
 	// PairingProtocol serves the MAC-bound pairing record after DHT provider
 	// discovery. The public DHT validator does not store arbitrary values, so
@@ -102,13 +107,24 @@ func (r *Libp2pDHTRouter) LookupPairing(ctx context.Context, namespace string) (
 	if namespace == "" {
 		return nil, fmt.Errorf("pairing namespace is required")
 	}
-	if err := r.ensureBootstrapped(ctx); err != nil {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, pairingLookupTimeout)
+	defer cancel()
+	if err := r.ensureBootstrapped(lookupCtx); err != nil {
 		structuredlog.Event("error", "pairing.lookup.failed", "pairing DHT bootstrap failed", map[string]any{"namespace": namespace, "error": err.Error()})
+		if lookupCtx.Err() != nil && ctx.Err() == nil {
+			return nil, nil
+		}
 		return nil, err
 	}
-	peerCh, err := r.discovery.FindPeers(ctx, namespace, corediscovery.Limit(16))
+	peerCh, err := r.discovery.FindPeers(lookupCtx, namespace, corediscovery.Limit(16))
 	if err != nil {
 		structuredlog.Event("error", "pairing.lookup.failed", "pairing DHT provider lookup failed", map[string]any{"namespace": namespace, "error": err.Error()})
+		if lookupCtx.Err() != nil && ctx.Err() == nil {
+			return nil, nil
+		}
 		return nil, err
 	}
 	payloads := [][]byte{}
@@ -117,7 +133,7 @@ func (r *Libp2pDHTRouter) LookupPairing(ctx context.Context, namespace string) (
 		if info.ID == "" || info.ID == r.host.ID() {
 			continue
 		}
-		payload, fetchErr := r.FetchPairing(ctx, info, namespace)
+		payload, fetchErr := r.FetchPairing(lookupCtx, info, namespace)
 		if fetchErr != nil || len(payload) == 0 {
 			if fetchErr != nil {
 				lastFetch = fetchErr
@@ -138,10 +154,11 @@ func (r *Libp2pDHTRouter) LookupPairing(ctx context.Context, namespace string) (
 		fields := map[string]any{"namespace": namespace, "routingPeers": r.routingTableSize()}
 		if lastFetch != nil {
 			fields["error"] = lastFetch.Error()
-			structuredlog.Event("warn", "pairing.lookup.empty", "pairing code lookup found no record", fields)
-			return nil, fmt.Errorf("pairing code lookup failed: %w", lastFetch)
 		}
 		structuredlog.Event("warn", "pairing.lookup.empty", "pairing code lookup found no record", fields)
+		if lastFetch != nil && lookupCtx.Err() == nil {
+			return nil, fmt.Errorf("pairing code lookup failed: %w", lastFetch)
+		}
 	}
 	return payloads, nil
 }
@@ -227,39 +244,50 @@ func (r *Libp2pDHTRouter) ensureBootstrapped(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	for {
-		r.mu.Lock()
-		if r.bootstrapped {
-			r.mu.Unlock()
-			return nil
-		}
-		if r.bootstrapWait != nil {
-			wait := r.bootstrapWait
-			r.mu.Unlock()
-			select {
-			case <-wait:
-				continue
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		wait := make(chan struct{})
-		r.bootstrapWait = wait
+	r.mu.Lock()
+	if r.bootstrapped {
 		r.mu.Unlock()
-
-		err := r.Bootstrap(ctx, r.bootstrapPeerList())
-		r.mu.Lock()
-		if err == nil {
-			r.bootstrapped = true
-			r.bootstrapErr = nil
-		} else {
-			r.bootstrapErr = err
-		}
-		r.bootstrapWait = nil
-		close(wait)
-		r.mu.Unlock()
-		return err
+		return nil
 	}
+	wait := r.bootstrapWait
+	if wait == nil {
+		wait = make(chan struct{})
+		r.bootstrapWait = wait
+		go r.finishBootstrap(wait)
+	}
+	r.mu.Unlock()
+	select {
+	case <-wait:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.bootstrapped {
+		return nil
+	}
+	if r.bootstrapErr != nil {
+		return r.bootstrapErr
+	}
+	return errors.New("pairing DHT bootstrap did not finish")
+}
+
+// finishBootstrap connects once. Lookup deadlines wait on the channel and do
+// not cancel this attempt.
+func (r *Libp2pDHTRouter) finishBootstrap(wait chan struct{}) {
+	bootCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	err := r.Bootstrap(bootCtx, r.bootstrapPeerList())
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err == nil {
+		r.bootstrapped = true
+		r.bootstrapErr = nil
+	} else {
+		r.bootstrapErr = err
+	}
+	r.bootstrapWait = nil
+	close(wait)
 }
 
 func (r *Libp2pDHTRouter) handlePairingStream(stream network.Stream) {

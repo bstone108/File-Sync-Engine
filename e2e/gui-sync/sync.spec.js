@@ -145,7 +145,7 @@ async function redeemPairingCode(page, code) {
   await expect(page.getByTestId('pairing-message')).toContainText(/paired by code/i);
   await page.getByTestId('redeem-pairing-code').click();
   await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(1);
-  await expect(page.getByTestId('pairing-message')).toContainText(/already used|not found|was not found/i);
+  await expect(page.getByTestId('pairing-message')).toContainText(/already used|not found|was not found/i, { timeout: 30000 });
   await expect(page.getByTestId('pairing-message')).not.toContainText(/paired by code/i);
 }
 
