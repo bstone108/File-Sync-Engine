@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"filesyncengine/internal/advertise"
@@ -70,13 +71,24 @@ import (
 	"filesyncengine/internal/webgui"
 )
 
+var (
+	runtimeDHTMu     sync.Mutex
+	runtimeDHTRouter discovery.DHTRouter
+)
+
 var newRuntimeDHTRouter = func(cfg config.Config) discovery.DHTRouter {
+	runtimeDHTMu.Lock()
+	defer runtimeDHTMu.Unlock()
+	if runtimeDHTRouter != nil {
+		return runtimeDHTRouter
+	}
 	router, err := discovery.NewLibp2pDHTRouter(context.Background(), discovery.Libp2pDHTRouterOptions{NodeID: cfg.NodeName})
 	if err != nil {
 		daemonlogging.DiscoveryRouterUnavailable(err)
 		return nil
 	}
-	return router
+	runtimeDHTRouter = router
+	return runtimeDHTRouter
 }
 
 const configQuietPeriod = 15 * time.Second
