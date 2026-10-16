@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"filesyncengine/internal/advertise"
@@ -70,13 +71,24 @@ import (
 	"filesyncengine/internal/webgui"
 )
 
+var (
+	runtimeDHTMu     sync.Mutex
+	runtimeDHTRouter discovery.DHTRouter
+)
+
 var newRuntimeDHTRouter = func(cfg config.Config) discovery.DHTRouter {
+	runtimeDHTMu.Lock()
+	defer runtimeDHTMu.Unlock()
+	if runtimeDHTRouter != nil {
+		return runtimeDHTRouter
+	}
 	router, err := discovery.NewLibp2pDHTRouter(context.Background(), discovery.Libp2pDHTRouterOptions{NodeID: cfg.NodeName})
 	if err != nil {
 		daemonlogging.DiscoveryRouterUnavailable(err)
 		return nil
 	}
-	return router
+	runtimeDHTRouter = router
+	return runtimeDHTRouter
 }
 
 const configQuietPeriod = 15 * time.Second
@@ -133,6 +145,11 @@ func run(configPath string) {
 	if err != nil {
 		exitCLIF("ensure api key: %v", err)
 	}
+	if updated, dhtErr := config.PersistShippedDefaultDHT(configPath, cfg); dhtErr != nil {
+		fmt.Fprintf(os.Stderr, "public DHT discovery was not enabled: %v\n", dhtErr)
+	} else {
+		cfg = updated
+	}
 	if ensured, advErr := advertise.Ensure(configPath); advErr != nil {
 		fmt.Fprintf(os.Stderr, "reachable API URL not configured: %v\n", advErr)
 	} else {
@@ -165,20 +182,49 @@ func run(configPath string) {
 	apiServer.SetPairExchangeHandler(func(ctx context.Context, req api.PairExchangeRequest) (api.PairExchangeResponse, error) {
 		return apicontrol.HandlePairExchange(configPath, req)
 	})
+	localPairing, localErr := link.ListenLocalDirectory("")
+	if localErr != nil {
+		structuredlog.Event("error", "pairing.local.listen", "local pairing lookup is unavailable", map[string]any{"error": localErr.Error()})
+	}
 	pairService := link.NewService(nil)
 	pairService.SetDirectoryFactory(func() (link.Directory, string, error) {
 		current := cfg
 		if loaded, loadErr := config.LoadFile(configPath); loadErr == nil {
 			current = loaded
 		}
-		router, err := discovery.NewLibp2pDHTRouter(context.Background(), discovery.Libp2pDHTRouterOptions{NodeID: current.NodeName})
+		dirs := []link.Directory{}
+		if localPairing != nil {
+			dirs = append(dirs, localPairing)
+		}
+		router, err := discovery.NewLibp2pDHTRouter(context.Background(), discovery.Libp2pDHTRouterOptions{NodeID: current.NodeName, AutoRelay: true})
 		if err != nil {
-			return nil, "", err
+			structuredlog.Event("error", "pairing.dht.start", "pairing DHT router did not start", map[string]any{"error": err.Error()})
+			if len(dirs) == 0 {
+				return nil, "", err
+			}
+			return link.NewMultiDirectory(dirs...), "", nil
 		}
 		router.SetBootstrapPeers(current.Discovery.DHTBootstrapPeers)
-		return link.NewDHTDirectory(router), router.PeerID(), nil
+		go func() {
+			bootCtx, bootCancel := context.WithTimeout(context.Background(), 40*time.Second)
+			defer bootCancel()
+			if bootErr := router.EnsureBootstrapped(bootCtx); bootErr != nil {
+				structuredlog.Event("error", "pairing.dht.bootstrap", "pairing DHT bootstrap failed", map[string]any{"error": bootErr.Error()})
+			}
+		}()
+		dirs = append(dirs, link.NewDHTDirectory(router))
+		return link.NewMultiDirectory(dirs...), router.PeerID(), nil
 	})
 	apicontrol.SetLinkService(pairService)
+	go func() {
+		warmCtx, warmCancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer warmCancel()
+		if warmErr := pairService.Warmup(warmCtx); warmErr != nil {
+			structuredlog.Event("warn", "pairing.dht.warmup", "pairing lookup did not finish starting", map[string]any{"error": warmErr.Error()})
+		} else {
+			structuredlog.Event("info", "pairing.dht.warmup", "pairing lookup is ready", nil)
+		}
+	}()
 	apiServer.SetPairCodeHandler(func(ctx context.Context) (api.PairCodeResponse, error) {
 		return apicontrol.HandleIssuePairCode(configPath)
 	})

@@ -28,6 +28,10 @@ async function importOn(page, packageText, expected) {
   await page.getByTestId('pairing-import-text').fill(packageText);
   await page.getByTestId('parse-pairing').click();
   await page.getByTestId('import-pairing').click();
+  if (expected === 'paired') {
+    await expect(page.getByText(/identity import accepted|already paired/i)).toBeVisible();
+    return;
+  }
   await expect(page.getByText(expected, { exact: false })).toBeVisible();
 }
 
@@ -102,8 +106,17 @@ async function showDefaultPairingCode(page, service) {
   const cfg = JSON.parse(raw);
   const peers = cfg.discovery && cfg.discovery.dhtBootstrapPeers;
   expect(peers).toEqual(['/dnsaddr/bootstrap.libp2p.io']);
+  expect(cfg.discovery && cfg.discovery.dht).toBe(true);
+  expect(raw).not.toMatch(/"dht": false/);
   await page.getByTestId('nav-peers').click();
+  const posts = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/pair-code') {
+      posts.push(request.url());
+    }
+  });
   await page.getByTestId('show-pairing-code').click();
+  await expect.poll(() => posts.length, { timeout: 15000 }).toBeGreaterThan(0);
   const code = page.getByTestId('pairing-code');
   await expect.poll(async () => {
     if (await code.count() === 1 && await code.isVisible()) {
@@ -115,6 +128,25 @@ async function showDefaultPairingCode(page, service) {
   await expect(code).toContainText(/[A-Z0-9]{4}(-[A-Z0-9]{4}){3}/);
   await expect(page.getByTestId('pairing-message')).toContainText('is ready');
   await expect(page.getByTestId('pairing-message')).not.toContainText('invalid p2p multiaddr');
+  return (await code.innerText()).match(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/)?.[0];
+}
+
+async function redeemPairingCode(page, code) {
+  await page.getByTestId('nav-peers').click();
+  await page.getByTestId('pairing-code-input').fill(code);
+  const posts = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/pair-code/redeem') {
+      posts.push(request.url());
+    }
+  });
+  await page.getByTestId('redeem-pairing-code').click();
+  await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(0);
+  await expect(page.getByTestId('pairing-message')).toContainText(/paired by code/i);
+  await page.getByTestId('redeem-pairing-code').click();
+  await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(1);
+  await expect(page.getByTestId('pairing-message')).toContainText(/already used|not found|was not found/i, { timeout: 30000 });
+  await expect(page.getByTestId('pairing-message')).not.toContainText(/paired by code/i);
 }
 
 function compose(args, capture = false) {
@@ -148,13 +180,15 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await expect(b.getByTestId('device-node-name')).toHaveText('fse-b');
   await expect(a.locator('aside strong.connection-state').first()).toHaveText('Online');
   await expect(b.locator('aside strong.connection-state').first()).toHaveText('Online');
-  await showDefaultPairingCode(a, 'fse-a');
+  const pairingCode = await showDefaultPairingCode(a, 'fse-a');
+  expect(pairingCode).toMatch(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/);
+  await redeemPairingCode(b, pairingCode);
 
   compose(['exec', '-T', '-u', '0', 'fse-a', 'sh', '-c', 'mkdir -p /data/shared && chown -R 99:100 /data && chmod 777 /data /data/shared']);
   compose(['exec', '-T', '-u', '0', 'fse-b', 'sh', '-c', 'mkdir -p /data/shared && chown -R 99:100 /data && chmod 777 /data /data/shared']);
 
   const exported = await pairFrom(a);
-  await importOn(b, exported, 'identity import accepted');
+  await importOn(b, exported, 'paired');
   const reverse = await pairFrom(b);
   await importOn(a, reverse, 'already paired');
   await expect(a.getByText('peer-pair key pending')).toHaveCount(0);

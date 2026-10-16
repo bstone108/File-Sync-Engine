@@ -45,3 +45,8 @@ volumes:
   b-config:
   a-data:
   b-data:
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.28.0/24

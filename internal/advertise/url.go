@@ -2,6 +2,7 @@
 package advertise
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,6 +87,9 @@ func resolve(cfg config.Config, envOverride, detectedHost string, obs Observatio
 		if !HostReachable(candidate) {
 			continue
 		}
+		return Normalize(candidate, cfg)
+	}
+	if candidate, ok := publishedPortCandidate(detectedHost); ok && HostReachable(candidate) {
 		return Normalize(candidate, cfg)
 	}
 	for _, candidate := range observationURLs(cfg, obs) {
@@ -191,6 +195,26 @@ func PublishedAPIURLs(cfg config.Config) []string {
 	}
 	return out
 }
+
+// publishedPortCandidate is a detected LAN or Tailscale address on the host
+// port mapped to the API. Startup can learn a Tailscale address from the
+// local API when the container cannot see the tailscale interface.
+func publishedPortCandidate(detectedHost string) (string, bool) {
+	port := PublishedAPIPort()
+	if port <= 0 {
+		return "", false
+	}
+	host := strings.TrimSpace(detectedHost)
+	if host == "" || !HostReachable(host) {
+		host = SelectDetected(tailscaleIPs(context.Background()))
+	}
+	if host == "" || !HostReachable(host) {
+		return "", false
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), true
+}
+
+var tailscaleIPs = queryTailscaleLocalAPI
 
 // PublishedAPIPort reads FSE_PUBLISHED_API_PORT. Zero means unset or invalid.
 func PublishedAPIPort() int {

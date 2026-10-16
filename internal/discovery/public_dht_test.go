@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 )
 
 type recordingDHTRouter struct {
@@ -73,6 +74,31 @@ func TestPublicDHTSourceDeduplicatesAndIgnoresSelf(t *testing.T) {
 	}
 	if !reflect.DeepEqual(router.bootstrapPeers, []string{"/dnsaddr/bootstrap.libp2p.io"}) {
 		t.Fatalf("bootstrap peers = %+v", router.bootstrapPeers)
+	}
+}
+
+type stallingDHTRouter struct{}
+
+func (stallingDHTRouter) Bootstrap(ctx context.Context, _ []string) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (stallingDHTRouter) FindPeers(context.Context, string) ([]Peer, error) {
+	return nil, nil
+}
+
+func TestPublicDHTSourcePeersDoesNotBlockTheDaemonLoop(t *testing.T) {
+	previous := publicDHTPollTimeout
+	publicDHTPollTimeout = 30 * time.Millisecond
+	t.Cleanup(func() { publicDHTPollTimeout = previous })
+	source := NewPublicDHTSource(stallingDHTRouter{}, PublicDHTOptions{Namespace: "fse-test"})
+	started := time.Now()
+	if _, err := source.Peers(); err == nil {
+		t.Fatal("expected the stalled walk to stop")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Peers blocked for %s", elapsed)
 	}
 }
 

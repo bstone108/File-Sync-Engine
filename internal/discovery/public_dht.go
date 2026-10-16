@@ -4,7 +4,12 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"time"
 )
+
+// publicDHTPollTimeout keeps a discovery poll from holding the daemon loop.
+// Folder sync runs on that loop, so an unbounded DHT walk stalls file transfer.
+var publicDHTPollTimeout = 8 * time.Second
 
 const DefaultPublicDHTNamespace = "filesyncengine/v1"
 
@@ -33,7 +38,9 @@ func NewPublicDHTSource(router DHTRouter, options PublicDHTOptions) PublicDHTSou
 }
 
 func (s PublicDHTSource) Peers() ([]Peer, error) {
-	return s.PeersContext(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), publicDHTPollTimeout)
+	defer cancel()
+	return s.PeersContext(ctx)
 }
 
 func (s PublicDHTSource) PeersContext(ctx context.Context) ([]Peer, error) {

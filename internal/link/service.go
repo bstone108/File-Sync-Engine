@@ -21,14 +21,15 @@ type issuedCode struct {
 
 // Service issues and redeems short-lived single-use pairing codes.
 type Service struct {
-	dir    Directory
-	newDir func() (Directory, string, error)
-	mu     sync.Mutex
-	codes  map[string]*issuedCode
-	ttl    time.Duration
-	now    func() time.Time
-	peerID string
-	relays []string
+	dir      Directory
+	newDir   func() (Directory, string, error)
+	mu       sync.Mutex
+	createMu sync.Mutex
+	codes    map[string]*issuedCode
+	ttl      time.Duration
+	now      func() time.Time
+	peerID   string
+	relays   []string
 }
 
 func NewService(dir Directory) *Service {
@@ -229,6 +230,12 @@ func (s *Service) unpublishCode(ctx context.Context, code string) {
 	}
 }
 
+// Warmup builds the pairing directory before the first code is issued.
+func (s *Service) Warmup(ctx context.Context) error {
+	_, err := s.directory(ctx)
+	return err
+}
+
 func (s *Service) directory(ctx context.Context) (Directory, error) {
 	s.mu.Lock()
 	dir := s.dir
@@ -239,6 +246,14 @@ func (s *Service) directory(ctx context.Context) (Directory, error) {
 	}
 	if factory == nil {
 		return nil, errors.New("pairing codes require DHT discovery; paste a pairing package instead")
+	}
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	s.mu.Lock()
+	dir = s.dir
+	s.mu.Unlock()
+	if dir != nil {
+		return dir, nil
 	}
 	created, peerID, err := factory()
 	if err != nil {
