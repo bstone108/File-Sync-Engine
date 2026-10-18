@@ -2258,13 +2258,19 @@ func (s *Server) handleFolderBlock(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data, status, err := readFileBlock(file, info.Size(), index, blockSize, subIndex, subSize)
+	offset, length, status, err := blockSpan(info.Size(), index, blockSize, subIndex, subSize)
 	if err != nil {
 		http.Error(w, err.Error(), status)
 		return
 	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	_, _ = w.Write(data)
+	if _, err := io.CopyBuffer(w, io.LimitReader(file, length), make([]byte, 32<<10)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func (s *Server) handleFolderBlockSubhashes(w http.ResponseWriter, r *http.Request) {
@@ -2277,13 +2283,26 @@ func (s *Server) handleFolderBlockSubhashes(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	data, status, err := readFileBlock(file, info.Size(), index, blockSize, -1, 0)
+	offset, length, status, err := blockSpan(info.Size(), index, blockSize, -1, 0)
 	if err != nil {
 		http.Error(w, err.Error(), status)
 		return
 	}
+	if length/int64(subSize) > 4096 {
+		http.Error(w, "subSize is too small for this block", http.StatusBadRequest)
+		return
+	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	// Hashes are computed for this response only. Nothing is written down.
-	writeJSON(w, map[string]any{"hashes": foldershare.SubHashes(data, subSize)})
+	hashes, err := foldershare.HashSubs(io.LimitReader(file, length), length, subSize)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"hashes": hashes})
 }
 
 func (s *Server) openFolderQueryFile(w http.ResponseWriter, r *http.Request) (http.File, os.FileInfo, bool) {
@@ -2345,21 +2364,21 @@ func blockQuery(w http.ResponseWriter, r *http.Request, requireSubSize bool) (in
 	return index, blockSize, subIndex, subSize, true
 }
 
-func readFileBlock(file io.ReadSeeker, fileSize int64, index, blockSize, subIndex, subSize int) ([]byte, int, error) {
+func blockSpan(fileSize int64, index, blockSize, subIndex, subSize int) (offset, length int64, status int, err error) {
 	blockOffset := int64(index) * int64(blockSize)
 	if blockOffset < 0 || blockOffset >= fileSize {
-		return nil, http.StatusRequestedRangeNotSatisfiable, fmt.Errorf("block index out of range")
+		return 0, 0, http.StatusRequestedRangeNotSatisfiable, fmt.Errorf("block index out of range")
 	}
 	blockLen := fileSize - blockOffset
 	if blockLen > int64(blockSize) {
 		blockLen = int64(blockSize)
 	}
-	offset := blockOffset
-	length := blockLen
+	offset = blockOffset
+	length = blockLen
 	if subIndex >= 0 {
 		rel := int64(subIndex) * int64(subSize)
 		if rel >= blockLen {
-			return nil, http.StatusRequestedRangeNotSatisfiable, fmt.Errorf("sub index out of range")
+			return 0, 0, http.StatusRequestedRangeNotSatisfiable, fmt.Errorf("sub index out of range")
 		}
 		offset = blockOffset + rel
 		length = int64(subSize)
@@ -2367,14 +2386,10 @@ func readFileBlock(file io.ReadSeeker, fileSize int64, index, blockSize, subInde
 			length = blockLen - rel
 		}
 	}
-	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return nil, http.StatusBadRequest, err
+	if length <= 0 {
+		return 0, 0, http.StatusRequestedRangeNotSatisfiable, fmt.Errorf("empty block")
 	}
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(file, buf); err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	return buf, http.StatusOK, nil
+	return offset, length, http.StatusOK, nil
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

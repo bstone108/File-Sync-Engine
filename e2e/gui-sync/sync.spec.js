@@ -11,12 +11,17 @@ async function expectConnectedEngine(page) {
   await expect(button.locator('.host-status-metrics')).not.toContainText('unknown');
 }
 
+async function clickClearOfSidebar(locator) {
+  await locator.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' }));
+  await locator.click();
+}
+
 async function pairFrom(page) {
   await page.getByTestId('nav-peers').click();
   await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
   await expect(page.getByTestId('pairing-reachable-url')).toHaveCount(0);
   await expect(page.getByTestId('pairing-advertise-url')).toContainText('advertises');
-  await page.getByTestId('generate-pairing').click();
+  await clickClearOfSidebar(page.getByTestId('generate-pairing'));
   const text = page.getByTestId('pairing-export-text');
   await expect(text).toBeVisible();
   const value = await text.inputValue();
@@ -33,8 +38,8 @@ async function importOn(page, packageText, expected) {
   await page.getByTestId('nav-peers').click();
   await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
   await page.getByTestId('pairing-import-text').fill(packageText);
-  await page.getByTestId('parse-pairing').click();
-  await page.getByTestId('import-pairing').click();
+  await clickClearOfSidebar(page.getByTestId('parse-pairing'));
+  await clickClearOfSidebar(page.getByTestId('import-pairing'));
   if (expected === 'paired') {
     await expect(page.getByText(/identity import accepted|already paired/i)).toBeVisible();
     return;

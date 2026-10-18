@@ -126,22 +126,50 @@ func blocksFromBytes(payload []byte) []FileBlock {
 // SubHashes splits data into subSize pieces and returns each SHA-256 in hex.
 // Callers compute this on the fly. The results are not stored.
 func SubHashes(data []byte, subSize int) []string {
+	hashes, err := HashSubs(bytes.NewReader(data), int64(len(data)), subSize)
+	if err != nil {
+		return nil
+	}
+	return hashes
+}
+
+// HashSubs hashes n bytes from r in subSize pieces using a fixed read buffer.
+// The hashes are for the in-flight response only.
+func HashSubs(r io.Reader, n int64, subSize int) ([]string, error) {
+	if n < 0 {
+		return nil, fmt.Errorf("negative length")
+	}
+	if n == 0 {
+		return nil, nil
+	}
 	if subSize <= 0 {
 		subSize = SubBlockSize
 	}
-	if len(data) == 0 {
-		return nil
-	}
-	out := make([]string, 0, (len(data)+subSize-1)/subSize)
-	for offset := 0; offset < len(data); offset += subSize {
-		end := offset + subSize
-		if end > len(data) {
-			end = len(data)
+	buf := make([]byte, 32<<10)
+	var out []string
+	remain := n
+	for remain > 0 {
+		take := int64(subSize)
+		if take > remain {
+			take = remain
 		}
-		sum := sha256.Sum256(data[offset:end])
-		out = append(out, hex.EncodeToString(sum[:]))
+		hash := sha256.New()
+		left := take
+		for left > 0 {
+			chunk := buf
+			if int64(len(chunk)) > left {
+				chunk = buf[:left]
+			}
+			if _, err := io.ReadFull(r, chunk); err != nil {
+				return nil, err
+			}
+			_, _ = hash.Write(chunk)
+			left -= int64(len(chunk))
+		}
+		out = append(out, hex.EncodeToString(hash.Sum(nil)))
+		remain -= take
 	}
-	return out
+	return out, nil
 }
 
 // preferSubRanges reports whether fetching the differing sub-ranges moves

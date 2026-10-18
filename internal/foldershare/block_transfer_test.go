@@ -340,6 +340,23 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+func TestHashSubsMatchesSliceHashes(t *testing.T) {
+	payload := bytes.Repeat([]byte("abcd"), 50)
+	want := SubHashes(payload[:100], 40)
+	got, err := HashSubs(bytes.NewReader(payload[:100]), 100, 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("hashes=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("hash %d = %s", i, got[i])
+		}
+	}
+}
+
 func TestPreferSubRangesKeepsSparseEdits(t *testing.T) {
 	if !preferSubRanges(SubBlockSize, TransferBlockSize, 1) {
 		t.Fatal("one sub-block should replace the whole block")
