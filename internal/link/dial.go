@@ -181,9 +181,14 @@ func dialStage(ctx context.Context, peer config.PeerConfig, endpoints []config.E
 		if err != nil {
 			return &url.Error{Op: "dial", URL: address, Err: err}
 		}
-		err = do(ctx, strings.TrimRight(address, "/"), client)
+		base := strings.TrimRight(address, "/")
+		err = do(ctx, base, client)
 		if err == nil {
-			rememberDial(peer.ID, strings.TrimRight(address, "/"), client)
+			// The pin matched and the peer answered, so this is no longer an
+			// unauthenticated DHT observation. A later save may keep it.
+			discovery.MarkAddressAuthenticated(address)
+			discovery.MarkAddressAuthenticated(base)
+			rememberDial(peer.ID, base, client)
 			return nil
 		}
 		if !failoverError(err) {

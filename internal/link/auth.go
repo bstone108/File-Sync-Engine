@@ -46,11 +46,17 @@ func KeepStoredEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
 }
 
 // keepDialEndpoint decides which saved addresses may carry an API or sync
-// request. A DHT lookup is never one of them. A literal public address has to
-// be authenticated. LAN, loopback, and hostnames configured for this peer stay
-// available so a paired node can be reached before the next signed profile.
+// request. A DHT lookup by itself is never one of them. The same URL inside a
+// signed profile is still dialed: the certificate pin authenticates it, and
+// hiding it forces the claim onto a relay that can time out after the code
+// is burned. A literal public address has to be authenticated. LAN, loopback,
+// and hostnames configured for this peer stay available so a paired node can
+// be reached before the next signed profile.
 func keepDialEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
-	if discovery.PendingDHTAddress(endpoint.Address) || !KeepPairedAddress(endpoint.Address, dhtPeerID) {
+	if !KeepPairedAddress(endpoint.Address, dhtPeerID) {
+		return false
+	}
+	if discovery.PendingDHTAddress(endpoint.Address) && !endpoint.Authenticated {
 		return false
 	}
 	if endpoint.Authenticated || !literalPublicHTTP(endpoint.Address) {
