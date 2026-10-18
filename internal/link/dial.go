@@ -174,9 +174,12 @@ func dialStage(ctx context.Context, peer config.PeerConfig, endpoints []config.E
 		if !keepDialEndpoint(endpoint, peer.DHTPeerID) {
 			return &url.Error{Op: "dial", URL: address, Err: errors.New("refusing to send application data before the peer is authenticated")}
 		}
+		if err := refuseUnencrypted(address); err != nil {
+			return err
+		}
 		client, err := verifyPinnedPeerCertificateClient(address, peer.APICertificateSHA256)
 		if err != nil {
-			return err
+			return &url.Error{Op: "dial", URL: address, Err: err}
 		}
 		err = do(ctx, strings.TrimRight(address, "/"), client)
 		if err == nil {
@@ -211,8 +214,12 @@ func PostSecret(ctx context.Context, peer config.PeerConfig, path string, payloa
 func postJSON(ctx context.Context, peer config.PeerConfig, path string, payload []byte, secret bool) ([]byte, string, error) {
 	var body []byte
 	used, err := Dial(ctx, peer, func(ctx context.Context, base string, client *http.Client) error {
-		if secret && !secretTransportAllowed(base) {
-			return &url.Error{Op: "post", URL: base, Err: errors.New("refusing to send a secret before the peer identity is verified")}
+		if !encryptedAppTransport(base) {
+			message := "refusing to send an unencrypted payload"
+			if secret {
+				message = "refusing to send a secret before the peer identity is verified"
+			}
+			return &url.Error{Op: "post", URL: base, Err: errors.New(message)}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
 		if err != nil {
@@ -245,7 +252,25 @@ func postJSON(ctx context.Context, peer config.PeerConfig, path string, payload 
 }
 
 func secretTransportAllowed(base string) bool {
-	return base == discovery.StreamBaseURL || strings.HasPrefix(base, "https://")
+	return encryptedAppTransport(base)
+}
+
+// encryptedAppTransport is an HTTPS connection pinned to the paired peer, or a
+// libp2p stream whose handshake already authenticated that peer. Plain HTTP is
+// not a path for application data.
+func encryptedAppTransport(base string) bool {
+	if base == discovery.StreamBaseURL {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(base)), "https://")
+}
+
+// refuseUnencrypted stops a dial before any application bytes are written.
+func refuseUnencrypted(address string) error {
+	if encryptedAppTransport(address) {
+		return nil
+	}
+	return &url.Error{Op: "dial", URL: address, Err: errors.New("refusing to send an unencrypted payload")}
 }
 
 func endpointRank(endpoint config.EndpointConfig) int {

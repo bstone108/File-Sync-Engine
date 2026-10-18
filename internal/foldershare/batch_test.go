@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -29,7 +28,7 @@ func TestSmallFilesShareOneBatchRequest(t *testing.T) {
 	}}}
 	Reconcile(remoteCfg, remoteConfig, nil)
 	var batches, blocks atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, pin := pinnedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sync-journal":
 			http.ServeFile(w, r, JournalPath(remoteConfig, "shared"))
@@ -60,7 +59,6 @@ func TestSmallFilesShareOneBatchRequest(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer server.Close()
 
 	localRoot := t.TempDir()
 	localConfig := filepath.Join(t.TempDir(), "local.json")
@@ -69,10 +67,7 @@ func TestSmallFilesShareOneBatchRequest(t *testing.T) {
 		Folders: []config.FolderConfig{{
 			ID: "shared", Path: localRoot, Enabled: true, Mode: config.ModeReceiveOnly,
 		}},
-		Peers: []config.PeerConfig{{
-			ID: "remote", APIKey: "secret",
-			Endpoints: []config.EndpointConfig{{Kind: "manual", Address: server.URL}},
-		}},
+		Peers: []config.PeerConfig{pinnedPeer("remote", "secret", server.URL, pin)},
 	}
 	Reconcile(localCfg, localConfig, nil)
 	if batches.Load() != 1 || blocks.Load() != 0 {

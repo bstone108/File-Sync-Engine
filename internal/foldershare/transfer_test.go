@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,7 +24,7 @@ func TestDownloadContinuesPastEightSecondBodyStall(t *testing.T) {
 
 	payload := bytes.Repeat([]byte{'A'}, 64)
 	journal := journalFor(t, "shared", "slow.bin", payload)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, pin := pinnedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sync-journal" {
 			http.ServeFile(w, r, journal)
 			return
@@ -40,10 +39,9 @@ func TestDownloadContinuesPastEightSecondBodyStall(t *testing.T) {
 		time.Sleep(9 * time.Second)
 		_, _ = w.Write(payload[1:])
 	}))
-	defer server.Close()
 
 	localRoot := t.TempDir()
-	Reconcile(localConfig(localRoot, server.URL), filepath.Join(t.TempDir(), "local.json"), nil)
+	Reconcile(localConfig(localRoot, server.URL, pin), filepath.Join(t.TempDir(), "local.json"), nil)
 	got, err := os.ReadFile(filepath.Join(localRoot, "slow.bin"))
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +59,7 @@ func TestReconcileContinuesAfterOneFileFails(t *testing.T) {
 	good := []byte("good-file")
 	bad := []byte("bad-file")
 	journal := journalForEntries(t, "shared", []Entry{entryFor("bad.txt", bad), entryFor("good.txt", good)})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, pin := pinnedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sync-journal":
 			http.ServeFile(w, r, journal)
@@ -75,10 +73,9 @@ func TestReconcileContinuesAfterOneFileFails(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer server.Close()
 
 	localRoot := t.TempDir()
-	Reconcile(localConfig(localRoot, server.URL), filepath.Join(t.TempDir(), "local.json"), nil)
+	Reconcile(localConfig(localRoot, server.URL, pin), filepath.Join(t.TempDir(), "local.json"), nil)
 	if _, err := os.Stat(filepath.Join(localRoot, "bad.txt")); !os.IsNotExist(err) {
 		t.Fatalf("failed file was stored: %v", err)
 	}
@@ -99,7 +96,7 @@ func TestDownloadResumesPartial(t *testing.T) {
 	payload := bytes.Repeat([]byte{'B'}, 32)
 	journal := journalFor(t, "shared", "part.bin", payload)
 	var hits int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, pin := pinnedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sync-journal" {
 			http.ServeFile(w, r, journal)
 			return
@@ -123,10 +120,9 @@ func TestDownloadResumesPartial(t *testing.T) {
 		}
 		serveBlockPayload(w, r, payload)
 	}))
-	defer server.Close()
 
 	localRoot := t.TempDir()
-	Reconcile(localConfig(localRoot, server.URL), filepath.Join(t.TempDir(), "local.json"), nil)
+	Reconcile(localConfig(localRoot, server.URL, pin), filepath.Join(t.TempDir(), "local.json"), nil)
 	got, err := os.ReadFile(filepath.Join(localRoot, "part.bin"))
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +142,7 @@ func TestSyncErrorsAreStructured(t *testing.T) {
 	}
 	t.Cleanup(structuredlog.Reset)
 
-	Reconcile(localConfig(t.TempDir(), "http://127.0.0.1:1"), filepath.Join(t.TempDir(), "local.json"), nil)
+	Reconcile(localConfig(t.TempDir(), "http://127.0.0.1:1", ""), filepath.Join(t.TempDir(), "local.json"), nil)
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
@@ -156,16 +152,13 @@ func TestSyncErrorsAreStructured(t *testing.T) {
 	}
 }
 
-func localConfig(root, peerURL string) config.Config {
+func localConfig(root, peerURL, pin string) config.Config {
 	return config.Config{
 		NodeName: "local",
 		Folders: []config.FolderConfig{{
 			ID: "shared", Path: root, Enabled: true, Mode: config.ModeSendReceive,
 		}},
-		Peers: []config.PeerConfig{{
-			ID: "remote", APIKey: "secret",
-			Endpoints: []config.EndpointConfig{{Kind: "manual", Address: peerURL}},
-		}},
+		Peers: []config.PeerConfig{pinnedPeer("remote", "secret", peerURL, pin)},
 	}
 }
 
