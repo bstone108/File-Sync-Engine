@@ -435,9 +435,11 @@ func watchConnections(n network.Network) {
 			}
 			stat := conn.Stat()
 			source := remoteReachabilitySource(0, conn.RemotePeer(), conn.LocalPeer(), stat.Direction == network.DirInbound, strings.Contains(addr, "p2p-circuit"), authenticatedDialbackPeer(conn.RemotePeer()))
-			if source != "" {
-				if router := routerFor(conn.LocalPeer()); router != nil {
+			if router := routerFor(conn.LocalPeer()); router != nil {
+				if source != "" {
 					router.notePublicReachability(source)
+				} else if conn.RemotePeer() != conn.LocalPeer() {
+					router.scheduleRemoteDialback()
 				}
 			}
 			path := nat.Classify(addr)

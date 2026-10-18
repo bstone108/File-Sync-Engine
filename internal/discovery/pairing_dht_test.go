@@ -119,6 +119,46 @@ func TestClientLookupDoesNotRequireBeingAServer(t *testing.T) {
 	}
 }
 
+func TestPrivateClientsPairOverTheConnectedPeer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	left, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "pair-left", DHTMode: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = left.Close() })
+	right, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "pair-right", DHTMode: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = right.Close() })
+	leftDial := loopbackDial(left)
+	rightDial := loopbackDial(right)
+	if leftDial == "" || rightDial == "" {
+		t.Fatal("missing loopback address")
+	}
+	left.SetBootstrapPeers([]string{rightDial})
+	right.SetBootstrapPeers([]string{leftDial})
+	namespace := "filesyncengine/pair/v1/private-clients"
+	payload := []byte("sealed-record")
+	if err := left.PublishPairing(ctx, namespace, payload); err != nil {
+		t.Fatal(err)
+	}
+	if servesKad(left) || servesKad(right) {
+		t.Fatal("a private peer connection promoted a DHT server")
+	}
+	got, err := right.LookupPairing(ctx, namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || string(got[0]) != string(payload) {
+		t.Fatalf("lookup = %q err %v", got, err)
+	}
+	if servesKad(left) || servesKad(right) {
+		t.Fatal("lookup promoted a private node")
+	}
+}
+
 func TestReachableAddressPromotesAutoModeToServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
