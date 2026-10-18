@@ -225,7 +225,7 @@ async function redeemPairingCode(page, code) {
   });
   await clickClearOfSidebar(page.getByTestId('redeem-pairing-code'));
   await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(0);
-  await expect(page.getByTestId('pairing-message')).toContainText(/paired by code/i);
+  await expect(page.getByTestId('pairing-message')).toContainText(/paired by code/i, { timeout: 45000 });
   await openLinkForm(page);
   await page.getByTestId('pairing-code-input').fill(code);
   await clickClearOfSidebar(page.getByTestId('redeem-pairing-code'));

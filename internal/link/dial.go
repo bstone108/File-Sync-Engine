@@ -273,6 +273,12 @@ func endpointRank(endpoint config.EndpointConfig) int {
 	if endpoint.Kind == "relay" {
 		return 4
 	}
+	// A peer-supplied hostname (Docker DNS, a LAN name) is a path that peer
+	// named. Try it before a public relay. A literal public IP stays later so
+	// an unforwarded address does not block hole-punch and relay.
+	if endpointHostIsName(endpoint.Address) {
+		return 0
+	}
 	hint := endpoint.NetworkHint
 	if hint == "" {
 		hint = string(routing.ClassifyEndpointNetwork(endpoint.Address))
@@ -289,6 +295,14 @@ func endpointRank(endpoint config.EndpointConfig) int {
 	default:
 		return 2
 	}
+}
+
+func endpointHostIsName(address string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(address))
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	return net.ParseIP(parsed.Hostname()) == nil
 }
 
 func isAPIAddress(address string) bool {
