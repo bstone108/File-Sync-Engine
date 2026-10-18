@@ -110,6 +110,7 @@ func TestCodeLookupRejectsHijackAndIsSingleUse(t *testing.T) {
 	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("second claim = %v", err)
 	}
+	service.waitUnpublish()
 	if _, err := service.Lookup(context.Background(), code); err == nil {
 		t.Fatal("unpublished code was still looked up")
 	}
@@ -293,6 +294,7 @@ func TestPairingCodeReplayIsRejectedWithinExpiry(t *testing.T) {
 	if accepted != 1 || rejected != 1 {
 		t.Fatalf("accepted %d rejected %d", accepted, rejected)
 	}
+	service.waitUnpublish()
 	if _, err := service.Lookup(context.Background(), code); err == nil {
 		t.Fatal("redeemed code is still published")
 	}
@@ -335,6 +337,78 @@ func TestExpiredPairingCodeIsUnpublished(t *testing.T) {
 	}
 	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("claim = %v", err)
+	}
+}
+
+type blockingUnpublishDirectory struct {
+	*MemoryDirectory
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *blockingUnpublishDirectory) Unpublish(ctx context.Context, namespace string) error {
+	select {
+	case <-d.entered:
+	default:
+		close(d.entered)
+	}
+	select {
+	case <-d.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return d.MemoryDirectory.Unpublish(ctx, namespace)
+}
+
+func TestClaimReturnsWhileUnpublishBlocks(t *testing.T) {
+	identity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := &blockingUnpublishDirectory{
+		MemoryDirectory: NewMemoryDirectory(),
+		entered:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		select {
+		case <-dir.release:
+		default:
+			close(dir.release)
+		}
+	})
+	service := NewService(dir)
+	code, _, err := service.Issue(context.Background(), identity, Profile{DiscoveryID: identity.PublicKey, NodeName: "node", Addresses: []Address{{Kind: "manual", Address: "http://10.0.0.2:22420"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemer, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := SignClaim(redeemer, ClaimRequest{Code: code, NodeName: "redeemer", APIKey: "redeemer-api", Profile: Profile{DiscoveryID: redeemer.PublicKey, NodeName: "redeemer"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := service.Claim(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("claim waited for unpublish: %s", elapsed)
+	}
+	select {
+	case <-dir.entered:
+	case <-time.After(time.Second):
+		t.Fatal("unpublish did not start")
+	}
+	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("second claim = %v", err)
+	}
+	close(dir.release)
+	service.waitUnpublish()
+	if _, err := service.Lookup(context.Background(), code); err == nil {
+		t.Fatal("code stayed published after unpublish")
 	}
 }
 

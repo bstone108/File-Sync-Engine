@@ -5,11 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -138,6 +142,165 @@ func TestPairingCodeLookupSkipsHijackAndFailsOver(t *testing.T) {
 	}
 	if _, err := HandleRedeemPairCode(context.Background(), redeemerPath, api.PairCodeRedeemRequest{Code: code}); err == nil {
 		t.Fatal("used code was redeemed again")
+	}
+}
+
+func TestPairCodeClaimDoesNotWaitForTailscaleOrRelays(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	publisherKey, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemerKey, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisherDir := t.TempDir()
+	publisherPath := filepath.Join(publisherDir, "config.json")
+	if err := writeIdentityConfig(publisherPath, "publisher", publisherKey, "publisher-api"); err != nil {
+		t.Fatal(err)
+	}
+	service := link.NewService(link.NewMemoryDirectory())
+	service.SetPeerID("12D3KooWpublisher")
+	SetLinkService(service)
+	t.Cleanup(func() { SetLinkService(link.NewService(link.UnavailableDirectory{})) })
+	code, _, err := service.Issue(context.Background(), publisherKey, link.Profile{
+		DiscoveryID: publisherKey.PublicKey,
+		NodeName:    "publisher",
+		Addresses:   []link.Address{{Kind: "manual", Address: "https://publisher.example:22420", NetworkHint: "local"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := link.SignClaim(redeemerKey, link.ClaimRequest{
+		Code:     code,
+		NodeName: "redeemer",
+		APIKey:   "redeemer-api",
+		Profile:  link.Profile{DiscoveryID: redeemerKey.PublicKey, NodeName: "redeemer", Addresses: []link.Address{{Kind: "manual", Address: "https://redeemer.example:22420"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevTail := claimTailscale
+	prevRelays := claimRelays
+	claimTailscale = func(context.Context) []string {
+		<-release
+		return []string{"100.64.0.8"}
+	}
+	claimRelays = func() []string {
+		<-release
+		return []string{"/ip4/203.0.113.8/tcp/4001/p2p/12D3KooWrelay"}
+	}
+	t.Cleanup(func() {
+		claimTailscale = prevTail
+		claimRelays = prevRelays
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		response, claimErr := HandlePairCodeClaim(publisherPath, claim)
+		if claimErr == nil && response.APIKey != "publisher-api" {
+			claimErr = errors.New("claim response missing publisher api key")
+		}
+		done <- claimErr
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("claim waited for tailscale or relay addresses")
+	}
+}
+
+func TestConcurrentRedeemUsesOneClaim(t *testing.T) {
+	publisherKey, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemerKey, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisherDir := t.TempDir()
+	publisherPath := filepath.Join(publisherDir, "config.json")
+	if err := writeIdentityConfig(publisherPath, "publisher", publisherKey, "publisher-api"); err != nil {
+		t.Fatal(err)
+	}
+	redeemerDir := t.TempDir()
+	redeemerPath := filepath.Join(redeemerDir, "config.json")
+	if err := writeIdentityConfig(redeemerPath, "redeemer", redeemerKey, "redeemer-api"); err != nil {
+		t.Fatal(err)
+	}
+	directory := link.NewMemoryDirectory()
+	service := link.NewService(directory)
+	service.SetPeerID("12D3KooWpublisher")
+	SetLinkService(service)
+	t.Cleanup(func() { SetLinkService(link.NewService(link.UnavailableDirectory{})) })
+
+	var claims atomic.Int32
+	var claimServer *httptest.Server
+	claimServer = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims.Add(1)
+		var claim link.ClaimRequest
+		if err := json.NewDecoder(r.Body).Decode(&claim); err != nil {
+			http.Error(w, "bad claim", http.StatusBadRequest)
+			return
+		}
+		response, err := HandlePairCodeClaim(publisherPath, claim)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusGone)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer claimServer.Close()
+	sum := sha256.Sum256(claimServer.Certificate().Raw)
+	pin := hex.EncodeToString(sum[:])
+	code, _, err := service.Issue(context.Background(), publisherKey, link.Profile{
+		DiscoveryID:       publisherKey.PublicKey,
+		NodeName:          "publisher",
+		CertificateSHA256: pin,
+		Addresses:         []link.Address{{Kind: "manual", Address: claimServer.URL, NetworkHint: "wan"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			response, redeemErr := HandleRedeemPairCode(context.Background(), redeemerPath, api.PairCodeRedeemRequest{Code: code})
+			if redeemErr != nil {
+				errs <- redeemErr
+				return
+			}
+			if response.Message != "paired by code" {
+				errs <- fmt.Errorf("redeem = %+v", response)
+				return
+			}
+			errs <- nil
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := claims.Load(); got != 1 {
+		t.Fatalf("claim requests = %d, want 1", got)
 	}
 }
 

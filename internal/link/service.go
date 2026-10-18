@@ -23,16 +23,17 @@ type issuedCode struct {
 
 // Service issues and redeems short-lived single-use pairing codes.
 type Service struct {
-	dir       Directory
-	newDir    func() (Directory, string, error)
-	mu        sync.Mutex
-	createMu  sync.Mutex
-	codes     map[string]*issuedCode
-	ttl       time.Duration
-	now       func() time.Time
-	peerID    string
-	relays    []string
-	storePath string
+	dir         Directory
+	newDir      func() (Directory, string, error)
+	mu          sync.Mutex
+	createMu    sync.Mutex
+	codes       map[string]*issuedCode
+	ttl         time.Duration
+	now         func() time.Time
+	peerID      string
+	relays      []string
+	storePath   string
+	unpublishWG sync.WaitGroup
 }
 
 func NewService(dir Directory) *Service {
@@ -191,8 +192,24 @@ func (s *Service) Claim(ctx context.Context, claim ClaimRequest) (Record, error)
 	record := issued.record
 	s.mu.Unlock()
 	s.saveCodes()
-	s.unpublishCode(ctx, normalized)
+	// The code is already burned, so a second claim is rejected. Unpublish
+	// only drops the directory copy. Doing that on the HTTP response lets a
+	// slow directory cancel the redeemer, which then hears "already used"
+	// from the next path.
+	s.unpublishWG.Add(1)
+	go func(code string) {
+		defer s.unpublishWG.Done()
+		s.unpublishCode(context.Background(), code)
+	}(normalized)
 	return record, nil
+}
+
+// waitUnpublish blocks until background unpublishes started by Claim finish.
+func (s *Service) waitUnpublish() {
+	if s == nil {
+		return
+	}
+	s.unpublishWG.Wait()
 }
 
 // Sweep unpublishes codes that were redeemed or reached their expiry.

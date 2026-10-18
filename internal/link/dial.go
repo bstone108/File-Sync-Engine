@@ -109,9 +109,9 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 			continue
 		}
 		tried += len(stage)
-		stageCtx, cancel := contextForEarlierStage(ctx)
-		used, path, err := dialStage(stageCtx, peer, stage, do)
-		cancel()
+		// One in-flight claim uses the caller's budget. Cancelling it early
+		// burns the pairing code and the next path only hears "already used".
+		used, path, err := dialStage(ctx, peer, stage, do)
 		if err == nil {
 			discovery.NotePeerReachable(peer.ID)
 			nat.DefaultPaths.Observe(peer.ID, used, path)
@@ -148,31 +148,6 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 		last = fmt.Errorf("%s; %w", earlier, last)
 	}
 	return "", last
-}
-
-// contextForEarlierStage keeps a short caller budget from being spent entirely
-// on one HTTPS dial. Claim and redeem use about 15s. A blackholed address has
-// to fail while there is still time to open the direct libp2p stream.
-func contextForEarlierStage(ctx context.Context) (context.Context, context.CancelFunc) {
-	if ctx == nil {
-		return context.Background(), func() {}
-	}
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return ctx, func() {}
-	}
-	remaining := time.Until(deadline)
-	if remaining > 20*time.Second || remaining <= 0 {
-		return ctx, func() {}
-	}
-	budget := remaining / 3
-	if budget < time.Second {
-		return ctx, func() {}
-	}
-	if budget > 4*time.Second {
-		budget = 4 * time.Second
-	}
-	return context.WithTimeout(ctx, budget)
 }
 
 // libp2pStage is tried after saved LAN/Tailscale addresses and learned LAN
