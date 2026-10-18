@@ -45,6 +45,7 @@ type meshState struct {
 	identityRelays    []string
 	configMembers     map[string]struct{}
 	connectionMembers map[string]struct{}
+	dialbackPeers     map[string]struct{}
 	portExposed       atomic.Bool
 	autonatPublic     atomic.Bool
 	selfEmit          atomic.Bool
@@ -55,6 +56,7 @@ var mesh = &meshState{helperEnabled: true, natEnabled: true, maxReservations: 32
 func init() {
 	mesh.configMembers = map[string]struct{}{}
 	mesh.connectionMembers = map[string]struct{}{}
+	mesh.dialbackPeers = map[string]struct{}{}
 	applyNATEnv()
 }
 
@@ -194,8 +196,14 @@ func RefreshIdentityMembers(cfg config.Config) {
 		}
 	}
 	var ids []string
+	var dialback []string
 	for _, peer := range cfg.Peers {
-		if peer.DHTPeerID == "" || peer.IdentityGroupID == "" {
+		if peer.DHTPeerID == "" {
+			continue
+		}
+		// A configured peer was stored after its session authenticated.
+		dialback = append(dialback, peer.DHTPeerID)
+		if peer.IdentityGroupID == "" {
 			continue
 		}
 		if _, ok := enabled[peer.IdentityGroupID]; !ok {
@@ -203,7 +211,39 @@ func RefreshIdentityMembers(cfg config.Config) {
 		}
 		ids = append(ids, peer.DHTPeerID)
 	}
+	setDialbackPeers(dialback)
 	SetIdentityMembers(ids)
+}
+
+func setDialbackPeers(ids []string) {
+	mesh.mu.Lock()
+	mesh.dialbackPeers = idSet(ids)
+	mesh.mu.Unlock()
+}
+
+func authenticatedDialbackPeer(id peer.ID) bool {
+	if id == "" {
+		return false
+	}
+	mesh.mu.Lock()
+	defer mesh.mu.Unlock()
+	_, ok := mesh.dialbackPeers[id.String()]
+	return ok
+}
+
+// remoteReachabilitySource reports why a node may become public.
+// A dial this process opens, including one that hairpins to its own public
+// address, is not a source. AutoNAT v2 means another node dialed an
+// advertised address. An authenticated peer's inbound direct connection is
+// the other confirmation. Relay circuits are not that dial.
+func remoteReachabilitySource(autonatReachable int, remote, local peer.ID, inbound, circuit, authenticated bool) string {
+	if autonatReachable > 0 {
+		return "autonat-v2"
+	}
+	if !inbound || circuit || remote == "" || remote == local || !authenticated {
+		return ""
+	}
+	return "authenticated-peer"
 }
 
 func idSet(ids []string) map[string]struct{} {
@@ -354,6 +394,35 @@ func noteReachability(public bool) {
 	mesh.autonatPublic.Store(false)
 }
 
+var (
+	routerRegMu  sync.Mutex
+	routerByPeer = map[peer.ID]*Libp2pDHTRouter{}
+)
+
+func registerRouter(r *Libp2pDHTRouter) {
+	if r == nil || r.host == nil {
+		return
+	}
+	routerRegMu.Lock()
+	routerByPeer[r.host.ID()] = r
+	routerRegMu.Unlock()
+}
+
+func unregisterRouter(r *Libp2pDHTRouter) {
+	if r == nil || r.host == nil {
+		return
+	}
+	routerRegMu.Lock()
+	delete(routerByPeer, r.host.ID())
+	routerRegMu.Unlock()
+}
+
+func routerFor(id peer.ID) *Libp2pDHTRouter {
+	routerRegMu.Lock()
+	defer routerRegMu.Unlock()
+	return routerByPeer[id]
+}
+
 func watchConnections(n network.Network) {
 	n.Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
@@ -364,8 +433,15 @@ func watchConnections(n network.Network) {
 			if conn.RemoteMultiaddr() != nil {
 				addr = conn.RemoteMultiaddr().String()
 			}
+			stat := conn.Stat()
+			source := remoteReachabilitySource(0, conn.RemotePeer(), conn.LocalPeer(), stat.Direction == network.DirInbound, strings.Contains(addr, "p2p-circuit"), authenticatedDialbackPeer(conn.RemotePeer()))
+			if source != "" {
+				if router := routerFor(conn.LocalPeer()); router != nil {
+					router.notePublicReachability(source)
+				}
+			}
 			path := nat.Classify(addr)
-			if conn.Stat().Limited {
+			if stat.Limited {
 				path = nat.PathLimitedRelay
 			}
 			if current, ok := nat.DefaultPaths.Active(conn.RemotePeer().String()); ok && current.Path == nat.PathHolePunched && path != nat.PathRelay {

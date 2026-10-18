@@ -53,6 +53,7 @@ type Libp2pDHTRouter struct {
 	modeReason     string
 	quicCM         *quicreuse.ConnManager
 	stopSTUN       func()
+	remotePublic   atomic.Bool
 }
 
 type Libp2pDHTRouterOptions struct {
@@ -63,8 +64,8 @@ type Libp2pDHTRouterOptions struct {
 	// host-reachable published port and the HTTPS API URL.
 	Announce bool
 	// DHTMode overrides the default. Empty stays auto: the node reserves a
-	// relay while it is private and answers queries only after a dial-back
-	// of the libp2p port. A published port is not that proof.
+	// relay while it is private and answers queries only after a remote
+	// peer dials it back. A self-dial, including NAT hairpin, is not that proof.
 	DHTMode string
 }
 
@@ -97,12 +98,10 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		libp2pOpts = append(libp2pOpts, libp2p.AddrsFactory(announcedAddrs))
 	}
 	// Traversal stays on unless discovery.nat.disabled or FSE_NAT_TRAVERSAL
-	// turns it off. Until a dial-back of the libp2p port succeeds, the host
-	// is forced private so AutoRelay reserves a relay. A published port or a
-	// LAN address is not that proof and must not skip the reservation.
-	verifiedPublic := false
+	// turns it off. The host stays private, and AutoRelay keeps a reservation,
+	// until AutoNAT v2 or an authenticated peer dials this node from outside.
+	// A dial this process makes to itself is not that confirmation.
 	if NATEnabled() {
-		verifiedPublic = verifiedPublicLibp2p()
 		libp2pOpts = append(libp2pOpts,
 			libp2p.EnableRelay(),
 			libp2p.EnableNATService(),
@@ -112,12 +111,8 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			libp2p.EnableAutoRelayWithPeerSource(func(relayCtx context.Context, num int) <-chan peer.AddrInfo {
 				return relayCandidates(relayCtx, num, &hostBox, &dhtBox)
 			}, autorelay.WithMinCandidates(1), autorelay.WithBootDelay(5*time.Second), autorelay.WithBackoff(30*time.Second), autorelay.WithMinInterval(2*time.Second)),
+			libp2p.ForceReachabilityPrivate(),
 		)
-		if verifiedPublic {
-			libp2pOpts = append(libp2pOpts, libp2p.ForceReachabilityPublic())
-		} else {
-			libp2pOpts = append(libp2pOpts, libp2p.ForceReachabilityPrivate())
-		}
 	}
 	h, err := libp2p.New(libp2pOpts...)
 	if err != nil {
@@ -144,9 +139,11 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
 	h.SetStreamHandler(protocol.ID(ObserveProtocol), router.handleObserve)
 	noteRouterHost(h)
+	registerRouter(router)
 	watchConnections(h.Network())
 	go watchReachability(h)
 	go watchAutoRelay(h)
+	go router.watchAutoNAT()
 	go router.republishWhenRelayReserved()
 	if opts.Announce {
 		structuredlog.Event("info", "libp2p.announce", "libp2p is advertising the published port", map[string]any{
@@ -158,10 +155,8 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			"addresses":     multiaddrStrings(h.Addrs()),
 		})
 	}
-	// A published port or a LAN address is not proof this process can be
-	// dialed from another home. Stay private so AutoRelay reserves a relay
-	// until a dial-back of the libp2p port succeeds.
-	if NATEnabled() && !verifiedPublic {
+	// Stay private so AutoRelay reserves a relay until a remote peer dials back.
+	if NATEnabled() {
 		router.notePrivateReachability()
 	}
 	return router, nil
@@ -330,25 +325,56 @@ func dhtModeName(mode dht.ModeOpt) string {
 	}
 }
 
-// notePublicReachability tells a ModeAuto node that its published address is
-// dialable, so it starts answering DHT queries. A node that already started
-// as a server does not need this.
-func (r *Libp2pDHTRouter) notePublicReachability() {
-	if r == nil || r.host == nil || r.dht == nil || r.dht.Mode() == dht.ModeServer {
+// notePublicReachability tells a ModeAuto node that a remote peer dialed it,
+// so it starts answering DHT queries. source is autonat-v2 or
+// authenticated-peer. A node that already started as a server does not need this.
+func (r *Libp2pDHTRouter) notePublicReachability(source string) {
+	if r == nil || r.host == nil || r.dht == nil || source == "" || r.dht.Mode() == dht.ModeServer {
 		return
 	}
+	if !r.remotePublic.CompareAndSwap(false, true) {
+		return
+	}
+	mesh.autonatPublic.Store(true)
 	markSelfReachabilityEmit()
 	emitter, err := r.host.EventBus().Emitter(new(event.EvtLocalReachabilityChanged))
 	if err != nil {
-		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error()})
+		r.remotePublic.Store(false)
+		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error(), "source": source})
 		return
 	}
 	defer emitter.Close()
 	if err := emitter.Emit(event.EvtLocalReachabilityChanged{Reachability: network.ReachabilityPublic}); err != nil {
-		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error()})
+		r.remotePublic.Store(false)
+		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error(), "source": source})
 		return
 	}
-	structuredlog.Event("info", "libp2p.dht.reachable", "reachable address is advertised to the DHT", map[string]any{"dhtModeReason": r.modeReason})
+	structuredlog.Event("info", "libp2p.dht.reachable", "a remote peer dialed this node", map[string]any{"dhtModeReason": r.modeReason, "source": source})
+}
+
+// watchAutoNAT promotes the node when AutoNAT v2 learns that another node
+// could dial an advertised address. The probe is not a connection this
+// process opened.
+func (r *Libp2pDHTRouter) watchAutoNAT() {
+	if r == nil || r.host == nil {
+		return
+	}
+	sub, err := r.host.EventBus().Subscribe(new(event.EvtHostReachableAddrsChanged))
+	if err != nil {
+		return
+	}
+	defer sub.Close()
+	for ev := range sub.Out() {
+		changed, ok := ev.(event.EvtHostReachableAddrsChanged)
+		if !ok {
+			continue
+		}
+		source := remoteReachabilitySource(len(changed.Reachable), "", r.host.ID(), false, false, false)
+		if source == "" {
+			continue
+		}
+		r.notePublicReachability(source)
+	}
 }
 
 // notePrivateReachability tells AutoRelay this node cannot be dialed directly,
@@ -665,6 +691,7 @@ func (r *Libp2pDHTRouter) Close() error {
 	if r == nil {
 		return nil
 	}
+	unregisterRouter(r)
 	if r.stopSTUN != nil {
 		r.stopSTUN()
 		r.stopSTUN = nil

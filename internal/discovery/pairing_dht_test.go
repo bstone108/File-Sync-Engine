@@ -130,7 +130,7 @@ func TestReachableAddressPromotesAutoModeToServer(t *testing.T) {
 	if servesKad(router) {
 		t.Fatal("auto mode started as a server")
 	}
-	router.notePublicReachability()
+	router.notePublicReachability("autonat-v2")
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && !servesKad(router) {
 		time.Sleep(20 * time.Millisecond)

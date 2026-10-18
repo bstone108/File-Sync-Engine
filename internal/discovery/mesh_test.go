@@ -79,6 +79,11 @@ func TestRefreshIdentityMembersUsesEnabledGroupsOnly(t *testing.T) {
 	if _, ok := mesh.configMembers["12D3KooWcode"]; ok {
 		t.Fatal("code-paired peer was treated as same identity")
 	}
+	for _, id := range []string{"12D3KooWfamily", "12D3KooWguest", "12D3KooWcode"} {
+		if _, ok := mesh.dialbackPeers[id]; !ok {
+			t.Fatalf("dial-back peers = %#v", mesh.dialbackPeers)
+		}
+	}
 }
 
 func TestHolePunchUpgradesRelayPath(t *testing.T) {
