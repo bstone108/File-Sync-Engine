@@ -551,6 +551,10 @@ type PairCodeHandler func(context.Context) (PairCodeResponse, error)
 type PairCodeRedeemHandler func(context.Context, PairCodeRedeemRequest) (PairCodeRedeemResponse, error)
 type PairCodeClaimHandler func(context.Context, link.ClaimRequest) (link.ClaimResponse, error)
 
+// PairCodeClaimCommit burns a pairing code after the claim response was written.
+// A dropped connection must not call it.
+type PairCodeClaimCommit func(link.ClaimRequest) error
+
 // PairCodeRecordHandler returns the sealed pairing payload for a DHT namespace.
 // The browser never calls it. Another engine uses it when the libp2p stream fails.
 type PairCodeRecordHandler func(context.Context, string) ([]byte, error)
@@ -774,6 +778,7 @@ type Server struct {
 	pairCodeHandler            PairCodeHandler
 	pairCodeRedeemHandler      PairCodeRedeemHandler
 	pairCodeClaimHandler       PairCodeClaimHandler
+	pairCodeClaimCommit        PairCodeClaimCommit
 	pairCodeRecordHandler      PairCodeRecordHandler
 	linkProfileHandler         LinkProfileHandler
 	linkProfilePushHandler     LinkProfilePushHandler
@@ -960,6 +965,12 @@ func (s *Server) SetPairCodeClaimHandler(handler PairCodeClaimHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pairCodeClaimHandler = handler
+}
+
+func (s *Server) SetPairCodeClaimCommit(commit PairCodeClaimCommit) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pairCodeClaimCommit = commit
 }
 
 func (s *Server) SetPairCodeRecordHandler(handler PairCodeRecordHandler) {
@@ -1978,10 +1989,24 @@ func (s *Server) handlePairCodeClaim(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(err.Error(), "already used") || strings.Contains(err.Error(), "expired") {
 			status = http.StatusGone
 		}
+		if strings.Contains(err.Error(), "reserved") {
+			status = http.StatusConflict
+		}
 		http.Error(w, err.Error(), status)
 		return
 	}
-	writeJSON(w, response)
+	if err := writeJSONResult(w, response); err != nil {
+		// The bytes did not leave. The reservation stays with this redeemer.
+		return
+	}
+	s.mu.RLock()
+	commit := s.pairCodeClaimCommit
+	s.mu.RUnlock()
+	if commit != nil {
+		// The response is already on the wire. A duplicate delivery from the
+		// same key can lose the burn race; the code is still single-use.
+		_ = commit(req)
+	}
 }
 
 func (s *Server) handlePairCodeRecord(w http.ResponseWriter, r *http.Request) {
@@ -2836,8 +2861,12 @@ func (s *Server) removeSubscriber(ch chan Event) {
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
+	_ = writeJSONResult(w, value)
+}
+
+func writeJSONResult(w http.ResponseWriter, value any) error {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(value)
+	return json.NewEncoder(w).Encode(value)
 }
 
 func writeSSE(w http.ResponseWriter, event Event) {

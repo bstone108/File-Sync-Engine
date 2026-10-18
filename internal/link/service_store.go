@@ -12,6 +12,7 @@ type storedCode struct {
 	Expires     time.Time `json:"expires"`
 	Used        bool      `json:"used"`
 	Unpublished bool      `json:"unpublished"`
+	ReservedBy  string    `json:"reservedBy,omitempty"`
 	Payload     []byte    `json:"payload"`
 	Record      Record    `json:"record"`
 }
@@ -67,6 +68,7 @@ func (s *Service) loadCodes() {
 			expires:     item.Expires,
 			used:        item.Used,
 			unpublished: item.Unpublished,
+			reservedBy:  item.ReservedBy,
 		}
 	}
 }
@@ -87,6 +89,7 @@ func (s *Service) saveCodes() {
 			Expires:     issued.expires,
 			Used:        issued.used,
 			Unpublished: issued.unpublished,
+			ReservedBy:  issued.reservedBy,
 			Payload:     append([]byte(nil), issued.payload...),
 			Record:      issued.record,
 		})

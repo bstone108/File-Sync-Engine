@@ -107,6 +107,9 @@ func TestCodeLookupRejectsHijackAndIsSingleUse(t *testing.T) {
 	if _, err := service.Claim(context.Background(), claim); err != nil {
 		t.Fatal(err)
 	}
+	if err := service.CommitClaim(code, redeemer.PublicKey); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("second claim = %v", err)
 	}
@@ -263,6 +266,19 @@ func TestPairingCodeReplayIsRejectedWithinExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	other, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherClaim, err := SignClaim(other, ClaimRequest{
+		Code:     code,
+		NodeName: "other",
+		APIKey:   "other-api",
+		Profile:  Profile{DiscoveryID: other.PublicKey, NodeName: "other"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
@@ -278,21 +294,16 @@ func TestPairingCodeReplayIsRejectedWithinExpiry(t *testing.T) {
 	close(start)
 	wg.Wait()
 	close(results)
-	accepted := 0
-	rejected := 0
 	for claimErr := range results {
-		if claimErr == nil {
-			accepted++
-			continue
+		if claimErr != nil {
+			t.Fatalf("same redeemer claim = %v", claimErr)
 		}
-		if strings.Contains(claimErr.Error(), "already used") {
-			rejected++
-			continue
-		}
-		t.Fatalf("claim = %v", claimErr)
 	}
-	if accepted != 1 || rejected != 1 {
-		t.Fatalf("accepted %d rejected %d", accepted, rejected)
+	if _, err := service.Claim(context.Background(), otherClaim); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("other redeemer = %v", err)
+	}
+	if err := service.CommitClaim(code, redeemer.PublicKey); err != nil {
+		t.Fatal(err)
 	}
 	service.waitUnpublish()
 	if _, err := service.Lookup(context.Background(), code); err == nil {
@@ -300,6 +311,9 @@ func TestPairingCodeReplayIsRejectedWithinExpiry(t *testing.T) {
 	}
 	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("replay = %v", err)
+	}
+	if _, err := service.Claim(context.Background(), otherClaim); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("other redeemer after burn = %v", err)
 	}
 }
 
@@ -390,12 +404,20 @@ func TestClaimReturnsWhileUnpublishBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
 	if _, err := service.Claim(context.Background(), claim); err != nil {
 		t.Fatal(err)
 	}
+	select {
+	case <-dir.entered:
+		t.Fatal("reserve unpublished the code")
+	case <-time.After(50 * time.Millisecond):
+	}
+	start := time.Now()
+	if err := service.CommitClaim(code, redeemer.PublicKey); err != nil {
+		t.Fatal(err)
+	}
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Fatalf("claim waited for unpublish: %s", elapsed)
+		t.Fatalf("commit waited for unpublish: %s", elapsed)
 	}
 	select {
 	case <-dir.entered:

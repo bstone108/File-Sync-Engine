@@ -66,12 +66,7 @@ func TestPairingCodeLookupSkipsHijackAndFailsOver(t *testing.T) {
 			http.Error(w, "bad claim", http.StatusBadRequest)
 			return
 		}
-		response, err := HandlePairCodeClaim(publisherPath, claim)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(response)
+		finishPairCodeClaim(w, publisherPath, claim)
 	}))
 	defer claimServer.Close()
 	sum := sha256.Sum256(claimServer.Certificate().Raw)
@@ -255,12 +250,7 @@ func TestConcurrentRedeemUsesOneClaim(t *testing.T) {
 			http.Error(w, "bad claim", http.StatusBadRequest)
 			return
 		}
-		response, err := HandlePairCodeClaim(publisherPath, claim)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusGone)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(response)
+		finishPairCodeClaim(w, publisherPath, claim)
 	}))
 	defer claimServer.Close()
 	sum := sha256.Sum256(claimServer.Certificate().Raw)
@@ -473,6 +463,25 @@ func TestLinkRefreshMergesReplacementAddress(t *testing.T) {
 	if !foundTailscale {
 		t.Fatalf("publisher did not learn the new address: %+v", publisherCfg.Peers[0].Endpoints)
 	}
+}
+
+func finishPairCodeClaim(w http.ResponseWriter, configPath string, claim link.ClaimRequest) {
+	response, err := HandlePairCodeClaim(configPath, claim)
+	if err != nil {
+		status := http.StatusUnauthorized
+		if strings.Contains(err.Error(), "already used") || strings.Contains(err.Error(), "expired") {
+			status = http.StatusGone
+		}
+		if strings.Contains(err.Error(), "reserved") {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		return
+	}
+	_ = CommitPairCodeClaim(claim)
 }
 
 func writeIdentityConfig(path, name string, identity peeridentity.Identity, apiKey string) error {

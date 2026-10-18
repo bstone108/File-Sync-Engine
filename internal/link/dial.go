@@ -109,8 +109,9 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 			continue
 		}
 		tried += len(stage)
-		// One in-flight claim uses the caller's budget. Cancelling it early
-		// burns the pairing code and the next path only hears "already used".
+		// The publisher holds the code for this redeemer until the response is
+		// written. Give that attempt the caller's budget instead of cancelling
+		// it to start another path.
 		used, path, err := dialStage(ctx, peer, stage, do)
 		if err == nil {
 			discovery.NotePeerReachable(peer.ID)

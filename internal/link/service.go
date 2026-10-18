@@ -19,6 +19,9 @@ type issuedCode struct {
 	expires     time.Time
 	used        bool
 	unpublished bool
+	// reservedBy is the redeemer discovery id that holds an in-flight claim.
+	// The code stays published until that claim's response is delivered.
+	reservedBy string
 }
 
 // Service issues and redeems short-lived single-use pairing codes.
@@ -157,9 +160,12 @@ func (s *Service) Lookup(ctx context.Context, code string) (Record, error) {
 	return Record{}, errors.New("pairing code was not found")
 }
 
-// Claim burns a code and returns the published record. The burn happens
-// before the record is returned, so a second claim is rejected even while
-// the code is still inside its expiry. An expired code is unpublished too.
+// Claim reserves a code for the redeemer's discovery id and returns the
+// published record. The code is not burned here. CommitClaim burns it after
+// the claim response is delivered. The same discovery id may claim again
+// while the reservation stands, so a dropped connection can retry. Any other
+// discovery id is rejected until the code expires. An expired code is
+// unpublished.
 func (s *Service) Claim(ctx context.Context, claim ClaimRequest) (Record, error) {
 	if err := VerifyClaim(claim); err != nil {
 		return Record{}, err
@@ -167,6 +173,9 @@ func (s *Service) Claim(ctx context.Context, claim ClaimRequest) (Record, error)
 	normalized := NormalizeCode(claim.Code)
 	if !validCode(normalized) {
 		return Record{}, errors.New("pairing code is invalid")
+	}
+	if claim.DiscoveryID == "" {
+		return Record{}, errors.New("pairing claim discovery id is invalid")
 	}
 	s.mu.Lock()
 	issued := s.codes[normalized]
@@ -188,20 +197,55 @@ func (s *Service) Claim(ctx context.Context, claim ClaimRequest) (Record, error)
 		s.mu.Unlock()
 		return Record{}, errors.New("pairing code already used")
 	}
-	issued.used = true
+	if issued.reservedBy != "" && issued.reservedBy != claim.DiscoveryID {
+		s.mu.Unlock()
+		return Record{}, errors.New("pairing code is reserved")
+	}
+	issued.reservedBy = claim.DiscoveryID
 	record := issued.record
 	s.mu.Unlock()
 	s.saveCodes()
-	// The code is already burned, so a second claim is rejected. Unpublish
-	// only drops the directory copy. Doing that on the HTTP response lets a
-	// slow directory cancel the redeemer, which then hears "already used"
-	// from the next path.
+	return record, nil
+}
+
+// CommitClaim burns a code after the claim response was written to the
+// reserving redeemer. A second commit, or a commit from any other discovery
+// id, does not succeed. Unpublish runs after the burn so a slow directory
+// cannot sit on the HTTP response.
+func (s *Service) CommitClaim(code, discoveryID string) error {
+	if s == nil {
+		return errors.New("pairing service is not configured")
+	}
+	normalized := NormalizeCode(code)
+	if !validCode(normalized) {
+		return errors.New("pairing code is invalid")
+	}
+	if discoveryID == "" {
+		return errors.New("pairing claim discovery id is invalid")
+	}
+	s.mu.Lock()
+	issued := s.codes[normalized]
+	if issued == nil {
+		s.mu.Unlock()
+		return errors.New("pairing code was not found")
+	}
+	if issued.used {
+		s.mu.Unlock()
+		return errors.New("pairing code already used")
+	}
+	if issued.reservedBy == "" || issued.reservedBy != discoveryID {
+		s.mu.Unlock()
+		return errors.New("pairing code is reserved")
+	}
+	issued.used = true
+	s.mu.Unlock()
+	s.saveCodes()
 	s.unpublishWG.Add(1)
 	go func(code string) {
 		defer s.unpublishWG.Done()
 		s.unpublishCode(context.Background(), code)
 	}(normalized)
-	return record, nil
+	return nil
 }
 
 // waitUnpublish blocks until background unpublishes started by Claim finish.

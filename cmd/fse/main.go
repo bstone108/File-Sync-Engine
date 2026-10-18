@@ -303,6 +303,9 @@ func run(configPath string) {
 	apiServer.SetPairCodeClaimHandler(func(ctx context.Context, req link.ClaimRequest) (link.ClaimResponse, error) {
 		return apicontrol.HandlePairCodeClaim(configPath, req)
 	})
+	apiServer.SetPairCodeClaimCommit(func(req link.ClaimRequest) error {
+		return apicontrol.CommitPairCodeClaim(req)
+	})
 	apiServer.SetPairCodeRecordHandler(func(ctx context.Context, namespace string) ([]byte, error) {
 		return apicontrol.ServedPairingPayload(namespace)
 	})
