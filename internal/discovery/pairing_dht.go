@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	corediscovery "github.com/libp2p/go-libp2p/core/discovery"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -67,12 +68,7 @@ func (r *Libp2pDHTRouter) PublishPairing(ctx context.Context, namespace string, 
 	// A connected peer that is still a DHT client cannot store a provider
 	// record. The record stays on this node and that peer fetches it. Server
 	// mode still waits for a remote dial-back.
-	if r.routingTableSize() == 0 {
-		if !r.hasConnectedBootstrapPeer() {
-			err := errors.New("pairing DHT bootstrap connected no peers")
-			structuredlog.Event("error", "pairing.publish.failed", "pairing DHT bootstrap failed", map[string]any{"namespace": namespace, "error": err.Error()})
-			return err
-		}
+	if r.routingTableSize() == 0 && r.connectedBootstrapIsClient() {
 		structuredlog.Event("info", "pairing.publish.ok", "pairing code is served to a connected peer", map[string]any{"namespace": namespace, "routingPeers": 0})
 		return nil
 	}
@@ -379,6 +375,23 @@ func (r *Libp2pDHTRouter) hasConnectedBootstrapPeer() bool {
 	return len(r.connectedBootstrapInfos()) > 0
 }
 
+// connectedBootstrapIsClient is true when every connected bootstrap peer is
+// still a DHT client. A peer that speaks the DHT protocol is left for the
+// routing table instead of the direct pairing stream.
+func (r *Libp2pDHTRouter) connectedBootstrapIsClient() bool {
+	infos := r.connectedBootstrapInfos()
+	if len(infos) == 0 {
+		return false
+	}
+	for _, info := range infos {
+		supported, err := r.host.Peerstore().SupportsProtocols(info.ID, dht.ProtocolDHT)
+		if err == nil && len(supported) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *Libp2pDHTRouter) connectedBootstrapInfos() []peer.AddrInfo {
 	if r == nil || r.host == nil {
 		return nil
@@ -446,7 +459,7 @@ func (r *Libp2pDHTRouter) finishBootstrap(wait chan struct{}) {
 			if r.shouldProbeRemoteDialback() {
 				r.tryRemoteDialback(bootCtx, nil)
 			}
-			if r.hasConnectedBootstrapPeer() {
+			if r.connectedBootstrapIsClient() {
 				err = nil
 				break
 			}
