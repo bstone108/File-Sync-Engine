@@ -8,7 +8,8 @@ import (
 
 func unverifiedPeerConfig() Config {
 	return Config{NodeName: "kiki", Peers: []PeerConfig{{
-		ID: "neko",
+		ID:        "neko",
+		DHTPeerID: "12D3KooWOurs",
 		Endpoints: []EndpointConfig{
 			{Kind: "manual", Address: "https://192.168.1.206:22420"},
 			{Kind: "manual", Address: "https://100.64.1.8:22420"},
@@ -22,36 +23,22 @@ func unverifiedPeerConfig() Config {
 			"/ip4/10.200.0.1/tcp/4001/p2p/12D3KooWRelay/p2p-circuit",
 			"https://198.51.100.8:22420",
 			"https://relay.example:22420",
+			"/ip4/10.200.0.1/tcp/4001/p2p/12D3KooWRelay/p2p-circuit/p2p/12D3KooWOurs",
 		},
 	}}}
 }
 
-func TestPurgeUnverifiedEndpointsDropsPublicLiterals(t *testing.T) {
+func TestPurgeUnverifiedEndpointsDropsAnythingUnverified(t *testing.T) {
 	cfg := unverifiedPeerConfig()
+	verifiedRelay := cfg.Peers[0].Relays[3]
 	got, changed := PurgeUnverifiedEndpoints(cfg)
 	if !changed {
-		t.Fatal("unverified public endpoints were kept")
+		t.Fatal("unverified endpoints were kept")
 	}
-	var addresses []string
-	for _, endpoint := range got.Peers[0].Endpoints {
-		addresses = append(addresses, endpoint.Address)
+	if len(got.Peers[0].Endpoints) != 1 || got.Peers[0].Endpoints[0].Address != "https://203.0.113.10:22420" || !got.Peers[0].Endpoints[0].Authenticated {
+		t.Fatalf("endpoints = %+v", got.Peers[0].Endpoints)
 	}
-	want := []string{
-		"https://192.168.1.206:22420",
-		"https://100.64.1.8:22420",
-		"https://[fd7a:115c:a1e0::1]:22420",
-		"https://files.example:22420",
-		"https://203.0.113.10:22420",
-	}
-	if len(addresses) != len(want) {
-		t.Fatalf("endpoints = %v", addresses)
-	}
-	for i := range want {
-		if addresses[i] != want[i] {
-			t.Fatalf("endpoints = %v", addresses)
-		}
-	}
-	if len(got.Peers[0].Relays) != 2 || got.Peers[0].Relays[0] != cfg.Peers[0].Relays[0] || got.Peers[0].Relays[1] != "https://relay.example:22420" {
+	if len(got.Peers[0].Relays) != 1 || got.Peers[0].Relays[0] != verifiedRelay {
 		t.Fatalf("relays = %v", got.Peers[0].Relays)
 	}
 
@@ -60,15 +47,15 @@ func TestPurgeUnverifiedEndpointsDropsPublicLiterals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Peers[0].Endpoints) != len(want) {
+	if len(stored.Peers[0].Endpoints) != 1 {
 		t.Fatalf("persisted endpoints = %+v", stored.Peers[0].Endpoints)
 	}
 	loaded, err := LoadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Peers[0].Endpoints) != len(want) {
-		t.Fatalf("loaded endpoints = %+v", loaded.Peers[0].Endpoints)
+	if len(loaded.Peers[0].Endpoints) != 1 || len(loaded.Peers[0].Relays) != 1 {
+		t.Fatalf("loaded endpoints = %+v relays = %v", loaded.Peers[0].Endpoints, loaded.Peers[0].Relays)
 	}
 	again, err := PersistUnverifiedEndpointPurge(path, loaded)
 	if err != nil {
@@ -78,7 +65,7 @@ func TestPurgeUnverifiedEndpointsDropsPublicLiterals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(again.Peers[0].Endpoints) != len(want) || info.Size() == 0 {
+	if len(again.Peers[0].Endpoints) != 1 || info.Size() == 0 {
 		t.Fatalf("second purge changed the file: %+v", again.Peers[0].Endpoints)
 	}
 }

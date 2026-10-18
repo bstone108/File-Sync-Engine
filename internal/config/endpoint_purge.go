@@ -2,21 +2,18 @@ package config
 
 import (
 	"encoding/json"
-	"net"
-	"net/url"
 	"strings"
 )
 
-// PurgeUnverifiedEndpoints removes API endpoints that were invented from a
-// relay, a DHT observation, or an upgrade leftover. A literal public address
-// stays only when the paired peer authenticated it. Hostnames, LAN, and
-// Tailscale addresses are kept.
+// PurgeUnverifiedEndpoints removes every peer endpoint the paired peer did
+// not authenticate, and every relay that is not a circuit to that peer.
+// DHT-learned, observed, and relay API URLs do not survive an upgrade.
 func PurgeUnverifiedEndpoints(cfg Config) (Config, bool) {
 	changed := false
 	for i := range cfg.Peers {
 		keptEndpoints := make([]EndpointConfig, 0, len(cfg.Peers[i].Endpoints))
 		for _, endpoint := range cfg.Peers[i].Endpoints {
-			if unverifiedPublicEndpoint(endpoint) {
+			if !endpoint.Authenticated {
 				changed = true
 				continue
 			}
@@ -27,7 +24,7 @@ func PurgeUnverifiedEndpoints(cfg Config) (Config, bool) {
 		}
 		keptRelays := make([]string, 0, len(cfg.Peers[i].Relays))
 		for _, relay := range cfg.Peers[i].Relays {
-			if strings.Contains(relay, "://") && literalPublicHost(relay) {
+			if unverifiedRelay(relay, cfg.Peers[i].DHTPeerID) {
 				changed = true
 				continue
 			}
@@ -40,8 +37,8 @@ func PurgeUnverifiedEndpoints(cfg Config) (Config, bool) {
 	return cfg, changed
 }
 
-// PersistUnverifiedEndpointPurge writes the config when unverified public
-// endpoints were removed.
+// PersistUnverifiedEndpointPurge writes the config when unverified endpoints
+// or relays were removed.
 func PersistUnverifiedEndpointPurge(path string, cfg Config) (Config, error) {
 	updated, changed := PurgeUnverifiedEndpoints(cfg)
 	if !changed {
@@ -57,41 +54,24 @@ func PersistUnverifiedEndpointPurge(path string, cfg Config) (Config, error) {
 	return updated, nil
 }
 
-func unverifiedPublicEndpoint(endpoint EndpointConfig) bool {
-	if endpoint.Authenticated || !literalPublicHost(endpoint.Address) {
-		return false
+func unverifiedRelay(relay, dhtPeerID string) bool {
+	relay = strings.TrimSpace(relay)
+	if relay == "" || strings.Contains(relay, "://") || !strings.HasPrefix(relay, "/") {
+		return true
 	}
-	return true
+	target := multiaddrRelayTarget(relay)
+	dhtPeerID = strings.TrimSpace(dhtPeerID)
+	return target == "" || dhtPeerID == "" || target != dhtPeerID
 }
 
-func literalPublicHost(address string) bool {
-	host := address
-	if strings.Contains(address, "://") {
-		parsed, err := url.Parse(address)
-		if err != nil {
-			return false
-		}
-		host = parsed.Hostname()
-	} else if splitHost, _, err := net.SplitHostPort(address); err == nil {
-		host = splitHost
+func multiaddrRelayTarget(address string) string {
+	parts := strings.Split(address, "/p2p/")
+	if len(parts) < 2 {
+		return ""
 	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() {
-		return false
+	last := parts[len(parts)-1]
+	if cut := strings.Index(last, "/"); cut >= 0 {
+		last = last[:cut]
 	}
-	if ip.IsGlobalUnicast() && isTailscale(ip) {
-		return false
-	}
-	return ip.IsGlobalUnicast()
-}
-
-func isTailscale(ip net.IP) bool {
-	ip = ip.To16()
-	if ip == nil {
-		return false
-	}
-	if v4 := ip.To4(); v4 != nil {
-		return v4[0] == 100 && v4[1]&0xc0 == 64
-	}
-	return len(ip) == 16 && ip[0] == 0xfd && ip[1] == 0x7a && ip[2] == 0x11 && ip[3] == 0x5c
+	return strings.TrimSpace(last)
 }

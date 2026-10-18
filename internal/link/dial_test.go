@@ -2,6 +2,8 @@ package link
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,7 +18,7 @@ func TestHostnameAPIIsTriedBeforeRelay(t *testing.T) {
 		DHTPeerID: "12D3KooWPeer",
 		Relays:    []string{"/ip4/10.200.0.1/tcp/4001/p2p/12D3KooWRelay/p2p-circuit"},
 		Endpoints: []config.EndpointConfig{{
-			Kind: "manual", Address: "https://fse-a:22420", NetworkHint: "wan",
+			Kind: "manual", Address: "https://fse-a:22420", NetworkHint: "wan", Authenticated: true,
 		}},
 	}
 	stages := endpointStages(peer)
@@ -71,7 +73,7 @@ func TestHostnameAPIIsTriedBeforeRelay(t *testing.T) {
 }
 
 func TestDialFailsOverWhenFirstAddressDies(t *testing.T) {
-	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	live := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/sync-journal" {
 			http.NotFound(w, r)
 			return
@@ -80,12 +82,15 @@ func TestDialFailsOverWhenFirstAddressDies(t *testing.T) {
 		_, _ = w.Write([]byte(`{"entries":[{"path":"notes.txt"}]}`))
 	}))
 	defer live.Close()
+	sum := sha256.Sum256(live.Certificate().Raw)
 	peer := config.PeerConfig{
-		ID:     "peer-a",
-		APIKey: "secret",
+		ID:                   "peer-a",
+		APIKey:               "secret",
+		IdentityPublicKey:    "ours",
+		APICertificateSHA256: hex.EncodeToString(sum[:]),
 		Endpoints: []config.EndpointConfig{
-			{Kind: "manual", Address: "http://127.0.0.1:1", NetworkHint: "local"},
-			{Kind: "manual", Address: live.URL, NetworkHint: "wan"},
+			{Kind: "manual", Address: "https://127.0.0.1:1", NetworkHint: "local", Authenticated: true},
+			{Kind: "manual", Address: live.URL, NetworkHint: "wan", Authenticated: true},
 		},
 	}
 	var used string

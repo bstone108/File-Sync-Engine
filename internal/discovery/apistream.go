@@ -194,9 +194,11 @@ func DialStream(ctx context.Context, peerID string, addrs []string) (StreamSessi
 	for _, addr := range parsed {
 		connectRelayHop(ctx, h, addr)
 	}
-	h.Peerstore().AddAddrs(pid, parsed, 2*time.Minute)
 	if err := h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: parsed}); err != nil {
 		return StreamSession{}, err
+	}
+	if !peerIDMatches(h, pid) {
+		return StreamSession{}, errPeerMismatch
 	}
 	path, remote := peerSessionPath(h, pid)
 	live := path
@@ -260,7 +262,22 @@ func connectRelayHop(ctx context.Context, h host.Host, addr ma.Multiaddr) {
 	_ = h.Connect(dialCtx, *info)
 }
 
-var errNoAPIHost = streamError("libp2p API host is not running")
+var (
+	errNoAPIHost    = streamError("libp2p API host is not running")
+	errPeerMismatch = streamError("peer id mismatch")
+)
+
+func peerIDMatches(h host.Host, pid peer.ID) bool {
+	if h == nil || pid == "" {
+		return false
+	}
+	for _, conn := range h.Network().ConnsToPeer(pid) {
+		if conn != nil && conn.RemotePeer() == pid {
+			return true
+		}
+	}
+	return false
+}
 
 type streamError string
 
@@ -333,6 +350,10 @@ func (t streamRoundTripper) exchange(ctx context.Context, req *http.Request) (*h
 	// One request per stream. The handler returns after this response, so a
 	// keep-alive read would block until the peer closed the stream.
 	outbound.Close = true
+	if stream.Conn() == nil || stream.Conn().RemotePeer() != t.peer {
+		_ = stream.Reset()
+		return nil, errPeerMismatch
+	}
 	if err := outbound.Write(stream); err != nil {
 		_ = stream.Reset()
 		return nil, err

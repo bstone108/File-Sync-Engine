@@ -176,8 +176,13 @@ func TestManualProfileKeepsLANTailscalePublicRelayAndPin(t *testing.T) {
 		t.Fatalf("relays = %+v", profile.Relays)
 	}
 	endpoints := profile.Endpoints("https://10.1.1.5:22420")
-	if len(endpoints) != 3 {
+	if len(endpoints) != 2 {
 		t.Fatalf("endpoints = %+v", endpoints)
+	}
+	for _, endpoint := range endpoints {
+		if endpoint.Kind == "relay" || strings.Contains(endpoint.Address, "relay.example") {
+			t.Fatalf("relay was stored as an endpoint: %+v", endpoints)
+		}
 	}
 	for _, endpoint := range endpoints {
 		if !endpoint.Authenticated {

@@ -25,7 +25,7 @@ func TestUpsertDropsEndpointsThatAreNotThePeer(t *testing.T) {
 		IdentityPublicKey: "remote-public",
 		DHTPeerID:         peerID,
 		Endpoints: []config.EndpointConfig{
-			{Kind: "manual", Address: "https://10.1.1.5:22420"},
+			{Kind: "manual", Address: "https://10.1.1.5:22420", Authenticated: true},
 			{Kind: "manual", Address: "http://3.133.83.75:4001"},
 			{Kind: "manual", Address: "/ip4/65.109.35.170/tcp/4001/p2p/12D3KooWOther"},
 			{Kind: "manual", Address: "/ip4/10.2.3.24/tcp/4001/p2p/12D3KooWDHT"},

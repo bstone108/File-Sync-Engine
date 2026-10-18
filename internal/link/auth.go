@@ -7,6 +7,7 @@ import (
 
 	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/discovery"
 )
 
 // KeepPairedAddress reports whether address is safe to store or dial for the
@@ -34,11 +35,22 @@ func KeepPairedAddress(address, dhtPeerID string) bool {
 	return target != "" && dhtPeerID != "" && target == dhtPeerID
 }
 
-// KeepStoredEndpoint keeps an address the paired peer authenticated.
-// A literal public IP is kept only when that flag is set, so a relay or
-// observed address cannot become an API endpoint.
+// KeepStoredEndpoint keeps an address only after the paired peer authenticated
+// it. DHT, relay, and observed addresses stay ephemeral until that happens,
+// and plain HTTP is never stored because it cannot pin the API certificate.
 func KeepStoredEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
-	if !KeepPairedAddress(endpoint.Address, dhtPeerID) {
+	if !endpoint.Authenticated || discovery.PendingDHTAddress(endpoint.Address) {
+		return false
+	}
+	return KeepPairedAddress(endpoint.Address, dhtPeerID)
+}
+
+// keepDialEndpoint decides which saved addresses may carry an API or sync
+// request. A DHT lookup is never one of them. A literal public address has to
+// be authenticated. LAN, loopback, and hostnames configured for this peer stay
+// available so a paired node can be reached before the next signed profile.
+func keepDialEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
+	if discovery.PendingDHTAddress(endpoint.Address) || !KeepPairedAddress(endpoint.Address, dhtPeerID) {
 		return false
 	}
 	if endpoint.Authenticated || !literalPublicHTTP(endpoint.Address) {
