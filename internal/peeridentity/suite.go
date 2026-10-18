@@ -535,11 +535,9 @@ func newSessionCipher(level int, classical, kemShared []byte, client, server Pee
 		ikm = append(ikm, kemShared...)
 	}
 	transcript := kdfTranscript(level, client, server)
-	// SHA-256 here digests the public handshake transcript into an HKDF salt.
-	// It is not a password hash. Argon2id stretches the shared secret when the suite asks for it.
-	// codeql[go/weak-sensitive-data-hashing]
-	salt := sha256.Sum256(transcript)
-	master, err := stretchMaster(params, ikm, salt[:], transcript)
+	// The public handshake transcript is the HKDF salt. HKDF mixes it; a separate SHA-256 is unnecessary.
+	salt := append([]byte("fse-hkdf-salt-v1|"), transcript...)
+	master, err := stretchMaster(params, ikm, salt, transcript)
 	if err != nil {
 		return SessionCipher{}, err
 	}
@@ -547,20 +545,20 @@ func newSessionCipher(level int, classical, kemShared []byte, client, server Pee
 	if !initiator {
 		sendDirection, recvDirection = "s2c", "c2s"
 	}
-	send, err := newTrafficAEAD(params, master, salt[:], sendDirection)
+	send, err := newTrafficAEAD(params, master, salt, sendDirection)
 	if err != nil {
 		return SessionCipher{}, err
 	}
-	recv, err := newTrafficAEAD(params, master, salt[:], recvDirection)
+	recv, err := newTrafficAEAD(params, master, salt, recvDirection)
 	if err != nil {
 		return SessionCipher{}, err
 	}
 	prefixLen := send.NonceSize() - 8
-	sendPrefix, err := hkdfBytes(params.hash, master, salt[:], []byte("fse-nonce-prefix-v1|"+sendDirection), prefixLen)
+	sendPrefix, err := hkdfBytes(params.hash, master, salt, []byte("fse-nonce-prefix-v1|"+sendDirection), prefixLen)
 	if err != nil {
 		return SessionCipher{}, err
 	}
-	recvPrefix, err := hkdfBytes(params.hash, master, salt[:], []byte("fse-nonce-prefix-v1|"+recvDirection), prefixLen)
+	recvPrefix, err := hkdfBytes(params.hash, master, salt, []byte("fse-nonce-prefix-v1|"+recvDirection), prefixLen)
 	if err != nil {
 		return SessionCipher{}, err
 	}
