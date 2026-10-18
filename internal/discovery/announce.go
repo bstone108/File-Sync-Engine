@@ -11,13 +11,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	libp2p "github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
 
 	"filesyncengine/internal/advertise"
-	"filesyncengine/internal/structuredlog"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
@@ -122,66 +120,6 @@ func SetAnnounceAPIURL(raw string) {
 	announceMu.Lock()
 	announceAPIURL = strings.TrimSpace(raw)
 	announceMu.Unlock()
-	promoteSharedRouterIfReachable()
-}
-
-// promoteSharedRouterIfReachable starts DHT server behavior only after a
-// dial-back of the libp2p port succeeds. A published port or a LAN address
-// is not that proof: marking the node public skips relay reservation.
-// The check at router creation runs before the socket is listening, so a
-// later call dials again instead of reusing that closed result.
-func promoteSharedRouterIfReachable() {
-	if tryPromoteSharedRouter() {
-		return
-	}
-	schedulePromoteRetry()
-}
-
-func tryPromoteSharedRouter() bool {
-	sharedMu.Lock()
-	router := sharedRouter
-	sharedMu.Unlock()
-	if router == nil {
-		return false
-	}
-	host, port, open := freshLibp2pDialback()
-	if host == "" {
-		return true
-	}
-	if !open {
-		structuredlog.Event("info", "libp2p.dht.dialback", "published libp2p port did not accept a dial-back", map[string]any{"host": host, "port": port})
-		return false
-	}
-	router.notePublicReachability()
-	return true
-}
-
-var (
-	promoteMu    sync.Mutex
-	promoteTimer *time.Timer
-)
-
-func schedulePromoteRetry() {
-	promoteMu.Lock()
-	defer promoteMu.Unlock()
-	if promoteTimer != nil {
-		return
-	}
-	promoteTimer = time.AfterFunc(2*time.Second, func() {
-		promoteMu.Lock()
-		promoteTimer = nil
-		promoteMu.Unlock()
-		tryPromoteSharedRouter()
-	})
-}
-
-func stopPromoteRetry() {
-	promoteMu.Lock()
-	if promoteTimer != nil {
-		promoteTimer.Stop()
-		promoteTimer = nil
-	}
-	promoteMu.Unlock()
 }
 
 func currentAnnounceAPIURL() string {
@@ -242,9 +180,6 @@ func ProductionRouter(ctx context.Context, nodeID string) (*Libp2pDHTRouter, err
 	}
 	sharedRouter = router
 	sharedMu.Unlock()
-	// The port is listening now. A dial-back that failed during construction
-	// is not the answer for the published hostname.
-	promoteSharedRouterIfReachable()
 	return router, nil
 }
 
@@ -285,7 +220,6 @@ func SharedListenAddrs() []string {
 
 // ResetSharedRouter closes the process router. Tests use it between cases.
 func ResetSharedRouter() {
-	stopPromoteRetry()
 	sharedMu.Lock()
 	defer sharedMu.Unlock()
 	if sharedRouter != nil {
@@ -352,40 +286,11 @@ func appendUniqueMultiaddr(base []ma.Multiaddr, extra ma.Multiaddr) []ma.Multiad
 	return append(base, extra)
 }
 
+// verifiedPublicLibp2p is always false. A dial this process places to its own
+// address, including NAT hairpin to its public IP, only proves the socket is
+// open. Another network has to dial it.
 func verifiedPublicLibp2p() bool {
-	_, _, open := freshLibp2pDialbackCached()
-	return open
-}
-
-func libp2pDialbackTarget() (string, int, bool) {
-	port := PublishedLibp2pPort(Libp2pListenPort())
-	host := advertiseHost(currentAnnounceAPIURL())
-	if host == "" || !advertise.NeedsPublicDialback(host) || !advertise.DialbackProvesRemoteReachability(host) {
-		return "", port, false
-	}
-	return host, port, true
-}
-
-// freshLibp2pDialbackCached reports the advertise host when a dial-back can
-// prove another network reached this process. The boolean is a cached result
-// and may be the pre-listen failure.
-func freshLibp2pDialbackCached() (string, int, bool) {
-	host, port, ok := libp2pDialbackTarget()
-	if !ok {
-		return "", port, false
-	}
-	return host, port, advertise.PublicDialbackOK(host, port)
-}
-
-// freshLibp2pDialback dials the advertise host again. Router construction
-// checks reachability before the socket exists, and that closed result must
-// not stick. A hostname that only resolves to this machine is not proof.
-func freshLibp2pDialback() (string, int, bool) {
-	host, port, ok := libp2pDialbackTarget()
-	if !ok {
-		return "", port, false
-	}
-	return host, port, advertise.ForcePublicDialback(host, port)
+	return false
 }
 
 func announceHosts() []string {

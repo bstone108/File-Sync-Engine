@@ -9,10 +9,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"filesyncengine/internal/advertise"
 )
+
+func TestSelfOrHairpinDialDoesNotPromote(t *testing.T) {
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	t.Cleanup(func() { advertise.SetReachabilityProbe(nil) })
+	SetAnnounceAPIURL("https://138.199.21.250:22420")
+	t.Cleanup(func() { SetAnnounceAPIURL("") })
+	if advertise.PublicDialbackOK("138.199.21.250", 22421) != true {
+		t.Fatal("hairpin probe did not succeed")
+	}
+	if verifiedPublicLibp2p() {
+		t.Fatal("hairpin dial to the public address promoted the node")
+	}
+	self := peer.ID("self")
+	other := peer.ID("kiki")
+	if remoteReachabilitySource(0, self, self, true, false, true) != "" {
+		t.Fatal("a connection from this node counted as a remote dial-back")
+	}
+	if remoteReachabilitySource(0, other, self, true, false, false) != "" {
+		t.Fatal("an unauthenticated inbound dial promoted the node")
+	}
+	if remoteReachabilitySource(0, other, self, false, false, true) != "" {
+		t.Fatal("an outbound dial promoted the node")
+	}
+	if remoteReachabilitySource(0, other, self, true, true, true) != "" {
+		t.Fatal("a relay circuit promoted the node")
+	}
+	if remoteReachabilitySource(1, "", self, false, false, false) != "autonat-v2" {
+		t.Fatal("AutoNAT v2 reachability was ignored")
+	}
+	if remoteReachabilitySource(0, other, self, true, false, true) != "authenticated-peer" {
+		t.Fatal("authenticated peer dial-back was ignored")
+	}
+}
 
 func TestLibp2pIdentityEnvUsesTheProvidedKey(t *testing.T) {
 	t.Setenv("FSE_LIBP2P_PRIVATE_KEY", "CAESQEJDZ+N7os4cl6ICoZdZTNr5kYkeVxBxnQHp0WD798pTTu5F0fYA5fqAt9f59jrDBJ8m/Z3zpnUPmtq5Di9ml+E=")

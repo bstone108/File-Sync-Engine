@@ -94,14 +94,22 @@ test('pairing works when only published ports connect the containers', async ({ 
   expect(probe('published-b', direct, 22427)).not.toBe('open');
   expect(probe('published-b', 'published-a', 22421)).toBe('open');
   expect(probe('published-a', 'published-b', 22423)).toBe('open');
+  // Hairpin to this container's own published name is open. That dial is not
+  // public reachability and must not promote the node.
+  expect(probe('published-a', 'published-a', 22421)).toBe('open');
 
   const logs = compose(['logs', 'published-a'], true);
   expect(logs).not.toContain('reachable API URL not configured');
   expect(logs).toContain('reachable API URL https://published-a:22420');
   await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('"listenPort":22421');
-  // A published port is not DHT server mode by itself. The node stays auto
-  // and answers queries only after a dial-back of that port succeeds.
+  // A published port is not DHT server mode. The node stays auto and private
+  // until AutoNAT v2 or an authenticated peer dials it back.
   await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('"dhtModeReason":"auto"');
+  await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('"event":"libp2p.dht.private"');
+  const reachability = engineLog('published-a').split('\n').filter((line) => line.includes('libp2p.dht.reachable') || line.includes('libp2p.dht.dialback'));
+  for (const line of reachability) {
+    expect(line).toMatch(/"source":"(autonat-v2|authenticated-peer)"/);
+  }
   await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('libp2p is advertising the published port');
   await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('/dns4/published-a/tcp/22421');
   await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU');
