@@ -394,3 +394,23 @@ func TestPublicDialbackIsSharedUntilTheProbeChanges(t *testing.T) {
 		t.Fatal("probe change did not dial again")
 	}
 }
+
+func TestForcePublicDialbackIgnoresACachedFailure(t *testing.T) {
+	t.Cleanup(resetObservations)
+	var calls atomic.Int32
+	SetReachabilityProbe(func(context.Context, string, int) error {
+		if calls.Add(1) == 1 {
+			return errors.New("closed")
+		}
+		return nil
+	})
+	if PublicDialbackOK("203.0.113.10", 22421) {
+		t.Fatal("first dial-back was open")
+	}
+	if ForcePublicDialback("203.0.113.10", 22421) != true {
+		t.Fatal("fresh dial-back reused the closed result")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("dials = %d, want 2", calls.Load())
+	}
+}

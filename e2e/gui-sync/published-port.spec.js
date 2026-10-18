@@ -99,7 +99,11 @@ test('pairing works when only published ports connect the containers', async ({ 
   expect(logs).not.toContain('reachable API URL not configured');
   expect(logs).toContain('reachable API URL https://published-a:22420');
   await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('"listenPort":22421');
-  await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('"dhtModeReason":"published-port"');
+  // A published port is not DHT server mode by itself. The node stays auto
+  // and answers queries only after a dial-back of that port succeeds.
+  await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('"dhtModeReason":"auto"');
+  await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('libp2p is advertising the published port');
+  await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('/dns4/published-a/tcp/22421');
   await expect.poll(() => engineLog('published-a'), { timeout: 20000 }).toContain('12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU');
 
   const a = await browser.newPage();
