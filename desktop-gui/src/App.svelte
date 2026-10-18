@@ -272,6 +272,7 @@
 
   let activeView: DesktopUIView = 'overview';
   let nodeOptionsOpen = false;
+  let pairingIssuePending = false;
 
   function pairingLooksFailed(message: string): boolean {
     return /not found|already used|expired|failed|unavailable|invalid|deadline|502|error/i.test(message)
@@ -859,15 +860,31 @@
     return `${instance.label} is offline. This engine relays onboarding over the mesh. ${instance.label} generates the pairing code and accepts the new device when it is online.`;
   }
 
+  function issuePairingIfPending() {
+    if (!pairingIssuePending || pairingLoading) {
+      return;
+    }
+    const target = selectedSidebarInstance;
+    if (!target || target.instanceId === 'local') {
+      return;
+    }
+    pairingIssuePending = false;
+    void showPairingCode();
+  }
+
+  $: selectedSidebarInstance, pairingIssuePending, issuePairingIfPending();
+
   async function showPairingCode() {
     const target = selectedSidebarInstance;
     if (pairingLoading) {
       return;
     }
     if (!target || target.instanceId === 'local') {
+      pairingIssuePending = true;
       pairingMessage = 'Wait for the linked instances to load, then choose the peer that should issue the code.';
       return;
     }
+    pairingIssuePending = false;
     pairingLoading = true;
     pairingMessage = 'Requesting a pairing code from this engine…';
     try {

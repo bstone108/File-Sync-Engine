@@ -174,6 +174,7 @@ async function showDefaultPairingCode(page, service) {
   if (await close.isVisible().catch(() => false)) {
     await close.click();
   }
+  await expect(page.getByTestId('onboarding-state')).toContainText('performs onboarding on this engine', { timeout: 30000 });
   await clickClearOfSidebar(page.getByTestId('add-peer-menu'));
   const posts = [];
   page.on('request', (request) => {
