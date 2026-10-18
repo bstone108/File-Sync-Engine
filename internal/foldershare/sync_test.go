@@ -31,8 +31,13 @@ func TestReconcileCopiesNewerRemoteRevision(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/sync-journal":
 			http.ServeFile(w, r, JournalPath(remoteConfig, "shared"))
-		case "/v1/folder-file":
-			http.ServeFile(w, r, filepath.Join(remoteRoot, "note.txt"))
+		case "/v1/folder-block":
+			data, err := os.ReadFile(filepath.Join(remoteRoot, r.URL.Query().Get("path")))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			serveBlockPayload(w, r, data)
 		default:
 			http.NotFound(w, r)
 		}

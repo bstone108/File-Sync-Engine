@@ -817,7 +817,9 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/stop", s.requireKey(s.handleStop))
 	mux.HandleFunc("/v1/folder-index", s.requireKey(s.handleFolderIndex))
 	mux.HandleFunc("/v1/folder-file", s.requireKey(s.handleFolderFile))
+	mux.HandleFunc("/v1/folder-manifest", s.requireKey(s.handleFolderManifest))
 	mux.HandleFunc("/v1/folder-block", s.requireKey(s.handleFolderBlock))
+	mux.HandleFunc("/v1/folder-block-subhashes", s.requireKey(s.handleFolderBlockSubhashes))
 	return mux
 }
 
@@ -2227,55 +2229,167 @@ func (s *Server) handleFolderFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 
-func (s *Server) handleFolderBlock(w http.ResponseWriter, r *http.Request) {
-	folder, ok := s.findFolder(r.URL.Query().Get("folder"))
+func (s *Server) handleFolderManifest(w http.ResponseWriter, r *http.Request) {
+	file, info, ok := s.openFolderQueryFile(w, r)
 	if !ok {
-		http.Error(w, "unknown folder", http.StatusNotFound)
-		return
-	}
-	file, ok, err := openSafeFolderFile(folder.Path, r.URL.Query().Get("path"))
-	if !ok {
-		http.Error(w, "invalid path", http.StatusBadRequest)
-		return
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	defer file.Close()
-	blockSize, err := strconv.Atoi(r.URL.Query().Get("blockSize"))
-	if err != nil || blockSize <= 0 {
-		http.Error(w, "invalid blockSize", http.StatusBadRequest)
-		return
-	}
-	index, err := strconv.Atoi(r.URL.Query().Get("index"))
-	if err != nil || index < 0 {
-		http.Error(w, "invalid index", http.StatusBadRequest)
-		return
-	}
-	info, err := file.Stat()
+	sum, size, blocks, err := foldershare.DescribeReader(file, info.Size())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	offset := int64(index * blockSize)
-	if offset >= info.Size() {
-		http.Error(w, "block index out of range", http.StatusRequestedRangeNotSatisfiable)
+	writeJSON(w, map[string]any{
+		"sha256":    sum,
+		"size":      size,
+		"blockSize": foldershare.TransferBlockSize,
+		"blocks":    blocks,
+	})
+}
+
+func (s *Server) handleFolderBlock(w http.ResponseWriter, r *http.Request) {
+	file, info, ok := s.openFolderQueryFile(w, r)
+	if !ok {
+		return
+	}
+	defer file.Close()
+	index, blockSize, subIndex, subSize, ok := blockQuery(w, r, false)
+	if !ok {
+		return
+	}
+	offset, length, status, err := blockSpan(info.Size(), index, blockSize, subIndex, subSize)
+	if err != nil {
+		http.Error(w, err.Error(), status)
 		return
 	}
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	remaining := info.Size() - offset
-	limit := int64(blockSize)
-	if remaining < limit {
-		limit = remaining
-	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	if _, err := io.CopyN(w, file, limit); err != nil {
+	if _, err := io.CopyBuffer(w, io.LimitReader(file, length), make([]byte, 32<<10)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) handleFolderBlockSubhashes(w http.ResponseWriter, r *http.Request) {
+	file, info, ok := s.openFolderQueryFile(w, r)
+	if !ok {
+		return
+	}
+	defer file.Close()
+	index, blockSize, _, subSize, ok := blockQuery(w, r, true)
+	if !ok {
+		return
+	}
+	offset, length, status, err := blockSpan(info.Size(), index, blockSize, -1, 0)
+	if err != nil {
+		http.Error(w, err.Error(), status)
+		return
+	}
+	if length/int64(subSize) > 4096 {
+		http.Error(w, "subSize is too small for this block", http.StatusBadRequest)
+		return
+	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Hashes are computed for this response only. Nothing is written down.
+	hashes, err := foldershare.HashSubs(io.LimitReader(file, length), length, subSize)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"hashes": hashes})
+}
+
+func (s *Server) openFolderQueryFile(w http.ResponseWriter, r *http.Request) (http.File, os.FileInfo, bool) {
+	folder, ok := s.findFolder(r.URL.Query().Get("folder"))
+	if !ok {
+		http.Error(w, "unknown folder", http.StatusNotFound)
+		return nil, nil, false
+	}
+	file, ok, err := openSafeFolderFile(folder.Path, r.URL.Query().Get("path"))
+	if !ok {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return nil, nil, false
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return nil, nil, false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, nil, false
+	}
+	if info.IsDir() {
+		file.Close()
+		http.Error(w, "not a file", http.StatusBadRequest)
+		return nil, nil, false
+	}
+	return file, info, true
+}
+
+func blockQuery(w http.ResponseWriter, r *http.Request, requireSubSize bool) (index, blockSize, subIndex, subSize int, ok bool) {
+	var err error
+	blockSize, err = strconv.Atoi(r.URL.Query().Get("blockSize"))
+	if err != nil || blockSize <= 0 || blockSize > 64<<20 {
+		http.Error(w, "invalid blockSize", http.StatusBadRequest)
+		return 0, 0, 0, 0, false
+	}
+	index, err = strconv.Atoi(r.URL.Query().Get("index"))
+	if err != nil || index < 0 {
+		http.Error(w, "invalid index", http.StatusBadRequest)
+		return 0, 0, 0, 0, false
+	}
+	subIndex = -1
+	if raw := r.URL.Query().Get("subSize"); raw != "" || requireSubSize {
+		subSize, err = strconv.Atoi(raw)
+		if err != nil || subSize <= 0 || subSize > blockSize {
+			http.Error(w, "invalid subSize", http.StatusBadRequest)
+			return 0, 0, 0, 0, false
+		}
+	}
+	if raw := r.URL.Query().Get("sub"); raw != "" {
+		subIndex, err = strconv.Atoi(raw)
+		if err != nil || subIndex < 0 || subSize <= 0 {
+			http.Error(w, "invalid sub", http.StatusBadRequest)
+			return 0, 0, 0, 0, false
+		}
+	}
+	return index, blockSize, subIndex, subSize, true
+}
+
+func blockSpan(fileSize int64, index, blockSize, subIndex, subSize int) (offset, length int64, status int, err error) {
+	blockOffset := int64(index) * int64(blockSize)
+	if blockOffset < 0 || blockOffset >= fileSize {
+		return 0, 0, http.StatusRequestedRangeNotSatisfiable, fmt.Errorf("block index out of range")
+	}
+	blockLen := fileSize - blockOffset
+	if blockLen > int64(blockSize) {
+		blockLen = int64(blockSize)
+	}
+	offset = blockOffset
+	length = blockLen
+	if subIndex >= 0 {
+		rel := int64(subIndex) * int64(subSize)
+		if rel >= blockLen {
+			return 0, 0, http.StatusRequestedRangeNotSatisfiable, fmt.Errorf("sub index out of range")
+		}
+		offset = blockOffset + rel
+		length = int64(subSize)
+		if rel+length > blockLen {
+			length = blockLen - rel
+		}
+	}
+	if length <= 0 {
+		return 0, 0, http.StatusRequestedRangeNotSatisfiable, fmt.Errorf("empty block")
+	}
+	return offset, length, http.StatusOK, nil
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

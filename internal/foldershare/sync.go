@@ -27,13 +27,16 @@ import (
 )
 
 // Entry is one path in a folder's sync journal.
+// Blocks is the file's block list (4MB hashes and offsets). Sub-block hashes
+// are not part of this metadata.
 type Entry struct {
-	Path     string `json:"path"`
-	SHA256   string `json:"sha256,omitempty"`
-	Size     int64  `json:"size"`
-	Deleted  bool   `json:"deleted"`
-	Revision int64  `json:"revision"`
-	Origin   string `json:"origin,omitempty"`
+	Path     string      `json:"path"`
+	SHA256   string      `json:"sha256,omitempty"`
+	Size     int64       `json:"size"`
+	Deleted  bool        `json:"deleted"`
+	Revision int64       `json:"revision"`
+	Origin   string      `json:"origin,omitempty"`
+	Blocks   []FileBlock `json:"blocks,omitempty"`
 }
 
 type journalFile struct {
@@ -134,13 +137,17 @@ func absorbLocal(root, origin string, byPath map[string]Entry) error {
 	for path, file := range seen {
 		current, ok := byPath[path]
 		if ok && !current.Deleted && current.SHA256 == file.sha {
+			if len(current.Blocks) == 0 && len(file.blocks) > 0 {
+				current.Blocks = file.blocks
+				byPath[path] = current
+			}
 			continue
 		}
 		revision := int64(1)
 		if ok && current.Revision >= revision {
 			revision = current.Revision + 1
 		}
-		byPath[path] = Entry{Path: path, SHA256: file.sha, Size: file.size, Revision: revision, Origin: origin}
+		byPath[path] = Entry{Path: path, SHA256: file.sha, Size: file.size, Blocks: file.blocks, Revision: revision, Origin: origin}
 	}
 	for path, current := range byPath {
 		if current.Deleted {
@@ -152,6 +159,7 @@ func absorbLocal(root, origin string, byPath map[string]Entry) error {
 		current.Deleted = true
 		current.SHA256 = ""
 		current.Size = 0
+		current.Blocks = nil
 		current.Revision++
 		current.Origin = origin
 		byPath[path] = current
@@ -160,12 +168,12 @@ func absorbLocal(root, origin string, byPath map[string]Entry) error {
 }
 
 const (
-	transferWorkers   = 4
-	transferChunkSize = 4 << 20
+	transferWorkers = 4
 )
 
-// fileRetryBackoff is the wait before each retry of one file.
-// Other files keep transferring while a file waits.
+// fileRetryBackoff is the capped wait between attempts in one reconcile pass.
+// A file that still has missing blocks stays pending: the journal revision is
+// not advanced, and the next pass (or the next peer) fetches only those blocks.
 var fileRetryBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
 func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[string]Entry, remote []Entry) error {
@@ -213,6 +221,7 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 		}
 	}
 	transferprogress.Note(peer.ID, 0, remaining)
+	locals := indexLocalBlocks(folder.Path, byPath)
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, transferWorkers)
 	var remainMu sync.Mutex
@@ -226,16 +235,20 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 			defer wg.Done()
 			defer func() { <-slots }()
 			var got int64
-			err := downloadFile(peer, folder.ID, job.entry, job.target, func(n int64) {
-				got += n
+			err := downloadFile(peer, folder, job.entry, job.target, locals, func(network, completed int64) {
+				delta := completed - got
+				if delta < 0 {
+					delta = 0
+				}
+				got = completed
 				remainMu.Lock()
-				remaining -= n
+				remaining -= delta
 				if remaining < 0 {
 					remaining = 0
 				}
 				left := remaining
 				remainMu.Unlock()
-				note(n, left)
+				note(network, left)
 			})
 			mu.Lock()
 			defer mu.Unlock()
@@ -270,8 +283,9 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 }
 
 type scanned struct {
-	sha  string
-	size int64
+	sha    string
+	size   int64
+	blocks []FileBlock
 }
 
 func scanFolder(root string) (map[string]scanned, error) {
@@ -301,14 +315,15 @@ func scanFolder(root string) (map[string]scanned, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if !safeRel(rel) || strings.HasPrefix(filepath.Base(rel), ".fse-") {
+		base := filepath.Base(rel)
+		if !safeRel(rel) || strings.HasPrefix(base, ".fse-") || strings.Contains(base, ".fse-sync-") {
 			return nil
 		}
-		hash, size, err := hashFile(path)
+		hash, size, blocks, err := InspectFile(path)
 		if err != nil {
 			return err
 		}
-		out[rel] = scanned{sha: hash, size: size}
+		out[rel] = scanned{sha: hash, size: size, blocks: blocks}
 		return nil
 	})
 	return out, err
@@ -326,136 +341,6 @@ func hashFile(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), n, nil
-}
-
-func downloadFile(peer config.PeerConfig, folderID string, entry Entry, target string, progress func(int64)) error {
-	var last error
-	attempts := 1 + len(fileRetryBackoff)
-	for attempt := 0; attempt < attempts; attempt++ {
-		if attempt > 0 {
-			delay := fileRetryBackoff[attempt-1]
-			structuredlog.Event("warn", "folder.sync.file_retry", "retrying file download", map[string]any{
-				"folder":  folderID,
-				"peer":    peer.ID,
-				"path":    entry.Path,
-				"attempt": attempt + 1,
-				"error":   last.Error(),
-			})
-			time.Sleep(delay)
-		}
-		last = downloadFileOnce(peer, folderID, entry, target, progress)
-		if last == nil {
-			return nil
-		}
-	}
-	return last
-}
-
-func downloadFileOnce(peer config.PeerConfig, folderID string, entry Entry, target string, progress func(int64)) error {
-	if entry.Size < 0 {
-		return fmt.Errorf("download %s: negative size", entry.Path)
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	tmp := target + ".fse-sync-tmp"
-	if entry.Size == 0 {
-		if err := os.WriteFile(tmp, nil, 0o644); err != nil {
-			return err
-		}
-		return finishDownload(tmp, target, entry)
-	}
-	offset, err := resumeOffset(tmp, entry.Size)
-	if err != nil {
-		return err
-	}
-	for offset < entry.Size {
-		end := offset + transferChunkSize - 1
-		if end >= entry.Size {
-			end = entry.Size - 1
-		}
-		written, err := fetchRange(peer, folderID, entry.Path, tmp, offset, end, entry.Size)
-		if err != nil {
-			return err
-		}
-		if written <= 0 {
-			return fmt.Errorf("download %s: empty response at byte %d", entry.Path, offset)
-		}
-		offset += written
-		if progress != nil {
-			progress(written)
-		}
-	}
-	return finishDownload(tmp, target, entry)
-}
-
-func resumeOffset(tmp string, size int64) (int64, error) {
-	info, err := os.Stat(tmp)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	if info.Size() > size {
-		if err := os.Remove(tmp); err != nil {
-			return 0, err
-		}
-		return 0, nil
-	}
-	return info.Size(), nil
-}
-
-func fetchRange(peer config.PeerConfig, folderID, rel, tmp string, offset, end, total int64) (int64, error) {
-	var written int64
-	_, err := link.Dial(context.Background(), peer, func(ctx context.Context, base string, client *http.Client) error {
-		endpoint := base + "/v1/folder-file?folder=" + url.QueryEscape(folderID) + "&path=" + url.QueryEscape(rel)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			return err
-		}
-		req.Header.Set("X-FSE-API-Key", peer.APIKey)
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, end))
-		resp, err := client.Do(req)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-		full := resp.StatusCode == http.StatusOK && offset == 0
-		if resp.StatusCode != http.StatusPartialContent && !full {
-			return fmt.Errorf("download %s: %s", rel, resp.Status)
-		}
-		file, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		if full {
-			if err := file.Truncate(0); err != nil {
-				return err
-			}
-		}
-		if _, err := file.Seek(offset, io.SeekStart); err != nil {
-			return err
-		}
-		reader := io.Reader(resp.Body)
-		if !full {
-			reader = io.LimitReader(resp.Body, end-offset+1)
-		}
-		n, err := io.Copy(file, reader)
-		if err != nil {
-			return err
-		}
-		if err := file.Close(); err != nil {
-			return err
-		}
-		written = n
-		if full && total > 0 && n > total {
-			return fmt.Errorf("download %s: received %d bytes, want %d", rel, n, total)
-		}
-		return nil
-	})
-	return written, err
 }
 
 func finishDownload(tmp, target string, entry Entry) error {

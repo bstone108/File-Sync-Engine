@@ -2377,6 +2377,10 @@
     top: 1rem;
     display: grid;
     gap: 1rem;
+    min-width: 0;
+    max-height: calc(100vh - 2rem);
+    overflow: auto;
+    overflow-wrap: anywhere;
   }
   .host-card {
     display: grid;
@@ -2506,9 +2510,10 @@
     display: grid;
     justify-items: center;
     gap: 1rem;
+    min-width: 0;
   }
   .host-scope-banner {
-    width: min(44rem, calc(100vw - 2rem));
+    width: min(44rem, 100%);
     display: grid;
     gap: 0.75rem;
     padding: 1.25rem;
@@ -2517,7 +2522,7 @@
     background: #172033;
   }
   .update-banner {
-    width: min(44rem, calc(100vw - 2rem));
+    width: min(44rem, 100%);
     display: grid;
     gap: 0.75rem;
     padding: 1.25rem;
@@ -2560,7 +2565,7 @@
     overflow-wrap: anywhere;
   }
   .connection-card {
-    width: min(44rem, calc(100vw - 2rem));
+    width: min(44rem, 100%);
     display: grid;
     gap: 1rem;
     padding: 2rem;

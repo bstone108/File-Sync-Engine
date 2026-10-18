@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -63,12 +65,12 @@ func TestReconcileContinuesAfterOneFileFails(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/sync-journal":
 			http.ServeFile(w, r, journal)
-		case "/v1/folder-file":
+		case "/v1/folder-block":
 			if r.URL.Query().Get("path") == "bad.txt" {
 				http.Error(w, "nope", http.StatusInternalServerError)
 				return
 			}
-			http.ServeContent(w, r, "good.txt", time.Now(), bytes.NewReader(good))
+			serveBlockPayload(w, r, good)
 		default:
 			http.NotFound(w, r)
 		}
@@ -119,7 +121,7 @@ func TestDownloadResumesPartial(t *testing.T) {
 			_ = conn.Close()
 			return
 		}
-		http.ServeContent(w, r, "part.bin", time.Now(), bytes.NewReader(payload))
+		serveBlockPayload(w, r, payload)
 	}))
 	defer server.Close()
 
@@ -183,5 +185,86 @@ func journalForEntries(t *testing.T, folder string, entries []Entry) string {
 
 func entryFor(name string, payload []byte) Entry {
 	sum := sha256.Sum256(payload)
-	return Entry{Path: name, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(payload)), Revision: 1, Origin: "remote"}
+	return Entry{
+		Path: name, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(payload)),
+		Revision: 1, Origin: "remote", Blocks: blocksFromBytes(payload),
+	}
+}
+
+func serveBlockPayload(w http.ResponseWriter, r *http.Request, payload []byte) {
+	if r.URL.Path == "/v1/folder-block-subhashes" {
+		index, blockSize, subSize := blockParams(r)
+		data := sliceBlock(payload, index, blockSize, -1, subSize)
+		if data == nil {
+			http.Error(w, "range", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"hashes": SubHashes(data, subSize)})
+		return
+	}
+	index, blockSize, subSize := blockParams(r)
+	sub := -1
+	if raw := r.URL.Query().Get("sub"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			http.Error(w, "sub", http.StatusBadRequest)
+			return
+		}
+		sub = parsed
+	}
+	data := sliceBlock(payload, index, blockSize, sub, subSize)
+	if data == nil {
+		http.Error(w, "range", http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = w.Write(data)
+}
+
+func blockParams(r *http.Request) (index, blockSize, subSize int) {
+	index, _ = strconv.Atoi(r.URL.Query().Get("index"))
+	blockSize = TransferBlockSize
+	if raw := r.URL.Query().Get("blockSize"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			blockSize = parsed
+		}
+	}
+	subSize = SubBlockSize
+	if raw := r.URL.Query().Get("subSize"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			subSize = parsed
+		}
+	}
+	return index, blockSize, subSize
+}
+
+func sliceBlock(payload []byte, index, blockSize, sub, subSize int) []byte {
+	if index < 0 || blockSize <= 0 {
+		return nil
+	}
+	start := index * blockSize
+	if start >= len(payload) {
+		return nil
+	}
+	end := start + blockSize
+	if end > len(payload) {
+		end = len(payload)
+	}
+	if sub >= 0 {
+		if subSize <= 0 {
+			return nil
+		}
+		rel := sub * subSize
+		if rel >= end-start {
+			return nil
+		}
+		subEnd := start + rel + subSize
+		if subEnd > end {
+			subEnd = end
+		}
+		start += rel
+		end = subEnd
+	}
+	return payload[start:end]
 }
