@@ -19,6 +19,7 @@ import (
 	"filesyncengine/internal/block"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/discovery"
+	"filesyncengine/internal/linkstats"
 	"filesyncengine/internal/peeridentity"
 	"filesyncengine/internal/protocol"
 	"filesyncengine/internal/ratelimit"
@@ -244,6 +245,7 @@ func (s *Server) Serve(ctx context.Context, stream io.ReadWriter) error {
 			if err := codec.Write(protocol.Message{Type: protocol.MessageBlockResponse, BlockResponse: &protocol.BlockResponse{FolderID: req.FolderID, Path: req.Path, Index: req.Index, Data: data}}); err != nil {
 				return err
 			}
+			linkstats.Default.AddTransferred(s.cfg.Peer.ID, int64(len(data)))
 		default:
 			return fmt.Errorf("unsupported message type %s", msg.Type)
 		}

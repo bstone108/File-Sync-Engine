@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ import (
 	"filesyncengine/internal/daemonwebgui"
 	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/discoverycontrol"
+	"filesyncengine/internal/fatalexit"
 	"filesyncengine/internal/foldershare"
 	"filesyncengine/internal/foldersync"
 	"filesyncengine/internal/link"
@@ -113,7 +115,16 @@ func exitCLIF(format string, args ...any) {
 	os.Exit(1)
 }
 
+func init() {
+	fatalexit.Install()
+}
+
 func main() {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			fatalexit.Exit(2, fmt.Sprintf("panic: %v\n%s", recovered, debug.Stack()))
+		}
+	}()
 	exe, err := os.Executable()
 	if err != nil {
 		exitCLIF("resolve executable: %v", err)
@@ -142,6 +153,11 @@ func main() {
 }
 
 func run(configPath string) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			fatalexit.Exit(2, fmt.Sprintf("daemon panic: %v\n%s", recovered, debug.Stack()))
+		}
+	}()
 	cfg, _, err := config.EnsureAPIKey(configPath)
 	if err != nil {
 		exitCLIF("ensure api key: %v", err)
@@ -295,7 +311,9 @@ func run(configPath string) {
 		return
 	}
 	if httpServerPlan.Enabled {
-		go daemonapi.ServePreparedHTTPServer(httpServer, httpServerPlan, daemonlogging.APIListening, daemonlogging.APIServerStopped)
+		fatalexit.Go(func() {
+			daemonapi.ServePreparedHTTPServer(httpServer, httpServerPlan, daemonlogging.APIListening, daemonlogging.APIServerStopped)
+		})
 	}
 	emitMonitorEvent := func(event monitor.Event) {
 		peerPulls := peerPullsWithEndpointObservations(cfg, event.FolderID, liveEndpointObservations)
@@ -347,12 +365,14 @@ func run(configPath string) {
 		discovery.SetAnnounceAPIURL(url)
 		apiServer.SetAdvertiseURL(url)
 	})
-	go discovery.WatchObservedAddresses(detectCtx, append([]string(nil), cfg.Discovery.DHTBootstrapPeers...), advertise.NoteObservedIP)
+	peers := append([]string(nil), cfg.Discovery.DHTBootstrapPeers...)
+	fatalexit.Go(func() { discovery.WatchObservedAddresses(detectCtx, peers, advertise.NoteObservedIP) })
 	advertise.SetExternalMappingHook(func(string, int) { discovery.NotePortExposed() })
 	if cfg.Discovery.Local && !cfg.Discovery.Disabled {
 		startLocalDiscovery(cfg)
 	}
-	advertise.StartAutoDetect(detectCtx, cfg)
+	fatalexit.Go(func() { advertise.StartAutoDetect(detectCtx, cfg) })
+	fatalexit.Go(func() { daemonwebgui.StartAutoUpdate(detectCtx, configPath, apiServer.SetWebGUIState) })
 	schedule := daemonloop.NewPollSchedule(time.Now(), time.Now())
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -477,6 +497,9 @@ func registerStoreBackedAPIHandlers(server *api.Server, cfg config.Config, confi
 	})
 	server.SetConfigSyncMergeHandler(func(_ context.Context, raw json.RawMessage) (any, error) {
 		return apicontrol.HandleConfigSyncMerge(configPath, raw)
+	})
+	server.SetOnboardingHandler(func(ctx context.Context, raw json.RawMessage) (any, error) {
+		return apicontrol.HandleOnboarding(ctx, configPath, raw)
 	})
 }
 

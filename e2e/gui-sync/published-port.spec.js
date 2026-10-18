@@ -39,13 +39,51 @@ function probe(service, host, port) {
   }
 }
 
+async function clickClearOfSidebar(locator) {
+  await locator.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' }));
+  await locator.click();
+}
+
+async function closeOptions(page) {
+  const close = page.getByTestId('node-options-close');
+  if (await close.isVisible().catch(() => false)) {
+    await close.click();
+  }
+}
+
 async function showCode(page) {
-  await page.getByTestId('nav-peers').click();
-  await page.getByTestId('show-pairing-code').click();
+  await closeOptions(page);
+  const menu = page.getByTestId('add-peer-menu');
+  if ((await menu.getAttribute('aria-expanded')) !== 'true') {
+    await clickClearOfSidebar(menu);
+  }
+  await clickClearOfSidebar(page.getByTestId('show-pairing-code'));
   const code = page.getByTestId('pairing-code');
   await expect(code).toBeVisible({ timeout: 60000 });
   await expect(page.getByTestId('pairing-message')).toContainText('is ready');
   return (await code.innerText()).match(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/)?.[0];
+}
+
+async function openLinkForm(page) {
+  await closeOptions(page);
+  const input = page.getByTestId('pairing-code-input');
+  if (!(await input.isVisible().catch(() => false))) {
+    const menu = page.getByTestId('add-peer-menu');
+    if ((await menu.getAttribute('aria-expanded')) !== 'true') {
+      await clickClearOfSidebar(menu);
+    }
+    await page.getByTestId('link-peer-form').click();
+  }
+  await expect(input).toBeVisible();
+}
+
+async function expectPairingRole(page, role) {
+  const dialog = page.getByTestId('node-options-dialog');
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page.getByTestId('node-options').click();
+  }
+  await page.getByTestId('nav-peers').click();
+  await expect(page.getByTestId('pairing-message')).toHaveAttribute('role', role);
 }
 
 test('pairing works when only published ports connect the containers', async ({ browser }) => {
@@ -72,8 +110,9 @@ test('pairing works when only published ports connect the containers', async ({ 
   await expect(b.getByTestId('device-node-name')).toHaveText('published-b');
 
   let paired = '';
+  let code = '';
   for (let attempt = 0; attempt < 2 && !/paired by code/i.test(paired); attempt += 1) {
-    const code = await showCode(a);
+    code = await showCode(a);
     expect(code).toMatch(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/);
     await expect.poll(() => {
       const raw = engineLog('published-a');
@@ -83,9 +122,9 @@ test('pairing works when only published ports connect the containers', async ({ 
       const lines = raw.split('\n').filter((line) => line.includes('libp2p.bootstrap.dial') || line.includes('pairing.publish.failed'));
       return lines.slice(-3).join('\n');
     }, { timeout: 50000 }).toBe('ok');
-    await b.getByTestId('nav-peers').click();
+    await openLinkForm(b);
     await b.getByTestId('pairing-code-input').fill(code);
-    await b.getByTestId('redeem-pairing-code').click();
+    await clickClearOfSidebar(b.getByTestId('redeem-pairing-code'));
     await expect.poll(async () => {
       const text = (await b.getByTestId('pairing-message').innerText()).trim();
       return /^linking with/i.test(text) ? '' : text;
@@ -99,10 +138,12 @@ test('pairing works when only published ports connect the containers', async ({ 
     throw new Error(`${paired}\n--- published-a ---\n${engineLog('published-a').slice(-2500)}\n--- published-b ---\n${engineLog('published-b').slice(-2500)}`);
   }
   expect(paired).toMatch(/paired by code/i);
-  await expect(b.getByTestId('pairing-message')).toHaveAttribute('role', 'status');
+  await expectPairingRole(b, 'status');
 
-  await b.getByTestId('redeem-pairing-code').click();
+  await openLinkForm(b);
+  await b.getByTestId('pairing-code-input').fill(code);
+  await clickClearOfSidebar(b.getByTestId('redeem-pairing-code'));
   await expect(b.getByTestId('pairing-message')).toContainText(/already used|not found|was not found/i, { timeout: 30000 });
-  await expect(b.getByTestId('pairing-message')).toHaveAttribute('role', 'alert');
+  await expectPairingRole(b, 'alert');
   await expect(b.getByTestId('pairing-message')).not.toContainText(/paired by code/i);
 });

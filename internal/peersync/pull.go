@@ -17,6 +17,7 @@ import (
 	"filesyncengine/internal/backup"
 	"filesyncengine/internal/block"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/linkstats"
 	"filesyncengine/internal/ratelimit"
 	"filesyncengine/internal/recovery"
 	"filesyncengine/internal/routing"
@@ -110,6 +111,10 @@ func PullFolderWithOptions(baseURL, apiKey, folderID, localRoot string, opts Pul
 	}
 	localByPath := byPath(local.Files)
 	localBlocks := blockIndex(localRoot, local.Files)
+	peerID := pullPeerID(opts.BlockSources)
+	if peerID != "" {
+		linkstats.Default.SetPending(peerID, pendingSyncBytes(remoteByPath, localByPath, localBlocks, ignoreMatcher))
+	}
 	for _, rel := range sortedKeys(remoteByPath) {
 		if ignoredForPeerPull(ignoreMatcher, rel) {
 			continue
@@ -122,7 +127,7 @@ func PullFolderWithOptions(baseURL, apiKey, folderID, localRoot string, opts Pul
 		if !ok {
 			return result, fmt.Errorf("peer index contains unsafe path %q", rel)
 		}
-		blocksFetched, blocksReused, err := downloadFileByBlocks(baseURL, apiKey, folderID, rel, remoteFile, localRoot, targetPath, localBlocks, receiveLimiter, opts.BlockSources)
+		blocksFetched, blocksReused, err := downloadFileByBlocks(baseURL, apiKey, folderID, rel, remoteFile, localRoot, targetPath, localBlocks, receiveLimiter, opts.BlockSources, peerID)
 		if err != nil {
 			return result, err
 		}
@@ -271,7 +276,36 @@ func fetchIndex(baseURL, apiKey, folderID string) (scanner.Result, error) {
 	return result, nil
 }
 
-func downloadFileByBlocks(baseURL, apiKey, folderID, rel string, remote scanner.File, localRoot string, targetPath string, localBlocks map[string]localBlock, receiveLimiter *ratelimit.Limiter, blockSources []BlockSource) (int, int, error) {
+func pullPeerID(sources []BlockSource) string {
+	for _, source := range sources {
+		if source.PeerID != "" {
+			return source.PeerID
+		}
+	}
+	return ""
+}
+
+func pendingSyncBytes(remoteByPath map[string]scanner.File, localByPath map[string]scanner.File, localBlocks map[string]localBlock, ignoreMatcher scanner.SyncIgnoreMatcher) int64 {
+	var pending int64
+	for _, rel := range sortedKeys(remoteByPath) {
+		if ignoredForPeerPull(ignoreMatcher, rel) {
+			continue
+		}
+		remoteFile := remoteByPath[rel]
+		if localFile, ok := localByPath[rel]; ok && manifestEqual(remoteFile, localFile) {
+			continue
+		}
+		for _, block := range remoteFile.Manifest.Blocks {
+			if _, ok := localBlocks[blockKey(block.Size, block.Hash)]; ok {
+				continue
+			}
+			pending += int64(block.Size)
+		}
+	}
+	return pending
+}
+
+func downloadFileByBlocks(baseURL, apiKey, folderID, rel string, remote scanner.File, localRoot string, targetPath string, localBlocks map[string]localBlock, receiveLimiter *ratelimit.Limiter, blockSources []BlockSource, peerID string) (int, int, error) {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return 0, 0, err
 	}
@@ -298,6 +332,7 @@ func downloadFileByBlocks(baseURL, apiKey, folderID, rel string, remote scanner.
 			_ = os.Remove(tmp)
 			return fetched, reused, err
 		}
+		linkstats.Default.AddTransferred(peerID, int64(len(data)))
 		if len(data) != block.Size {
 			_ = file.Close()
 			_ = os.Remove(tmp)

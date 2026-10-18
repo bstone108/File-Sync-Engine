@@ -406,6 +406,22 @@ func (f *FolderConfig) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// SetEnabled records an explicit enabled or paused choice. A false value stays
+// false through validation; an omitted JSON field still defaults to enabled.
+func (f *FolderConfig) SetEnabled(enabled bool) {
+	f.Enabled = enabled
+	f.enabledSet = true
+}
+
+// SharingEnabled reports whether sync should run. A folder constructed without
+// an explicit choice is enabled, matching config validation.
+func (f FolderConfig) SharingEnabled() bool {
+	if !f.enabledSet && !f.Enabled {
+		return true
+	}
+	return f.Enabled
+}
+
 type PermissionPolicy struct {
 	Mode          PermissionMode `json:"mode"`
 	FileMode      string         `json:"fileMode,omitempty"`

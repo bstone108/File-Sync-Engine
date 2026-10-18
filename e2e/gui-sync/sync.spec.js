@@ -6,9 +6,9 @@ const composeFile = path.resolve(__dirname, 'compose.yaml');
 const connectedLabel = /^(LAN|Hole-punched|Direct|Tailscale|Relay|\d+ peers connected)$/;
 
 async function expectConnectedEngine(page) {
-  const button = page.locator('button.quick-switch').filter({ has: page.getByTestId('local-engine-connection') });
+  const button = page.locator('button.peer-row').filter({ has: page.getByTestId('local-engine-connection') });
   await expect(button.getByTestId('local-engine-connection')).toHaveText(connectedLabel);
-  await expect(button.locator('.host-status-metrics')).not.toContainText('unknown');
+  await expect(button.locator('.peer-stats')).not.toContainText('unknown');
 }
 
 async function clickClearOfSidebar(locator) {
@@ -16,7 +16,16 @@ async function clickClearOfSidebar(locator) {
   await locator.click();
 }
 
+async function openNodeOptions(page) {
+  const dialog = page.getByTestId('node-options-dialog');
+  if (!(await dialog.isVisible().catch(() => false))) {
+    await page.getByTestId('node-options').click();
+  }
+  await expect(dialog).toBeVisible();
+}
+
 async function pairFrom(page) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-peers').click();
   await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
   await expect(page.getByTestId('pairing-reachable-url')).toHaveCount(0);
@@ -35,6 +44,7 @@ async function pairFrom(page) {
 }
 
 async function importOn(page, packageText, expected) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-peers').click();
   await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
   await page.getByTestId('pairing-import-text').fill(packageText);
@@ -47,7 +57,41 @@ async function importOn(page, packageText, expected) {
   await expect(page.getByText(expected, { exact: false })).toBeVisible();
 }
 
+async function editSharedFolder(page) {
+  const close = page.getByTestId('node-options-close');
+  if (await close.isVisible().catch(() => false)) {
+    await close.click();
+  }
+  const localEngine = page.getByTestId('instance-option').filter({ hasText: '· local' });
+  if (await localEngine.count()) {
+    await localEngine.first().click();
+  }
+  const row = page.getByTestId('folder-expand').filter({ hasText: 'shared' });
+  await expect(row).toBeVisible();
+  await row.click();
+  await page.getByTestId('folder-open').click();
+  await expect(page.getByTestId('folder-editor')).toBeVisible();
+  await page.getByTestId('folder-edit-mode').selectOption('sendonly');
+  await page.getByTestId('folder-edit-ignore').fill('*.tmp\ncache/');
+  await page.getByTestId('folder-shared-add-input').fill('peer-extra');
+  await page.getByTestId('folder-shared-add').click();
+  await expect(page.getByTestId('folder-shared-peer')).toHaveText('peer-extra');
+  await page.getByTestId('folder-shared-remove').click();
+  await expect(page.getByTestId('folder-shared-peer')).toHaveCount(0);
+  await page.getByTestId('folder-edit-save').click();
+  const status = page.getByTestId('folder-edit-status');
+  await expect(status).toContainText('folder update accepted');
+  await page.getByTestId('folder-pause').click();
+  await expect(status).toContainText('folder paused');
+  await page.getByTestId('folder-resume').click();
+  await expect(status).toContainText('folder resumed');
+  await page.getByTestId('folder-edit-mode').selectOption('sendrecv');
+  await page.getByTestId('folder-edit-save').click();
+  await expect(status).toContainText('folder update accepted');
+}
+
 async function addSharedFolder(page) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-daemon-settings').click();
   await page.locator('form[aria-label="Daemon settings folder form"] select[name="folderFormAction"]').selectOption('add');
   await page.getByTestId('folder-id').fill('shared');
@@ -61,6 +105,7 @@ async function addSharedFolder(page) {
 }
 
 async function changeLogLevel(page) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-daemon-settings').click();
   const localEngine = page.getByTestId('instance-option').filter({ hasText: '· local' });
   if (await localEngine.count()) {
@@ -90,6 +135,7 @@ async function changeLogLevel(page) {
 }
 
 async function pageShowsFolderError(page) {
+  await openNodeOptions(page);
   await page.getByTestId('nav-daemon-settings').click();
   await page.locator('form[aria-label="Daemon settings folder form"] select[name="folderFormAction"]').selectOption('remove');
   await page.getByTestId('folder-id').fill('docs');
@@ -124,14 +170,18 @@ async function showDefaultPairingCode(page, service) {
   expect(peers).toEqual(['/dnsaddr/bootstrap.libp2p.io']);
   expect(cfg.discovery && cfg.discovery.dht).toBe(true);
   expect(raw).not.toMatch(/"dht": false/);
-  await page.getByTestId('nav-peers').click();
+  const close = page.getByTestId('node-options-close');
+  if (await close.isVisible().catch(() => false)) {
+    await close.click();
+  }
+  await clickClearOfSidebar(page.getByTestId('add-peer-menu'));
   const posts = [];
   page.on('request', (request) => {
-    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/pair-code') {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/onboarding') {
       posts.push(request.url());
     }
   });
-  await page.getByTestId('show-pairing-code').click();
+  await clickClearOfSidebar(page.getByTestId('show-pairing-code'));
   await expect.poll(() => posts.length, { timeout: 15000 }).toBeGreaterThan(0);
   const code = page.getByTestId('pairing-code');
   await expect.poll(async () => {
@@ -147,19 +197,37 @@ async function showDefaultPairingCode(page, service) {
   return (await code.innerText()).match(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/)?.[0];
 }
 
+async function openLinkForm(page) {
+  const close = page.getByTestId('node-options-close');
+  if (await close.isVisible().catch(() => false)) {
+    await close.click();
+  }
+  const input = page.getByTestId('pairing-code-input');
+  if (!(await input.isVisible().catch(() => false))) {
+    const menu = page.getByTestId('add-peer-menu');
+    if ((await menu.getAttribute('aria-expanded')) !== 'true') {
+      await clickClearOfSidebar(menu);
+    }
+    await page.getByTestId('link-peer-form').click();
+  }
+  await expect(input).toBeVisible();
+}
+
 async function redeemPairingCode(page, code) {
-  await page.getByTestId('nav-peers').click();
+  await openLinkForm(page);
   await page.getByTestId('pairing-code-input').fill(code);
   const posts = [];
   page.on('request', (request) => {
-    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/pair-code/redeem') {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/onboarding') {
       posts.push(request.url());
     }
   });
-  await page.getByTestId('redeem-pairing-code').click();
+  await clickClearOfSidebar(page.getByTestId('redeem-pairing-code'));
   await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(0);
   await expect(page.getByTestId('pairing-message')).toContainText(/paired by code/i);
-  await page.getByTestId('redeem-pairing-code').click();
+  await openLinkForm(page);
+  await page.getByTestId('pairing-code-input').fill(code);
+  await clickClearOfSidebar(page.getByTestId('redeem-pairing-code'));
   await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(1);
   await expect(page.getByTestId('pairing-message')).toContainText(/already used|not found|was not found/i, { timeout: 30000 });
   await expect(page.getByTestId('pairing-message')).not.toContainText(/paired by code/i);
@@ -211,6 +279,7 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await expect(a.getByText('prepared at level 0')).toHaveCount(0);
   await changeLogLevel(a);
   await addSharedFolder(a);
+  await editSharedFolder(a);
   await addSharedFolder(b);
   await pageShowsFolderError(a);
   compose(['exec', '-T', '-u', '99:100', 'fse-a', 'sh', '-c', 'echo hello-from-a > /data/shared/note.txt']);
@@ -233,7 +302,10 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await expectConnectedEngine(a);
   await expectConnectedEngine(b);
   await expect(a.getByTestId('instance-switcher')).toBeVisible();
+  await openNodeOptions(a);
   await a.getByTestId('nav-overview').click();
+  await a.getByTestId('node-options-close').click();
+  await expect(a.getByTestId('node-options-dialog')).toHaveCount(0);
   await a.setViewportSize({ width: 1280, height: 800 });
   await a.screenshot({ path: 'screenshots/desktop-overview.png', fullPage: true });
   await a.setViewportSize({ width: 390, height: 844 });

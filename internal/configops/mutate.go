@@ -35,15 +35,19 @@ func AddFolder(path, id, folderPath, mode string) error {
 	if err != nil {
 		return err
 	}
-	if mode == "" {
-		mode = string(config.ModeSendReceive)
+	normalized, _, err := NormalizeFolderMode(mode)
+	if err != nil {
+		return err
+	}
+	if normalized == "" {
+		normalized = config.ModeSendReceive
 	}
 	for _, folder := range cfg.Folders {
 		if folder.ID == id {
 			return fmt.Errorf("folder %q already exists", id)
 		}
 	}
-	cfg.Folders = append(cfg.Folders, config.FolderConfig{ID: id, Path: folderPath, Enabled: true, Mode: config.FolderMode(mode), BlockSize: config.DefaultBlockSize})
+	cfg.Folders = append(cfg.Folders, config.FolderConfig{ID: id, Path: folderPath, Enabled: true, Mode: normalized, BlockSize: config.DefaultBlockSize})
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -71,14 +75,32 @@ func UpdatePeer(path, id, endpoint string) error {
 	return fmt.Errorf("peer %q not found", id)
 }
 
+// FolderUpdate is a partial edit of one configured folder. Nil slices leave
+// the existing list in place. An empty non-nil slice clears it.
+type FolderUpdate struct {
+	Path       string
+	Mode       string
+	SharedWith *[]string
+	Ignore     *[]string
+	Enabled    *bool
+}
+
 // AddFolderShared persists a folder that starts enabled and is optionally limited to peer IDs.
 func AddFolderShared(path, id, folderPath, mode string, sharedWith []string) error {
 	cfg, err := config.LoadFile(path)
 	if err != nil {
 		return err
 	}
-	if mode == "" {
-		mode = string(config.ModeSendReceive)
+	normalized, _, err := NormalizeFolderMode(mode)
+	if err != nil {
+		return err
+	}
+	if normalized == "" {
+		normalized = config.ModeSendReceive
+	}
+	shared, err := cleanFolderList(&sharedWith)
+	if err != nil {
+		return err
 	}
 	for _, folder := range cfg.Folders {
 		if folder.ID == id {
@@ -86,8 +108,8 @@ func AddFolderShared(path, id, folderPath, mode string, sharedWith []string) err
 		}
 	}
 	cfg.Folders = append(cfg.Folders, config.FolderConfig{
-		ID: id, Path: folderPath, Enabled: true, Mode: config.FolderMode(mode), BlockSize: config.DefaultBlockSize,
-		SharedWith: append([]string(nil), sharedWith...),
+		ID: id, Path: folderPath, Enabled: true, Mode: normalized, BlockSize: config.DefaultBlockSize,
+		SharedWith: shared,
 	})
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -96,51 +118,97 @@ func AddFolderShared(path, id, folderPath, mode string, sharedWith []string) err
 }
 
 func UpdateFolder(path, id, folderPath, mode string) error {
-	cfg, err := config.LoadFile(path)
-	if err != nil {
-		return err
-	}
-	for i := range cfg.Folders {
-		if cfg.Folders[i].ID == id {
-			if folderPath != "" {
-				cfg.Folders[i].Path = folderPath
-			}
-			if mode != "" {
-				cfg.Folders[i].Mode = config.FolderMode(mode)
-			}
-			if err := cfg.Validate(); err != nil {
-				return err
-			}
-			return save(path, cfg)
-		}
-	}
-	return fmt.Errorf("folder %q not found", id)
+	return UpdateFolderDetails(path, id, FolderUpdate{Path: folderPath, Mode: mode})
 }
 
 // UpdateFolderShared updates path, mode, and, when sharedWith is non-nil, the peer allow-list.
 func UpdateFolderShared(path, id, folderPath, mode string, sharedWith *[]string) error {
+	return UpdateFolderDetails(path, id, FolderUpdate{Path: folderPath, Mode: mode, SharedWith: sharedWith})
+}
+
+// NormalizeFolderMode accepts the stored modes plus the shorter send and recv names.
+func NormalizeFolderMode(mode string) (config.FolderMode, bool, error) {
+	switch config.FolderMode(strings.ToLower(strings.TrimSpace(mode))) {
+	case "":
+		return "", false, nil
+	case config.ModeSendReceive, "sendreceive", "send-recv":
+		return config.ModeSendReceive, true, nil
+	case config.ModeSendOnly, "send":
+		return config.ModeSendOnly, true, nil
+	case config.ModeReceiveOnly, "recv", "receive":
+		return config.ModeReceiveOnly, true, nil
+	default:
+		return "", false, fmt.Errorf("folder mode %q is invalid", mode)
+	}
+}
+
+// UpdateFolderDetails applies a partial folder edit and preserves every field
+// the request does not mention.
+func UpdateFolderDetails(path, id string, update FolderUpdate) error {
 	cfg, err := config.LoadFile(path)
 	if err != nil {
 		return err
 	}
+	mode, setMode, err := NormalizeFolderMode(update.Mode)
+	if err != nil {
+		return err
+	}
+	shared, err := cleanFolderList(update.SharedWith)
+	if err != nil {
+		return err
+	}
+	ignore, err := cleanFolderList(update.Ignore)
+	if err != nil {
+		return err
+	}
 	for i := range cfg.Folders {
-		if cfg.Folders[i].ID == id {
-			if folderPath != "" {
-				cfg.Folders[i].Path = folderPath
-			}
-			if mode != "" {
-				cfg.Folders[i].Mode = config.FolderMode(mode)
-			}
-			if sharedWith != nil {
-				cfg.Folders[i].SharedWith = append([]string(nil), (*sharedWith)...)
-			}
-			if err := cfg.Validate(); err != nil {
-				return err
-			}
-			return save(path, cfg)
+		if cfg.Folders[i].ID != id {
+			continue
 		}
+		if strings.TrimSpace(update.Path) != "" {
+			cfg.Folders[i].Path = strings.TrimSpace(update.Path)
+		}
+		if setMode {
+			cfg.Folders[i].Mode = mode
+		}
+		if shared != nil {
+			cfg.Folders[i].SharedWith = shared
+		}
+		if ignore != nil {
+			cfg.Folders[i].Ignore = ignore
+		}
+		if update.Enabled != nil {
+			cfg.Folders[i].SetEnabled(*update.Enabled)
+		}
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		return save(path, cfg)
 	}
 	return fmt.Errorf("folder %q not found", id)
+}
+
+func cleanFolderList(values *[]string) ([]string, error) {
+	if values == nil {
+		return nil, nil
+	}
+	out := make([]string, 0, len(*values))
+	seen := map[string]struct{}{}
+	for _, value := range *values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if len(trimmed) > 512 || strings.ContainsRune(trimmed, 0) {
+			return nil, fmt.Errorf("folder list entry %q is invalid", trimmed)
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out, nil
 }
 
 // PairedPeerID derives a stable peer id from the remote node name, falling back

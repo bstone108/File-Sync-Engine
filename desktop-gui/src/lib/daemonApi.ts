@@ -16,9 +16,29 @@ export type DaemonStatus = {
   peers?: number;
   maintenance?: Record<string, unknown>;
   backup?: Record<string, unknown>;
+  webGUI?: {
+    enabled?: boolean;
+    version?: string;
+    lastUpdateCheck?: string;
+    lastUpdateResult?: string;
+    lastUpdateMessage?: string;
+    autoUpdate?: boolean;
+  };
 };
 
-export type DaemonFolder = { id: string; path?: string; mode?: string; status?: string; [key: string]: unknown };
+export type DaemonFolder = {
+  id: string;
+  path?: string;
+  mode?: string;
+  status?: string;
+  enabled?: boolean;
+  sharedWith?: string[];
+  ignore?: string[];
+  localBytes?: number;
+  syncPercent?: number;
+  progressLabel?: string;
+  [key: string]: unknown;
+};
 export type DaemonPeer = {
   id: string;
   endpoint?: string;
@@ -29,6 +49,8 @@ export type DaemonPeer = {
   sendRemainingBytes?: number;
   averageReceiveBytesPerSecond?: number;
   averageSendBytesPerSecond?: number;
+  averageBytesPerSecond?: number;
+  pendingBytes?: number;
   [key: string]: unknown
 };
 
@@ -89,10 +111,13 @@ export type PeerCommandRequest = {
 };
 
 export type FolderCommandRequest = {
-  action: 'add' | 'remove' | 'update';
+  action: 'add' | 'remove' | 'update' | 'pause' | 'resume' | 'rescan';
   id?: string;
   path?: string;
   mode?: string;
+  sharedWith?: string[];
+  ignore?: string[];
+  enabled?: boolean;
   [key: string]: unknown;
 };
 
@@ -275,17 +300,44 @@ export type ConfigSyncInstance = {
   lastSeen?: string;
   pendingChanges: number;
   local: boolean;
+  averageBytesPerSecond?: number;
+  pendingBytes?: number;
   settings?: Record<string, unknown>;
+};
+
+export type OnboardingCommand = {
+  id: string;
+  targetInstanceId: string;
+  action: 'issue' | 'accept' | string;
+  code?: string;
+  expiresAt?: string;
+  status: 'pending' | 'done' | 'failed' | string;
+  message?: string;
 };
 
 export type ConfigSyncView = {
   groupId: string;
   localInstanceId: string;
   instances: ConfigSyncInstance[];
+  onboarding?: OnboardingCommand[];
+};
+
+export type OnboardingResponse = ConfigSyncView & {
+  command: OnboardingCommand;
 };
 
 export async function fetchConfigSync(settings: DaemonConnectionSettings): Promise<ConfigSyncView> {
   return await daemonAPIRequest<ConfigSyncView>(settings, '/v1/config-sync');
+}
+
+export async function queueOnboarding(
+  settings: DaemonConnectionSettings,
+  request: { targetInstanceId: string; action: 'issue' | 'accept'; code?: string }
+): Promise<OnboardingResponse> {
+  return await daemonAPIRequest<OnboardingResponse>(settings, '/v1/onboarding', {
+    method: 'POST',
+    body: jsonBody(request)
+  });
 }
 
 export async function queueConfigSyncEdit(settings: DaemonConnectionSettings, edit: { targetInstanceId: string; path: string; value: unknown }): Promise<ConfigSyncView> {

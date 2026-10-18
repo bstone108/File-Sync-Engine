@@ -42,8 +42,20 @@ type State struct {
 	Status              string           `json:"status"`
 	Maintenance         MaintenanceState `json:"maintenance"`
 	Backup              BackupState      `json:"backup"`
+	WebGUI              WebGUIState      `json:"webGUI,omitempty"`
 	FoldersState        []FolderState    `json:"-"`
 	PeersState          []PeerState      `json:"-"`
+}
+
+// WebGUIState is the running web GUI package and the latest auto-update check.
+// It is runtime status, not a secret and not a desktop Sparkle update.
+type WebGUIState struct {
+	Enabled           bool      `json:"enabled"`
+	Version           string    `json:"version,omitempty"`
+	LastUpdateCheck   time.Time `json:"lastUpdateCheck,omitempty"`
+	LastUpdateResult  string    `json:"lastUpdateResult,omitempty"`
+	LastUpdateMessage string    `json:"lastUpdateMessage,omitempty"`
+	AutoUpdate        bool      `json:"autoUpdate"`
 }
 
 type MaintenanceState struct {
@@ -269,6 +281,8 @@ type FolderCommandRequest struct {
 	Path       string    `json:"path,omitempty"`
 	Mode       string    `json:"mode,omitempty"`
 	SharedWith *[]string `json:"sharedWith,omitempty"`
+	Ignore     *[]string `json:"ignore,omitempty"`
+	Enabled    *bool     `json:"enabled,omitempty"`
 }
 
 type FolderCommandResponse struct {
@@ -594,13 +608,19 @@ type MeshSettingsCommandResponse struct {
 }
 
 type FolderState struct {
-	ID       string             `json:"id"`
-	Path     string             `json:"path"`
-	Mode     string             `json:"mode"`
-	Status   string             `json:"status"`
-	Index    FolderIndexState   `json:"index"`
-	Sync     FolderSyncState    `json:"sync"`
-	Warnings FolderWarningState `json:"warnings"`
+	ID            string             `json:"id"`
+	Path          string             `json:"path"`
+	Mode          string             `json:"mode"`
+	Status        string             `json:"status"`
+	Enabled       bool               `json:"enabled"`
+	SharedWith    []string           `json:"sharedWith,omitempty"`
+	Ignore        []string           `json:"ignore,omitempty"`
+	LocalBytes    int64              `json:"localBytes"`
+	SyncPercent   int                `json:"syncPercent"`
+	ProgressLabel string             `json:"progressLabel"`
+	Index         FolderIndexState   `json:"index"`
+	Sync          FolderSyncState    `json:"sync"`
+	Warnings      FolderWarningState `json:"warnings"`
 }
 
 type FolderIndexState struct {
@@ -656,6 +676,8 @@ type PeerState struct {
 	SendRemainingBytes           int64                   `json:"sendRemainingBytes,omitempty"`
 	AverageReceiveBytesPerSecond int64                   `json:"averageReceiveBytesPerSecond,omitempty"`
 	AverageSendBytesPerSecond    int64                   `json:"averageSendBytesPerSecond,omitempty"`
+	AverageBytesPerSecond        int64                   `json:"averageBytesPerSecond"`
+	PendingBytes                 int64                   `json:"pendingBytes"`
 	Transfer                     PeerTransferState       `json:"transfer,omitempty"`
 	Metadata                     PeerMetadataState       `json:"metadata,omitempty"`
 	NetworkDiagnostics           []PeerNetworkDiagnostic `json:"networkDiagnostics,omitempty"`
@@ -759,6 +781,7 @@ type Server struct {
 	configSyncGetHandler       ConfigSyncGetHandler
 	configSyncEditHandler      ConfigSyncEditHandler
 	configSyncMergeHandler     ConfigSyncMergeHandler
+	onboardingHandler          OnboardingHandler
 	filesystemBrowseHandler    FilesystemBrowseHandler
 	configReadHandler          ConfigReadHandler
 	configUpdateHandler        ConfigUpdateHandler
@@ -814,6 +837,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/config-sync", s.requireKey(s.handleConfigSync))
 	mux.HandleFunc("/v1/config-sync/edit", s.requireKey(s.handleConfigSyncEdit))
 	mux.HandleFunc("/v1/config-sync/merge", s.requireKey(s.handleConfigSyncMerge))
+	mux.HandleFunc("/v1/onboarding", s.requireKey(s.handleOnboarding))
 	mux.HandleFunc("/v1/filesystem/browse", s.requireKey(s.handleFilesystemBrowse))
 	mux.HandleFunc("/v1/config", s.requireKey(s.handleConfig))
 	mux.HandleFunc("/v1/encryption-profiles", s.requireKey(s.handleEncryptionProfiles))
@@ -994,6 +1018,12 @@ func (s *Server) SetConfigSyncEditHandler(handler ConfigSyncEditHandler) {
 	s.configSyncEditHandler = handler
 }
 
+func (s *Server) SetOnboardingHandler(handler OnboardingHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onboardingHandler = handler
+}
+
 func (s *Server) SetConfigSyncMergeHandler(handler ConfigSyncMergeHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1049,7 +1079,21 @@ func (s *Server) Publish(event Event) {
 func (s *Server) UpdateState(state State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if state.WebGUI.LastUpdateCheck.IsZero() && state.WebGUI.Version == "" && state.WebGUI.LastUpdateResult == "" {
+		state.WebGUI = s.state.WebGUI
+	}
 	s.state = state
+}
+
+// SetWebGUIState records the latest web GUI version and update check without
+// replacing the rest of the status snapshot.
+func (s *Server) SetWebGUIState(state WebGUIState) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.state.WebGUI = state
+	s.mu.Unlock()
 }
 
 // SetAdvertiseURL publishes a reachability result without replacing the rest of the status snapshot.
@@ -1153,7 +1197,50 @@ func actionableErrorSummary(eventType string) (kind, action string, ok bool) {
 
 func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {
 	state := s.snapshotState()
-	writeJSON(w, state.FoldersState)
+	writeJSON(w, foldersVisibleToGUI(state))
+}
+
+// foldersVisibleToGUI lists the folders stored in config without waiting for
+// hot reload. The daemon adopts config only after a quiet period, which is
+// too late for the folder row the GUI shows as soon as an add is accepted.
+// Runtime progress stays attached to folders the daemon has already adopted.
+func foldersVisibleToGUI(state State) []FolderState {
+	if strings.TrimSpace(state.ConfigPath) == "" {
+		return state.FoldersState
+	}
+	cfg, err := config.LoadFile(state.ConfigPath)
+	if err != nil {
+		return state.FoldersState
+	}
+	adopted := make(map[string]FolderState, len(state.FoldersState))
+	for _, folder := range state.FoldersState {
+		adopted[folder.ID] = folder
+	}
+	visible := make([]FolderState, 0, len(cfg.Folders))
+	for _, folder := range cfg.Folders {
+		current, ok := adopted[folder.ID]
+		if !ok {
+			current = FolderState{ID: folder.ID}
+		}
+		current.ID = folder.ID
+		current.Path = folder.Path
+		current.Mode = string(folder.Mode)
+		current.Enabled = folder.SharingEnabled()
+		current.SharedWith = append([]string(nil), folder.SharedWith...)
+		current.Ignore = append([]string(nil), folder.Ignore...)
+		if !current.Enabled {
+			current.Status = "paused"
+			current.ProgressLabel = "Paused"
+			current.SyncPercent = 0
+		} else if !ok || current.Status == "" || current.Status == "paused" {
+			current.Status = "configured"
+			if current.ProgressLabel == "Paused" {
+				current.ProgressLabel = ""
+			}
+		}
+		visible = append(visible, current)
+	}
+	return visible
 }
 
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {

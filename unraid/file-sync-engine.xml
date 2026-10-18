@@ -14,7 +14,7 @@
   <WebUI>http://[IP]:[PORT:8385]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/bstone108/File-Sync-Engine/main/unraid/file-sync-engine.xml</TemplateURL>
   <Icon/>
-  <ExtraParams/>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>

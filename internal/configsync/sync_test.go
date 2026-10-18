@@ -285,3 +285,62 @@ func TestNewInstanceIDIsAUUID(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOnboardingIsRelayedUntilTheTargetCompletesIt(t *testing.T) {
+	origin := NewReplica("group", idA)
+	queued, err := origin.QueueOnboarding(idB, OnboardingIssue, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.Status != OnboardingPending || queued.Code != "" || queued.TargetInstanceID != idB {
+		t.Fatalf("queued = %+v", queued)
+	}
+	if _, err := origin.CompleteOnboarding(queued.ID, OnboardingDone, "ABCD-EFGH-JKMN-PQRS", "2026-10-15T18:00:00Z", "ready", 11); err == nil {
+		t.Fatal("origin completed another instance's onboarding")
+	}
+	if _, err := origin.QueueOnboarding(idB, OnboardingAccept, "not-a-code", 12); err == nil {
+		t.Fatal("accepted an invalid pairing code")
+	}
+
+	target := NewReplica("group", idB)
+	relayed, _ := Merge(target, origin)
+	if len(relayed.Onboarding) != 1 || relayed.Onboarding[0].Status != OnboardingPending {
+		t.Fatalf("relayed onboarding = %+v", relayed.Onboarding)
+	}
+	code, err := relayed.CompleteOnboarding(queued.ID, OnboardingDone, "abcdefghjkmnpqrs", "2026-10-15T18:00:00Z", "Pairing code is ready.", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code.Code != "ABCD-EFGH-JKMN-PQRS" || code.Status != OnboardingDone {
+		t.Fatalf("completed = %+v", code)
+	}
+	back, _ := Merge(origin, relayed)
+	if len(back.Onboarding) != 1 || back.Onboarding[0].Status != OnboardingDone || back.Onboarding[0].Code != "ABCD-EFGH-JKMN-PQRS" {
+		t.Fatalf("origin did not learn the issued code: %+v", back.Onboarding)
+	}
+
+	accept, err := origin.QueueOnboarding(idB, OnboardingAccept, "ABCD EFGH JKMN PQRS", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accept.Code != "ABCD-EFGH-JKMN-PQRS" || accept.Status != OnboardingPending {
+		t.Fatalf("accept = %+v", accept)
+	}
+	carried, _ := Merge(target, origin)
+	var found *OnboardingCommand
+	for i := range carried.Onboarding {
+		if carried.Onboarding[i].ID == accept.ID {
+			found = &carried.Onboarding[i]
+		}
+	}
+	if found == nil || found.Status != OnboardingPending || found.Code != "ABCD-EFGH-JKMN-PQRS" {
+		t.Fatalf("accept was not relayed: %+v", carried.Onboarding)
+	}
+	done, err := carried.CompleteOnboarding(accept.ID, OnboardingDone, "", "", "paired by code", 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.Code != "" || done.Message != "paired by code" {
+		t.Fatalf("accept result kept the code: %+v", done)
+	}
+}

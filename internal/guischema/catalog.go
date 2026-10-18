@@ -5,13 +5,16 @@ package guischema
 import (
 	"archive/zip"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,6 +34,7 @@ type Package struct {
 	MaxEngineSchema int    `json:"maxEngineSchema"`
 	DownloadURL     string `json:"downloadURL"`
 	ChecksumSHA256  string `json:"checksumSHA256"`
+	Signature       string `json:"signature,omitempty"`
 }
 
 // Catalog maps GUI package versions to the engine schemas they support.
@@ -212,6 +216,66 @@ func ResolveNewestCompatible(ctx context.Context, indexSource, destDir string, e
 		return Resolved{}, fmt.Errorf("downloaded GUI package %s schema range %d-%d is incompatible with engine schema %d", declared.GUIVersion, declared.MinEngineSchema, declared.MaxEngineSchema, engineSchema)
 	}
 	return Resolved{Package: selected, LocalPath: dest}, nil
+}
+
+// DownloadCompatible fetches one catalog package, verifies its SHA-256 and
+// schema.json, and verifies an Ed25519 signature when publicKey is set.
+// The download URL must be HTTPS. An incompatible schema.json is deleted.
+func DownloadCompatible(ctx context.Context, pkg Package, dest string, engineSchema int, publicKey string, client *http.Client) error {
+	parsed, err := url.Parse(pkg.DownloadURL)
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("GUI package %s download URL must use https", pkg.GUIVersion)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	if err := downloadVerified(ctx, pkg, dest, client); err != nil {
+		return err
+	}
+	declared, err := ReadPackageDeclaration(dest)
+	if err != nil {
+		_ = os.Remove(dest)
+		return err
+	}
+	if !Compatible(Package{GUIVersion: declared.GUIVersion, MinEngineSchema: declared.MinEngineSchema, MaxEngineSchema: declared.MaxEngineSchema}, engineSchema) {
+		_ = os.Remove(dest)
+		return fmt.Errorf("downloaded GUI package %s schema range %d-%d is incompatible with engine schema %d", declared.GUIVersion, declared.MinEngineSchema, declared.MaxEngineSchema, engineSchema)
+	}
+	if strings.TrimSpace(publicKey) != "" {
+		if err := VerifyPackageSignature(publicKey, pkg.Signature, dest); err != nil {
+			_ = os.Remove(dest)
+			return err
+		}
+	}
+	return nil
+}
+
+// VerifyPackageSignature checks an Ed25519 signature over the package bytes.
+// publicKey and signature are standard base64.
+func VerifyPackageSignature(publicKey, signature, path string) error {
+	if strings.TrimSpace(signature) == "" {
+		return errors.New("GUI package signature is required")
+	}
+	pub, err := base64.StdEncoding.DecodeString(strings.TrimSpace(publicKey))
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return errors.New("web GUI update public key must be a base64 Ed25519 public key")
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(signature))
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return errors.New("GUI package signature is invalid")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), data, sig) {
+		return errors.New("GUI package signature verification failed")
+	}
+	fmt.Fprintln(os.Stderr, "web GUI package signature verified")
+	return nil
 }
 
 func downloadVerified(ctx context.Context, pkg Package, dest string, client *http.Client) error {

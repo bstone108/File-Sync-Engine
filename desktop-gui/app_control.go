@@ -64,6 +64,7 @@ var nativeProxyPaths = map[string]map[string]bool{
 	"/v1/api/trust": {http.MethodGet: true}, "/v1/api/trust-command": {http.MethodPost: true},
 	"/v1/mesh/settings": {http.MethodGet: true}, "/v1/mesh/settings-command": {http.MethodPost: true},
 	"/v1/config-sync": {http.MethodGet: true}, "/v1/config-sync/edit": {http.MethodPost: true}, "/v1/config-sync/merge": {http.MethodPost: true},
+	"/v1/onboarding":        {http.MethodPost: true},
 	"/v1/filesystem/browse": {http.MethodGet: true}, "/v1/stop": {http.MethodPost: true},
 }
 

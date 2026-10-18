@@ -38,6 +38,7 @@ type InstallOptions struct {
 	InstallDir     string
 	Version        string
 	ChecksumSHA256 string
+	KeepPrevious   bool
 }
 
 type InstallRemoteOptions struct {
@@ -244,6 +245,7 @@ func dockerProxyRoutes() []proxyRoute {
 		{BrowserPath: "/api/v1/config-sync", NativePath: "/v1/config-sync", Methods: get},
 		{BrowserPath: "/api/v1/config-sync/edit", NativePath: "/v1/config-sync/edit", Methods: post},
 		{BrowserPath: "/api/v1/config-sync/merge", NativePath: "/v1/config-sync/merge", Methods: post},
+		{BrowserPath: "/api/v1/onboarding", NativePath: "/v1/onboarding", Methods: post},
 		{BrowserPath: "/api/v1/snapshots", NativePath: "/v1/snapshots", Methods: post},
 		{BrowserPath: "/api/v1/restore-plans", NativePath: "/v1/restore-plans", Methods: post},
 		{BrowserPath: "/api/v1/restores", NativePath: "/v1/restores", Methods: post},
@@ -482,8 +484,40 @@ func InstallLocalPackage(opts InstallOptions) (InstallResult, error) {
 		return InstallResult{}, err
 	}
 	cleanupTmp = false
-	_ = os.RemoveAll(backup)
+	if !opts.KeepPrevious {
+		_ = os.RemoveAll(backup)
+	}
 	return InstallResult{Status: "installed", Version: opts.Version, InstallDir: opts.InstallDir, InstalledAt: time.Now().UTC()}, nil
+}
+
+// ProbeInstall reports whether the swapped package has a servable index page.
+func ProbeInstall(installDir string) error {
+	info, err := os.Stat(filepath.Join(installDir, "index.html"))
+	if err != nil || info.IsDir() || info.Size() == 0 {
+		return errors.New("installed web GUI did not serve index.html")
+	}
+	return nil
+}
+
+// RollbackPrevious restores installDir from the sibling previous directory.
+func RollbackPrevious(installDir string) error {
+	backup := installDir + ".previous"
+	if _, err := os.Stat(backup); err != nil {
+		return errors.New("no previous web GUI package to restore")
+	}
+	failed := installDir + ".failed"
+	_ = os.RemoveAll(failed)
+	if _, err := os.Stat(installDir); err == nil {
+		if err := os.Rename(installDir, failed); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(backup, installDir); err != nil {
+		_ = os.Rename(failed, installDir)
+		return err
+	}
+	_ = os.RemoveAll(failed)
+	return nil
 }
 
 func InstallRemotePackage(opts InstallRemoteOptions) (InstallResult, error) {
