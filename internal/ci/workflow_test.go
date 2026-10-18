@@ -727,6 +727,120 @@ exit 0
 	}
 }
 
+func TestHdiutilRetryDetachesMountsAndRetriesResourceBusy(t *testing.T) {
+	root := filepath.Join("..", "..")
+	bin := t.TempDir()
+	logPath := filepath.Join(bin, "calls.log")
+	fake := filepath.Join(bin, "hdiutil")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$HDIUTIL_CALL_LOG"
+if [ "$1" = "info" ]; then
+  cat <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>images</key>
+  <array>
+    <dict>
+      <key>system-entities</key>
+      <array>
+        <dict>
+          <key>mount-point</key>
+          <string>/Volumes/File Sync Engine Desktop</string>
+        </dict>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>
+EOF
+  exit 0
+fi
+if [ "$1" = "detach" ]; then
+  exit 0
+fi
+creates=$(grep -c "^${1} " "$HDIUTIL_CALL_LOG" || true)
+mode="${HDIUTIL_FAKE_MODE:-transient-then-ok}"
+if [ "$mode" = "permanent" ]; then
+  echo "hdiutil: create failed - No such file or directory" >&2
+  exit 1
+fi
+if [ "$mode" = "always-transient" ] || [ "$creates" -lt 2 ]; then
+  echo "hdiutil: ${1} failed - Resource busy" >&2
+  exit 1
+fi
+echo "created"
+exit 0
+`
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(mode string, args ...string) (string, int) {
+		if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		cmdArgs := append([]string{"scripts/sign-and-notarize-macos-desktop.sh", "--self-test-hdiutil-retry"}, args...)
+		cmd := exec.Command("bash", cmdArgs...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"HDIUTIL_CALL_LOG="+logPath,
+			"HDIUTIL_FAKE_MODE="+mode,
+			"FSE_HDIUTIL_RETRY_DELAYS=0 0 0 0",
+		)
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				code = exitErr.ExitCode()
+			} else {
+				t.Fatal(err)
+			}
+		}
+		return string(out), code
+	}
+	out, code := run("transient-then-ok", "create", "-volname", "File Sync Engine Desktop", "-format", "UDZO", "/tmp/fse-desktop.dmg")
+	if code != 0 {
+		t.Fatalf("resource busy should succeed on retry, exit %d\n%s", code, out)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(calls), "create -volname File Sync Engine Desktop"); got != 2 {
+		t.Fatalf("resource busy should retry create once, calls=%d\n%s\n%s", got, calls, out)
+	}
+	if !strings.Contains(string(calls), "detach /Volumes/File Sync Engine Desktop -force") {
+		t.Fatalf("retry should detach the stale disk image\n%s", calls)
+	}
+	if !strings.Contains(out, "attempt 1/5") {
+		t.Fatalf("retry log missing attempt notice:\n%s", out)
+	}
+	out, code = run("permanent", "create", "-volname", "File Sync Engine Desktop", "/tmp/fse-desktop.dmg")
+	if code == 0 {
+		t.Fatalf("permanent hdiutil failure should not succeed:\n%s", out)
+	}
+	calls, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(calls), "create -volname"); got != 1 {
+		t.Fatalf("non-busy hdiutil failure should not retry, calls=%d\n%s", got, calls)
+	}
+	out, code = run("always-transient", "convert", "udrw.dmg", "-format", "UDZO", "-o", "/tmp/fse-desktop.dmg")
+	if code == 0 {
+		t.Fatalf("repeated resource busy should still fail:\n%s", out)
+	}
+	calls, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(calls), "convert udrw.dmg"); got != 5 {
+		t.Fatalf("transient hdiutil errors should stop after 5 attempts, calls=%d\n%s", got, calls)
+	}
+}
+
 func TestMacOSSignAndNotarizeScriptRefusesNonDarwinHosts(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("non-Darwin guard is exercised on Linux CI")
@@ -831,7 +945,10 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"run_stapler_with_retry staple",
 		"run_stapler_with_retry validate",
 		"NSURLErrorDomain",
-		"hdiutil create",
+		"run_hdiutil_with_retry create",
+		"Resource busy",
+		"hdiutil detach",
+		"sync || true",
 		"ditto -c -k --keepParent",
 		"codesign --verify --deep --strict",
 	} {

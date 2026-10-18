@@ -79,9 +79,110 @@ run_stapler_with_retry() {
   return 1
 }
 
+# hdiutil create/convert on GitHub macOS runners fails with
+# "hdiutil: create failed - Resource busy" when a previous disk image is
+# still attached. Detach those mounts, sync, and retry. Other failures
+# are not retried.
+hdiutil_failure_is_transient() {
+  grep -E -i -q 'Resource busy|Resource temporarily unavailable|Device busy|temporarily unavailable' "$1"
+}
+
+hdiutil_volume_name() {
+  local prev="" arg
+  for arg in "$@"; do
+    if [[ "$prev" == "-volname" ]]; then
+      printf '%s' "$arg"
+      return 0
+    fi
+    prev="$arg"
+  done
+}
+
+detach_stale_disk_images() {
+  local volname="$1"
+  local candidate plist
+  if [[ -n "$volname" ]]; then
+    for candidate in "/Volumes/${volname}" "/Volumes/${volname} 1" "/Volumes/${volname} 2" "/Volumes/${volname} 3"; do
+      if [[ -d "$candidate" ]]; then
+        hdiutil detach "$candidate" -force >/dev/null 2>&1 || true
+      fi
+    done
+  fi
+  plist="$(mktemp "${TMPDIR:-/tmp}/fse-hdiutil-info.XXXXXX")"
+  if hdiutil info -plist >"$plist" 2>/dev/null; then
+    python3 - "$plist" <<'PY' || true
+import plistlib
+import subprocess
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    info = plistlib.load(handle)
+seen = set()
+for image in info.get("images") or []:
+    for entity in image.get("system-entities") or []:
+        target = entity.get("mount-point") or entity.get("dev-entry")
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        subprocess.call(
+            ["hdiutil", "detach", str(target), "-force"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+PY
+  fi
+  rm -f "$plist"
+  sync || true
+}
+
+run_hdiutil_with_retry() {
+  local attempt delay status volname output
+  local -a delays=(5 10 20 40)
+  if [[ -n "${FSE_HDIUTIL_RETRY_DELAYS:-}" ]]; then
+    # shellcheck disable=SC2206
+    delays=(${FSE_HDIUTIL_RETRY_DELAYS})
+  fi
+  volname="$(hdiutil_volume_name "$@")"
+  output=""
+  for output in "$@"; do
+    :
+  done
+  local log
+  log="$(mktemp "${TMPDIR:-/tmp}/fse-hdiutil.XXXXXX")"
+  for attempt in 1 2 3 4 5; do
+    detach_stale_disk_images "$volname"
+    if [[ "$attempt" -gt 1 && -n "$output" && "$output" != -* && -e "$output" ]]; then
+      rm -f "$output"
+    fi
+    status=0
+    hdiutil "$@" >"$log" 2>&1 || status=$?
+    cat "$log" >&2
+    if [[ "$status" -eq 0 ]]; then
+      rm -f "$log"
+      return 0
+    fi
+    if [[ "$attempt" -eq 5 ]] || ! hdiutil_failure_is_transient "$log"; then
+      printf 'hdiutil %s failed (exit %s)\n' "$1" "$status" >&2
+      rm -f "$log"
+      return "$status"
+    fi
+    delay="${delays[$((attempt - 1))]:-40}"
+    printf 'hdiutil %s transient busy error (attempt %s/5); retrying in %ss\n' "$1" "$attempt" "$delay" >&2
+    sleep "$delay"
+  done
+  rm -f "$log"
+  return 1
+}
+
 if [[ "${1:-}" == "--self-test-stapler-retry" ]]; then
   shift
   run_stapler_with_retry "$@"
+  exit $?
+fi
+
+if [[ "${1:-}" == "--self-test-hdiutil-retry" ]]; then
+  shift
+  run_hdiutil_with_retry "$@"
   exit $?
 fi
 
@@ -327,7 +428,7 @@ DMG_PATH="$(dirname "$APP_BUNDLE")/fse-desktop.dmg"
 rm -rf "$DMG_STAGE" "$DMG_PATH"
 mkdir -p "$DMG_STAGE"
 ditto "$APP_BUNDLE" "$DMG_STAGE/fse-desktop.app"
-hdiutil create \
+run_hdiutil_with_retry create \
   -volname "File Sync Engine Desktop" \
   -srcfolder "$DMG_STAGE" \
   -ov \
