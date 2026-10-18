@@ -191,12 +191,41 @@ func DialStream(ctx context.Context, peerID string, addrs []string) (StreamSessi
 	if len(parsed) == 0 {
 		return StreamSession{}, errNoAPIHost
 	}
-	for _, addr := range parsed {
-		connectRelayHop(ctx, h, addr)
+	direct, circuits := partitionStreamAddrs(parsed)
+	// A public relay hop can sit there until the claim budget is gone. Dial a
+	// direct address first, and only then spend time opening a circuit.
+	if len(direct) > 0 {
+		if err := h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: direct}); err == nil {
+			return newStreamSession(h, pid)
+		} else if ctx.Err() != nil || len(circuits) == 0 {
+			return StreamSession{}, err
+		}
 	}
-	if err := h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: parsed}); err != nil {
+	if len(circuits) == 0 {
+		return StreamSession{}, errNoAPIHost
+	}
+	connectRelayHops(ctx, h, circuits)
+	if err := h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: circuits}); err != nil {
 		return StreamSession{}, err
 	}
+	return newStreamSession(h, pid)
+}
+
+func partitionStreamAddrs(addrs []ma.Multiaddr) (direct, circuits []ma.Multiaddr) {
+	for _, addr := range addrs {
+		if addr == nil {
+			continue
+		}
+		if strings.Contains(addr.String(), "p2p-circuit") {
+			circuits = append(circuits, addr)
+			continue
+		}
+		direct = append(direct, addr)
+	}
+	return direct, circuits
+}
+
+func newStreamSession(h host.Host, pid peer.ID) (StreamSession, error) {
 	if !peerIDMatches(h, pid) {
 		return StreamSession{}, errPeerMismatch
 	}
@@ -241,6 +270,23 @@ func (s StreamSession) CurrentRemote() string {
 	return s.Remote
 }
 
+// connectRelayHops opens relay hops, but only for a few seconds altogether.
+// One unreachable public relay must not consume a claim or sync budget
+// before Connect tries the circuit itself.
+func connectRelayHops(ctx context.Context, h host.Host, addrs []ma.Multiaddr) {
+	if ctx == nil || len(addrs) == 0 {
+		return
+	}
+	budget, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	for _, addr := range addrs {
+		if budget.Err() != nil {
+			return
+		}
+		connectRelayHop(budget, h, addr)
+	}
+}
+
 // connectRelayHop dials the relay named by a circuit address before the
 // target. A stored reservation is useless until this hop is opened.
 func connectRelayHop(ctx context.Context, h host.Host, addr ma.Multiaddr) {
@@ -257,7 +303,7 @@ func connectRelayHop(ctx context.Context, h host.Host, addr ma.Multiaddr) {
 	if err != nil || info.ID == "" {
 		return
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	_ = h.Connect(dialCtx, *info)
 }
