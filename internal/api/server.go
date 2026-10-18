@@ -18,10 +18,12 @@ import (
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/foldershare"
 	"filesyncengine/internal/link"
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/pairing"
 	"filesyncengine/internal/scanner"
 	"filesyncengine/internal/schemaversion"
 	"filesyncengine/internal/state"
+	"filesyncengine/internal/transferprogress"
 )
 
 type State struct {
@@ -643,12 +645,18 @@ type FolderRepairWarning struct {
 }
 
 type PeerState struct {
-	ID                 string                  `json:"id"`
-	Status             string                  `json:"status"`
-	Endpoint           string                  `json:"endpoint,omitempty"`
-	Transfer           PeerTransferState       `json:"transfer,omitempty"`
-	Metadata           PeerMetadataState       `json:"metadata,omitempty"`
-	NetworkDiagnostics []PeerNetworkDiagnostic `json:"networkDiagnostics,omitempty"`
+	ID                           string                  `json:"id"`
+	Status                       string                  `json:"status"`
+	Endpoint                     string                  `json:"endpoint,omitempty"`
+	Endpoints                    []string                `json:"endpoints,omitempty"`
+	ConnectionPath               string                  `json:"connectionPath,omitempty"`
+	ReceiveRemainingBytes        int64                   `json:"receiveRemainingBytes,omitempty"`
+	SendRemainingBytes           int64                   `json:"sendRemainingBytes,omitempty"`
+	AverageReceiveBytesPerSecond int64                   `json:"averageReceiveBytesPerSecond,omitempty"`
+	AverageSendBytesPerSecond    int64                   `json:"averageSendBytesPerSecond,omitempty"`
+	Transfer                     PeerTransferState       `json:"transfer,omitempty"`
+	Metadata                     PeerMetadataState       `json:"metadata,omitempty"`
+	NetworkDiagnostics           []PeerNetworkDiagnostic `json:"networkDiagnostics,omitempty"`
 }
 
 type PeerNetworkDiagnostic struct {
@@ -1145,7 +1153,29 @@ func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	state := s.snapshotState()
-	writeJSON(w, state.PeersState)
+	writeJSON(w, livePeerStates(state.PeersState))
+}
+
+// livePeerStates overlays the path and receive progress recorded by the last
+// successful dial. The status snapshot is rebuilt on config reload, which is
+// too late for a transfer that is already moving.
+func livePeerStates(peers []PeerState) []PeerState {
+	if len(peers) == 0 {
+		return peers
+	}
+	out := append([]PeerState(nil), peers...)
+	for i := range out {
+		if out[i].Status == "discovered" || strings.HasPrefix(out[i].Endpoint, "discovered") {
+			continue
+		}
+		if obs, ok := nat.DefaultPaths.Active(out[i].ID); ok {
+			out[i].ConnectionPath = string(obs.Path)
+		}
+		progress := transferprogress.Get(out[i].ID)
+		out[i].ReceiveRemainingBytes = progress.RemainingBytes
+		out[i].AverageReceiveBytesPerSecond = progress.BytesPerSecond
+	}
+	return out
 }
 
 func (s *Server) handleMaintenanceScrub(w http.ResponseWriter, r *http.Request) {

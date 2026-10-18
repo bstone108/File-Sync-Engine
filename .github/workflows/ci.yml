@@ -274,3 +274,24 @@ jobs:
         run: |
           docker compose -f e2e/gui-sync/compose.yaml logs || true
           docker compose -f e2e/gui-sync/compose.published.yaml logs || true
+
+  transfer-soak:
+    name: Throttled transfer soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build engine image
+        run: |
+          set -euo pipefail
+          mkdir -p docker-artifacts
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o docker-artifacts/fse-linux-amd64 ./cmd/fse
+          docker build -t file-sync-engine:e2e .
+      - name: Sync through a throttled link
+        run: sh e2e/soak/run.sh

@@ -1,0 +1,45 @@
+name: fse-soak
+services:
+  soak-a:
+    image: file-sync-engine:e2e
+    hostname: soak-a
+    cap_add: [NET_ADMIN]
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["apk add --no-cache iproute2 >/tmp/apk.log && tc qdisc add dev eth0 root tbf rate 8mbit burst 64kb latency 400ms && exec /usr/local/bin/fse-container-entrypoint start"]
+    networks:
+      soak:
+        ipv4_address: 172.28.40.10
+    environment:
+      FSE_NODE_NAME: soak-a
+      FSE_ADVERTISE_URL: https://soak-a:22420
+      FSE_PUBLISHED_API_PORT: "22420"
+      FSE_LIBP2P_PORT: "22421"
+      FSE_PUBLISHED_LIBP2P_PORT: "22421"
+      FSE_WEB_GUI_ENABLED: "false"
+      FSE_DISCOVERY_LOCAL: "true"
+    ports:
+      - "22440:22420"
+  soak-b:
+    image: file-sync-engine:e2e
+    hostname: soak-b
+    cap_add: [NET_ADMIN]
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["apk add --no-cache iproute2 >/tmp/apk.log && tc qdisc add dev eth0 root tbf rate 8mbit burst 64kb latency 400ms && exec /usr/local/bin/fse-container-entrypoint start"]
+    networks:
+      soak:
+        ipv4_address: 172.28.40.11
+    environment:
+      FSE_NODE_NAME: soak-b
+      FSE_ADVERTISE_URL: https://soak-b:22420
+      FSE_PUBLISHED_API_PORT: "22420"
+      FSE_LIBP2P_PORT: "22421"
+      FSE_PUBLISHED_LIBP2P_PORT: "22421"
+      FSE_WEB_GUI_ENABLED: "false"
+      FSE_DISCOVERY_LOCAL: "true"
+    ports:
+      - "22441:22420"
+networks:
+  soak:
+    ipam:
+      config:
+        - subnet: 172.28.40.0/24

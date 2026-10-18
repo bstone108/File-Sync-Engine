@@ -11,6 +11,7 @@ import (
 
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/configsync"
+	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/link"
 )
 
@@ -172,16 +173,63 @@ func loadPublishedReplica(configPath string) (*configsync.Store, configsync.Repl
 	if err != nil {
 		return nil, configsync.Replica{}, err
 	}
+	announcement := discovery.CurrentHelperAnnouncement(discovery.SharedPeerID(), discovery.SharedListenAddrs())
 	if _, err := replica.PublishConnection(configsync.Connection{
-		InstanceID: replica.InstanceID,
-		Label:      cfg.NodeName,
-		APIURL:     cfg.API.AdvertiseURL,
-		Online:     true,
-		LastSeen:   time.Now().UTC().Format(time.RFC3339),
+		InstanceID:  replica.InstanceID,
+		Label:       cfg.NodeName,
+		APIURL:      cfg.API.AdvertiseURL,
+		DiscoveryID: cfg.Identity.PublicKey,
+		DHTPeerID:   announcement.DHTPeerID,
+		RelayAddrs:  announcement.RelayAddrs,
+		MeshHelper:  announcement.Enabled,
+		Reachable:   announcement.Reachable,
+		Online:      true,
+		LastSeen:    time.Now().UTC().Format(time.RFC3339),
 	}, time.Now().UnixMilli()); err != nil {
 		return nil, configsync.Replica{}, err
 	}
+	noteReplicaMembers(cfg, replica)
 	return store, replica, nil
+}
+
+func noteReplicaMembers(cfg config.Config, replica configsync.Replica) {
+	discovery.RefreshIdentityMembers(cfg)
+	var ids []string
+	var relays []string
+	var exchanged []discovery.Peer
+	for id, conn := range replica.Connections {
+		if conn.DHTPeerID != "" && id != replica.InstanceID {
+			ids = append(ids, conn.DHTPeerID)
+		}
+		if conn.MeshHelper {
+			relays = append(relays, conn.RelayAddrs...)
+		}
+		addresses := append([]string(nil), conn.Addresses...)
+		if conn.APIURL != "" {
+			addresses = append(addresses, conn.APIURL)
+		}
+		if len(addresses) == 0 {
+			continue
+		}
+		if conn.DHTPeerID != "" {
+			exchanged = append(exchanged, discovery.Peer{ID: conn.DHTPeerID, Addresses: addresses})
+		}
+		for _, peer := range cfg.Peers {
+			if peer.ID == "" {
+				continue
+			}
+			if conn.DHTPeerID != "" && peer.DHTPeerID == conn.DHTPeerID {
+				exchanged = append(exchanged, discovery.Peer{ID: peer.ID, Addresses: addresses})
+			} else if conn.DiscoveryID != "" && peer.IdentityPublicKey == conn.DiscoveryID {
+				exchanged = append(exchanged, discovery.Peer{ID: peer.ID, Addresses: addresses})
+			}
+		}
+	}
+	discovery.SetConnectionMembers(ids)
+	discovery.SetIdentityRelays(relays)
+	if len(exchanged) > 0 {
+		discovery.NoteExchangedPeers(exchanged)
+	}
 }
 
 // recordOwnSettings copies this engine's non-secret settings into its own

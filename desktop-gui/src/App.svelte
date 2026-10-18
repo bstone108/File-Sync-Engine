@@ -81,6 +81,7 @@
   import {
     buildReadableHostStatusMetrics,
     buildPeerPairingStatusLine,
+    summarizeLocalPeerLink,
     buildOfflineRemoteSettingsEdit,
     buildRemoteInstanceOnboardingCandidate,
     buildRemoteMeshSettingsDocument,
@@ -601,16 +602,23 @@
         fetchDaemonPeers(daemonConnectionSettings)
       ]);
       const liveName = status?.nodeName || 'Local engine';
-      localEngineConnectionState = 'online';
-      localEngineConnectionLabel = 'Online';
+      const link = summarizeLocalPeerLink(daemonPeers);
+      localEngineConnectionState = link.connectionState;
+      localEngineConnectionLabel = link.label;
       if (!advertiseFieldDirty) {
         advertiseOverride = status?.advertiseURL ?? '';
       }
       void refreshConfigInstances();
       managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
         ...instance,
-        connectionState: 'online',
-        statusSummary: `${liveName} is live through the local engine API.`
+        connectionState: link.connectionState,
+        pairingState: link.pairingState,
+        pairingDetail: link.pairingDetail,
+        receiveRemainingBytes: link.receiveRemainingBytes,
+        sendRemainingBytes: link.sendRemainingBytes,
+        averageReceiveBytesPerSecond: link.averageReceiveBytesPerSecond,
+        averageSendBytesPerSecond: link.averageSendBytesPerSecond,
+        statusSummary: `${liveName}: ${link.statusSummary}`
       } : instance);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -631,11 +639,6 @@
     status = null;
     try {
       await refreshOperationalState();
-      managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
-        ...instance,
-        connectionState: 'online',
-        statusSummary: `${status?.nodeName ?? instance.label} is live through the native authenticated API bridge; folders and peers were refreshed from the daemon.`
-      } : instance);
     } catch (error) {
       managedDaemonInstances = managedDaemonInstances.map((instance) => instance.id === selectedInstanceID ? {
         ...instance,
@@ -2012,7 +2015,7 @@
         {:else}
           <ul aria-label="Configured peers">
             {#each daemonPeers as peer}
-              <li><strong>{peer.id}</strong> · {peer.endpoint ?? 'endpoint unavailable'} · {peer.status ?? 'configured'}</li>
+              <li><strong>{peer.id}</strong> · {(peer.endpoints && peer.endpoints.length > 0) ? peer.endpoints.join(' · ') : (peer.endpoint ?? 'endpoint unavailable')} · {peer.status ?? 'configured'} · <span data-testid="peer-connection-path">{peer.connectionPath || (peer.status === 'discovered' || (peer.endpoint ?? '').startsWith('discovered') ? 'discovered' : 'unreachable')}</span> · receive {peer.receiveRemainingBytes ?? 0} B left at {peer.averageReceiveBytesPerSecond ?? 0} B/s</li>
             {/each}
           </ul>
         {/if}

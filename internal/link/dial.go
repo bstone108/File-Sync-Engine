@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/discovery"
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/routing"
 )
 
@@ -27,9 +29,11 @@ import (
 func OrderedEndpoints(peer config.PeerConfig) []config.EndpointConfig {
 	endpoints := make([]config.EndpointConfig, 0, len(peer.Endpoints)+len(peer.Relays))
 	for _, endpoint := range peer.Endpoints {
-		if !isAPIAddress(endpoint.Address) {
+		address, ok := discovery.DialableHTTPAddress(endpoint.Address)
+		if !ok {
 			continue
 		}
+		endpoint.Address = address
 		endpoints = append(endpoints, endpoint)
 	}
 	seen := map[string]struct{}{}
@@ -37,9 +41,11 @@ func OrderedEndpoints(peer config.PeerConfig) []config.EndpointConfig {
 		seen[endpoint.Address] = struct{}{}
 	}
 	for _, relay := range peer.Relays {
-		if !isAPIAddress(relay) {
+		address, ok := discovery.DialableHTTPAddress(relay)
+		if !ok {
 			continue
 		}
+		relay = address
 		if _, ok := seen[relay]; ok {
 			continue
 		}
@@ -60,34 +66,110 @@ func HasAPIEndpoint(peer config.PeerConfig) bool {
 	return len(OrderedEndpoints(peer)) > 0
 }
 
-// Dial tries API addresses in order. Connection failures fail over. An HTTP
-// response, including an error status, stops the search because that address
-// is alive.
+// Dial tries saved addresses first, then peer-exchange and same-identity
+// connection details, then LAN discoveries, then DHT addresses. Each stage
+// races its addresses and keeps a relay only until a direct path wins.
+// An HTTP response stops the search because that address is alive.
 func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, string, *http.Client) error) (string, error) {
-	endpoints := OrderedEndpoints(peer)
-	if len(endpoints) == 0 {
-		return "", errors.New("peer has no http endpoint")
-	}
+	stages := endpointStages(peer)
 	var last error
-	for _, endpoint := range endpoints {
-		client, err := verifyPinnedPeerCertificateClient(endpoint.Address, peer.APICertificateSHA256)
-		if err != nil {
-			return "", err
+	tried := 0
+	for _, stage := range stages {
+		if len(stage) == 0 {
+			continue
 		}
-		err = do(ctx, strings.TrimRight(endpoint.Address, "/"), client)
+		tried += len(stage)
+		used, path, err := dialStage(ctx, peer, stage, do)
 		if err == nil {
-			return endpoint.Address, nil
+			discovery.NotePeerReachable(peer.ID)
+			nat.DefaultPaths.Observe(peer.ID, used, path)
+			if peer.DHTPeerID != "" {
+				nat.DefaultPaths.Observe(peer.DHTPeerID, used, path)
+			}
+			return used, nil
 		}
-		if !failoverError(err) {
-			return "", err
+		var answered answeredError
+		if errors.As(err, &answered) {
+			return "", answered.err
 		}
 		last = err
 	}
+	if tried == 0 {
+		return "", errors.New("peer has no http endpoint")
+	}
+	discovery.NotePeerUnreachable(peer.ID)
 	if last == nil {
 		last = errors.New("peer has no reachable endpoint")
 	}
 	return "", last
 }
+
+func endpointStages(peer config.PeerConfig) [][]config.EndpointConfig {
+	exchanged, local, dht := discovery.AddressesFor(peer.ID)
+	if peer.DHTPeerID != "" && peer.DHTPeerID != peer.ID {
+		moreExchanged, moreLocal, moreDHT := discovery.AddressesFor(peer.DHTPeerID)
+		exchanged = append(exchanged, moreExchanged...)
+		local = append(local, moreLocal...)
+		dht = append(dht, moreDHT...)
+	}
+	return [][]config.EndpointConfig{
+		OrderedEndpoints(peer),
+		httpEndpoints(exchanged, "manual"),
+		httpEndpoints(local, "manual"),
+		httpEndpoints(dht, "relay"),
+	}
+}
+
+func httpEndpoints(addresses []string, kind string) []config.EndpointConfig {
+	out := make([]config.EndpointConfig, 0, len(addresses))
+	seen := map[string]struct{}{}
+	for _, address := range addresses {
+		httpAddress, ok := discovery.DialableHTTPAddress(address)
+		if !ok {
+			continue
+		}
+		address = httpAddress
+		if _, ok := seen[address]; ok {
+			continue
+		}
+		seen[address] = struct{}{}
+		out = append(out, config.EndpointConfig{Kind: kind, Address: address, NetworkHint: string(routing.ClassifyEndpointNetwork(address))})
+	}
+	return out
+}
+
+func dialStage(ctx context.Context, peer config.PeerConfig, endpoints []config.EndpointConfig, do func(context.Context, string, *http.Client) error) (string, nat.Path, error) {
+	candidates := make([]nat.Candidate, 0, len(endpoints))
+	byAddress := map[string]config.EndpointConfig{}
+	for _, endpoint := range endpoints {
+		path := nat.Classify(endpoint.Address)
+		if endpoint.Kind == "relay" {
+			path = nat.PathRelay
+		}
+		candidates = append(candidates, nat.Candidate{Address: endpoint.Address, Path: path})
+		byAddress[endpoint.Address] = endpoint
+	}
+	return nat.Race(ctx, candidates, func(ctx context.Context, address string) error {
+		client, err := verifyPinnedPeerCertificateClient(address, peer.APICertificateSHA256)
+		if err != nil {
+			return err
+		}
+		err = do(ctx, strings.TrimRight(address, "/"), client)
+		if err == nil {
+			return nil
+		}
+		if !failoverError(err) {
+			return answeredError{err: err}
+		}
+		return err
+	}, 250*time.Millisecond)
+}
+
+type answeredError struct{ err error }
+
+func (e answeredError) Error() string { return e.err.Error() }
+
+func (e answeredError) Unwrap() error { return nat.ErrAnswered }
 
 // PostJSON dials the peer and posts JSON, failing over when an earlier address dies.
 func PostJSON(ctx context.Context, peer config.PeerConfig, path string, payload []byte) ([]byte, string, error) {
@@ -146,7 +228,8 @@ func endpointRank(endpoint config.EndpointConfig) int {
 }
 
 func isAPIAddress(address string) bool {
-	return strings.HasPrefix(address, "http://") || strings.HasPrefix(address, "https://")
+	_, ok := discovery.DialableHTTPAddress(address)
+	return ok
 }
 
 func failoverError(err error) bool {
@@ -165,18 +248,30 @@ func failoverError(err error) bool {
 	return errors.As(err, &opErr)
 }
 
+const (
+	dialTimeout   = 8 * time.Second
+	headerTimeout = 15 * time.Second
+)
+
+// IdleReadTimeout is how long a transfer waits for the next bytes.
+// There is no total timeout. A large file keeps moving as long as bytes arrive.
+var IdleReadTimeout = 30 * time.Second
+
 // verifyPinnedPeerCertificateClient trusts only the pinned leaf certificate.
 // Go requires InsecureSkipVerify so the self-signed daemon certificate can reach
 // VerifyPeerCertificate, which checks the SHA-256 fingerprint.
+// The client has a dial timeout and a header timeout, then an idle timeout on
+// each read. It does not cap the total transfer.
 func verifyPinnedPeerCertificateClient(endpoint, pin string) (*http.Client, error) {
+	transport := transferTransport(nil)
 	if !strings.HasPrefix(endpoint, "https://") {
-		return &http.Client{Timeout: 8 * time.Second}, nil
+		return &http.Client{Transport: transport}, nil
 	}
 	pin = strings.ToLower(strings.TrimSpace(pin))
 	if len(pin) != 64 {
 		return nil, errors.New("https peer is missing an API certificate fingerprint")
 	}
-	transport := &http.Transport{TLSClientConfig: &tls.Config{
+	transport.TLSClientConfig = &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: true,
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
@@ -189,6 +284,49 @@ func verifyPinnedPeerCertificateClient(endpoint, pin string) (*http.Client, erro
 			}
 			return nil
 		},
-	}}
-	return &http.Client{Timeout: 8 * time.Second, Transport: transport}, nil
+	}
+	return &http.Client{Transport: transport}, nil
+}
+
+func transferTransport(base *http.Transport) *http.Transport {
+	if base == nil {
+		base = &http.Transport{}
+	}
+	base.Proxy = http.ProxyFromEnvironment
+	base.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &idleConn{Conn: conn, idle: IdleReadTimeout}, nil
+	}
+	base.ForceAttemptHTTP2 = false
+	base.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	base.MaxIdleConns = 32
+	base.IdleConnTimeout = 90 * time.Second
+	base.TLSHandshakeTimeout = headerTimeout
+	base.ResponseHeaderTimeout = headerTimeout
+	base.ExpectContinueTimeout = time.Second
+	return base
+}
+
+// idleConn fails a read or write that goes quiet, without a total deadline.
+type idleConn struct {
+	net.Conn
+	idle time.Duration
+}
+
+func (c *idleConn) Read(p []byte) (int, error) {
+	if c.idle > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.idle))
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *idleConn) Write(p []byte) (int, error) {
+	if c.idle > 0 {
+		_ = c.Conn.SetWriteDeadline(time.Now().Add(c.idle))
+	}
+	return c.Conn.Write(p)
 }

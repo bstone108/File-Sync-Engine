@@ -19,7 +19,18 @@ export type DaemonStatus = {
 };
 
 export type DaemonFolder = { id: string; path?: string; mode?: string; status?: string; [key: string]: unknown };
-export type DaemonPeer = { id: string; endpoint?: string; status?: string; [key: string]: unknown };
+export type DaemonPeer = {
+  id: string;
+  endpoint?: string;
+  endpoints?: string[];
+  status?: string;
+  connectionPath?: string;
+  receiveRemainingBytes?: number;
+  sendRemainingBytes?: number;
+  averageReceiveBytesPerSecond?: number;
+  averageSendBytesPerSecond?: number;
+  [key: string]: unknown
+};
 
 export type DaemonConfig = Record<string, unknown>;
 export type DaemonConfigPatch = Record<string, unknown>;

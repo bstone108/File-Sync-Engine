@@ -60,6 +60,12 @@ func fetchPairingHTTP(ctx context.Context, addrs []ma.Multiaddr, namespace strin
 	return nil, fmt.Errorf("pairing provider record has no advertised API URL")
 }
 
+// FetchPairingRecord reads a sealed pairing record from an engine API.
+// Connected peers are asked this way before the public DHT.
+func FetchPairingRecord(ctx context.Context, endpoint, namespace string) ([]byte, error) {
+	return fetchPairingURL(ctx, endpoint, namespace)
+}
+
 func fetchPairingURL(ctx context.Context, endpoint, namespace string) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()

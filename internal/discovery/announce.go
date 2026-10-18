@@ -136,6 +136,26 @@ func ProductionRouter(ctx context.Context, nodeID string) (*Libp2pDHTRouter, err
 	return router, nil
 }
 
+// SharedPeerID is the libp2p peer id of the process router, when it is up.
+func SharedPeerID() string {
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if sharedRouter == nil {
+		return ""
+	}
+	return sharedRouter.PeerID()
+}
+
+// SharedListenAddrs are the addresses the process router is advertising.
+func SharedListenAddrs() []string {
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if sharedRouter == nil || sharedRouter.host == nil {
+		return nil
+	}
+	return multiaddrStrings(sharedRouter.host.Addrs())
+}
+
 // ResetSharedRouter closes the process router. Tests use it between cases.
 func ResetSharedRouter() {
 	sharedMu.Lock()
@@ -147,7 +167,11 @@ func ResetSharedRouter() {
 }
 
 func announcedAddrs(existing []ma.Multiaddr) []ma.Multiaddr {
-	announced := announcedMultiaddrs(announceHosts(), currentAnnounceAPIURL(), PublishedLibp2pPort(Libp2pListenPort()))
+	apiURL := currentAnnounceAPIURL()
+	if advertise.ExcludeTailscale() && advertise.IsTailscaleHost(apiURL) {
+		apiURL = ""
+	}
+	announced := announcedMultiaddrs(announceHosts(), apiURL, PublishedLibp2pPort(Libp2pListenPort()))
 	if len(announced) == 0 {
 		return existing
 	}
@@ -167,6 +191,9 @@ func announceHosts() []string {
 		if host == "" {
 			return
 		}
+		if advertise.ExcludeTailscale() && advertise.IsTailscaleHost(host) {
+			return
+		}
 		if !advertise.HostReachable(host) {
 			return
 		}
@@ -176,11 +203,20 @@ func announceHosts() []string {
 		seen[host] = struct{}{}
 		hosts = append(hosts, host)
 	}
-	add(advertise.DetectHost())
-	for _, ip := range advertise.TailscaleHosts(context.Background()) {
+	for _, ip := range advertise.AdvertisedIPs() {
+		add(ip)
+	}
+	obs := advertise.CurrentObservations()
+	add(obs.GUIHost)
+	add(obs.ExternalIP)
+	for _, ip := range obs.ObservedIPs {
 		add(ip)
 	}
 	add(currentAnnounceAPIURL())
+	add(os.Getenv(advertise.EnvVar))
+	for _, extra := range advertise.ListFromEnv(os.Getenv(advertise.EnvVarList)) {
+		add(extra)
+	}
 	return hosts
 }
 
@@ -286,6 +322,23 @@ func multiaddrStrings(addrs []ma.Multiaddr) []string {
 		}
 	}
 	return out
+}
+
+// DialableHTTPAddress returns an http or https URL.
+// A multiaddr that carries /http or /https is converted. Other multiaddrs are not API addresses.
+func DialableHTTPAddress(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw, true
+	}
+	if !strings.HasPrefix(raw, "/") {
+		return "", false
+	}
+	addr, err := ma.NewMultiaddr(raw)
+	if err != nil {
+		return "", false
+	}
+	return apiURLFromMultiaddr(addr)
 }
 
 // apiURLFromMultiaddr reads an HTTP or HTTPS URL carried in a provider address.

@@ -82,6 +82,27 @@ func TestAnnouncedMultiaddrsUsePublishedPortAndAPI(t *testing.T) {
 	}
 }
 
+func TestAnnounceHostsKeepEveryPath(t *testing.T) {
+	t.Setenv(advertise.EnvVarList, "https://203.0.113.9:22420")
+	t.Setenv(advertise.EnvExcludeTailscale, "")
+	SetAnnounceAPIURL("https://100.64.8.8:22420")
+	t.Cleanup(func() { SetAnnounceAPIURL("") })
+	joined := strings.Join(multiaddrStrings(announcedAddrs(nil)), " ")
+	for _, want := range []string{"/ip4/203.0.113.9/tcp/", "/ip4/100.64.8.8/tcp/"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %s in %s", want, joined)
+		}
+	}
+	t.Setenv(advertise.EnvExcludeTailscale, "1")
+	excluded := strings.Join(multiaddrStrings(announcedAddrs(nil)), " ")
+	if strings.Contains(excluded, "100.64.8.8") {
+		t.Fatalf("tailscale still announced: %s", excluded)
+	}
+	if !strings.Contains(excluded, "/ip4/203.0.113.9/tcp/") {
+		t.Fatalf("public path missing: %s", excluded)
+	}
+}
+
 func TestAnnouncedAddrsReplaceBridgeListenAddrs(t *testing.T) {
 	t.Setenv(EnvPublishedLibp2pPort, "22423")
 	SetAnnounceAPIURL("https://192.0.2.20:22430")
