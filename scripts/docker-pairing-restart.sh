@@ -87,7 +87,16 @@ print(urllib.parse.quote("filesyncengine/pair/v1/" + digest, safe=""))
 echo "checking the code file is on the appdata volume"
 docker compose -f "$compose" exec -T publisher sh -c 'test -s /config/pairing-codes.json && test ! -e /tmp/pairing-codes.json'
 
-advertised_before="$(docker compose -f "$compose" logs publisher 2>&1 | grep -c 'pairing code advertised on the DHT' || true)"
+# Structured pairing logs go to the appdata log file, not the container's stdout.
+publisher_log() {
+  docker compose -f "$compose" exec -T publisher cat /config/logs/fse.jsonl 2>/dev/null || true
+}
+
+log_count() {
+  publisher_log | grep -c "$1" || true
+}
+
+advertised_before="$(log_count 'pairing code advertised on the DHT')"
 
 echo "restarting publisher"
 docker compose -f "$compose" restart publisher
@@ -107,26 +116,10 @@ while [ "$i" -lt 30 ]; do
 done
 curl -kfsS "https://127.0.0.1:22451/v1/pair-code/record?namespace=${namespace}" >/dev/null
 
-echo "waiting for republish"
-i=0
-republished=0
-while [ "$i" -lt 20 ]; do
-  if docker compose -f "$compose" logs publisher 2>&1 | grep -q 'pairing code republished after restart'; then
-    republished=1
-    break
-  fi
-  i=$((i + 1))
-  sleep 2
-done
-if [ "$republished" != "1" ]; then
-  echo "restart did not republish the stored pairing code" >&2
-  exit 1
-fi
-
 echo "redeeming after restart"
 paired=""
 i=0
-while [ "$i" -lt 10 ]; do
+while [ "$i" -lt 15 ]; do
   paired="$(curl -ksS -H "X-FSE-API-Key: $KEY_B" -H "Content-Type: application/json" -d "{\"code\":\"$code\"}" "https://127.0.0.1:22452/v1/pair-code/redeem" || true)"
   echo "$paired"
   if echo "$paired" | grep -qi 'not found'; then
@@ -143,18 +136,29 @@ if ! echo "$paired" | grep -qi 'paired by code'; then
   exit 1
 fi
 
-echo "waiting for the DHT advertisement to be republished"
+echo "waiting for republish and the DHT advertisement"
 i=0
+republished=0
 dht_ok=0
-while [ "$i" -lt 30 ]; do
-  advertised_after="$(docker compose -f "$compose" logs publisher 2>&1 | grep -c 'pairing code advertised on the DHT' || true)"
+while [ "$i" -lt 45 ]; do
+  text="$(publisher_log)"
+  if printf '%s\n' "$text" | grep -q 'pairing code republished after restart'; then
+    republished=1
+  fi
+  advertised_after="$(printf '%s\n' "$text" | grep -c 'pairing code advertised on the DHT' || true)"
   if [ "$advertised_after" -gt "$advertised_before" ]; then
     dht_ok=1
+  fi
+  if [ "$republished" = "1" ] && [ "$dht_ok" = "1" ]; then
     break
   fi
   i=$((i + 1))
   sleep 2
 done
+if [ "$republished" != "1" ]; then
+  echo "restart did not republish the stored pairing code" >&2
+  exit 1
+fi
 if [ "$dht_ok" != "1" ]; then
   echo "DHT record was not republished after restart (before=$advertised_before)" >&2
   exit 1

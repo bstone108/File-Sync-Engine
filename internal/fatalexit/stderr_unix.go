@@ -24,7 +24,7 @@ func DetachStderrWriteErrors() {
 			_ = syscall.Close(orig)
 			return
 		}
-		if err := syscall.Dup2(int(writer.Fd()), int(os.Stderr.Fd())); err != nil {
+		if err := dupToStderr(int(writer.Fd()), int(os.Stderr.Fd())); err != nil {
 			_ = reader.Close()
 			_ = writer.Close()
 			_ = syscall.Close(orig)
