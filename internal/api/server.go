@@ -1197,7 +1197,50 @@ func actionableErrorSummary(eventType string) (kind, action string, ok bool) {
 
 func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {
 	state := s.snapshotState()
-	writeJSON(w, state.FoldersState)
+	writeJSON(w, foldersVisibleToGUI(state))
+}
+
+// foldersVisibleToGUI lists the folders stored in config without waiting for
+// hot reload. The daemon adopts config only after a quiet period, which is
+// too late for the folder row the GUI shows as soon as an add is accepted.
+// Runtime progress stays attached to folders the daemon has already adopted.
+func foldersVisibleToGUI(state State) []FolderState {
+	if strings.TrimSpace(state.ConfigPath) == "" {
+		return state.FoldersState
+	}
+	cfg, err := config.LoadFile(state.ConfigPath)
+	if err != nil {
+		return state.FoldersState
+	}
+	adopted := make(map[string]FolderState, len(state.FoldersState))
+	for _, folder := range state.FoldersState {
+		adopted[folder.ID] = folder
+	}
+	visible := make([]FolderState, 0, len(cfg.Folders))
+	for _, folder := range cfg.Folders {
+		current, ok := adopted[folder.ID]
+		if !ok {
+			current = FolderState{ID: folder.ID}
+		}
+		current.ID = folder.ID
+		current.Path = folder.Path
+		current.Mode = string(folder.Mode)
+		current.Enabled = folder.SharingEnabled()
+		current.SharedWith = append([]string(nil), folder.SharedWith...)
+		current.Ignore = append([]string(nil), folder.Ignore...)
+		if !current.Enabled {
+			current.Status = "paused"
+			current.ProgressLabel = "Paused"
+			current.SyncPercent = 0
+		} else if !ok || current.Status == "" || current.Status == "paused" {
+			current.Status = "configured"
+			if current.ProgressLabel == "Paused" {
+				current.ProgressLabel = ""
+			}
+		}
+		visible = append(visible, current)
+	}
+	return visible
 }
 
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {

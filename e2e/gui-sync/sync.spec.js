@@ -62,7 +62,13 @@ async function editSharedFolder(page) {
   if (await close.isVisible().catch(() => false)) {
     await close.click();
   }
-  await page.getByTestId('folder-expand').filter({ hasText: 'shared' }).click();
+  const localEngine = page.getByTestId('instance-option').filter({ hasText: '· local' });
+  if (await localEngine.count()) {
+    await localEngine.first().click();
+  }
+  const row = page.getByTestId('folder-expand').filter({ hasText: 'shared' });
+  await expect(row).toBeVisible();
+  await row.click();
   await page.getByTestId('folder-open').click();
   await expect(page.getByTestId('folder-editor')).toBeVisible();
   await page.getByTestId('folder-edit-mode').selectOption('sendonly');

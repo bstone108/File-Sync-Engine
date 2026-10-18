@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1282,6 +1283,56 @@ func TestFoldersAndPeersExposeRuntimeState(t *testing.T) {
 				t.Fatalf("folder warning state missing from body: %s", body)
 			}
 		}
+	}
+}
+
+func TestFoldersRouteShowsConfigBeforeHotReload(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	docs := config.FolderConfig{ID: "docs", Path: filepath.Join(dir, "docs"), Mode: config.ModeSendReceive}
+	docs.SetEnabled(true)
+	shared := config.FolderConfig{ID: "shared", Path: filepath.Join(dir, "shared"), Mode: config.ModeSendOnly, SharedWith: []string{"peer-extra"}, Ignore: []string{"*.tmp"}}
+	shared.SetEnabled(true)
+	paused := config.FolderConfig{ID: "hold", Path: filepath.Join(dir, "hold"), Mode: config.ModeReceiveOnly}
+	paused.SetEnabled(false)
+	cfg := config.Config{NodeName: "node-a", Folders: []config.FolderConfig{docs, shared, paused}}
+	encoded, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := config.WriteFileAtomic(configPath, append(encoded, '\n'), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	server := NewServer(State{
+		NodeName:   "node-a",
+		ConfigPath: configPath,
+		FoldersState: []FolderState{
+			{ID: "docs", Path: "/stale", Mode: "recvonly", Status: "syncing", Enabled: true, Index: FolderIndexState{TotalFiles: 4}, ProgressLabel: "Syncing"},
+			{ID: "removed", Path: "/gone", Status: "configured", Enabled: true},
+		},
+	}, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/v1/folders", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	w := httptest.NewRecorder()
+	server.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("folders code = %d body=%s", w.Code, w.Body.String())
+	}
+	var folders []FolderState
+	if err := json.Unmarshal(w.Body.Bytes(), &folders); err != nil {
+		t.Fatalf("decode folders: %v body=%s", err, w.Body.String())
+	}
+	if len(folders) != 3 {
+		t.Fatalf("folders = %+v", folders)
+	}
+	if folders[0].ID != "docs" || folders[0].Path != docs.Path || folders[0].Mode != "sendrecv" || folders[0].Status != "syncing" || folders[0].Index.TotalFiles != 4 || folders[0].ProgressLabel != "Syncing" {
+		t.Fatalf("adopted folder lost progress or kept stale config: %+v", folders[0])
+	}
+	if folders[1].ID != "shared" || folders[1].Path != shared.Path || folders[1].Mode != "sendonly" || !folders[1].Enabled || folders[1].Status != "configured" || len(folders[1].SharedWith) != 1 || folders[1].SharedWith[0] != "peer-extra" || len(folders[1].Ignore) != 1 || folders[1].Ignore[0] != "*.tmp" {
+		t.Fatalf("new folder missing before hot reload: %+v", folders[1])
+	}
+	if folders[2].ID != "hold" || folders[2].Enabled || folders[2].Status != "paused" || folders[2].ProgressLabel != "Paused" {
+		t.Fatalf("paused folder = %+v", folders[2])
 	}
 }
 
