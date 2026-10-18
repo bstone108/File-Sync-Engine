@@ -44,6 +44,30 @@ func (r *Registry) Observe(peerID, address string, path Path) {
 	r.peers[peerID] = Observation{PeerID: peerID, Path: path, Address: address, At: time.Now()}
 }
 
+// ObserveLimited records that the only live path is a limited relay.
+// It replaces an unclassified or unlimited-relay label. A LAN, direct,
+// hole-punched, or Tailscale path stays in place.
+func (r *Registry) ObserveLimited(peerID, address string) {
+	if r == nil || peerID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.peers == nil {
+		r.peers = map[string]Observation{}
+	}
+	current := r.peers[peerID]
+	switch current.Path {
+	case "", PathRelay, PathLimitedRelay:
+	default:
+		return
+	}
+	if address == "" {
+		address = current.Address
+	}
+	r.peers[peerID] = Observation{PeerID: peerID, Path: PathLimitedRelay, Address: address, At: time.Now()}
+}
+
 // Touch keeps an existing path fresh after another successful request on the
 // cached connection. It does not invent a path that was never dialed.
 func (r *Registry) Touch(peerID string) {

@@ -155,6 +155,19 @@ func TestFolderJournalReplacesEmptyScan(t *testing.T) {
 	}
 }
 
+func TestLimitedRelayPathIsVisibleToTheGUI(t *testing.T) {
+	nat.DefaultPaths.Reset()
+	t.Cleanup(nat.DefaultPaths.Reset)
+	nat.DefaultPaths.ObserveLimited("neko", "/ip4/198.51.100.8/tcp/4001/p2p/relay/p2p-circuit")
+	peers := peersVisibleToGUI(State{PeersState: []PeerState{{ID: "neko", Status: "configured"}}})
+	if len(peers) != 1 || peers[0].ConnectionPath != "limited-relay" {
+		t.Fatalf("peers = %+v", peers)
+	}
+	if len(peers[0].NetworkDiagnostics) != 1 || peers[0].NetworkDiagnostics[0].Code != "limited-relay" || peers[0].NetworkDiagnostics[0].Guidance == "" {
+		t.Fatalf("diagnostics = %+v", peers[0].NetworkDiagnostics)
+	}
+}
+
 func TestTransfersReportLiveBytesWithoutInventingARoute(t *testing.T) {
 	transferprogress.Reset()
 	t.Cleanup(transferprogress.Reset)

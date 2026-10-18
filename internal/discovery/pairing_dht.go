@@ -234,7 +234,7 @@ func (r *Libp2pDHTRouter) fetchPairingStream(ctx context.Context, info peer.Addr
 	if _, err := r.connectPaths(dialCtx, dialInfo); err != nil {
 		return nil, err
 	}
-	stream, err := r.host.NewStream(dialCtx, info.ID, protocol.ID(PairingProtocol))
+	stream, err := r.host.NewStream(pairingStreamContext(dialCtx), info.ID, protocol.ID(PairingProtocol))
 	if err != nil {
 		return nil, err
 	}

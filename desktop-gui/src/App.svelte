@@ -90,6 +90,7 @@
     defaultExpandedInstanceGroups,
     defaultLocalDaemonInstance,
     ensureLocalInstanceFirst,
+    formatConnectionPath,
     formatConnectionStateLabel,
     formatTransferByteSummary,
     groupDaemonInstances,
@@ -106,6 +107,22 @@
     summary: string;
     detail?: string;
   };
+
+  function limitedRelayGuidance(peer: DaemonPeer): string {
+    const diagnostics = peer.networkDiagnostics;
+    if (Array.isArray(diagnostics)) {
+      for (const item of diagnostics) {
+        if (item && typeof item === 'object' && 'code' in item && item.code === 'limited-relay') {
+          const guidance = 'guidance' in item ? item.guidance : '';
+          return typeof guidance === 'string' ? guidance : '';
+        }
+      }
+    }
+    if (peer.connectionPath === 'limited-relay') {
+      return 'Only a limited relay is reachable. File transfer needs a direct path or an unlimited relay.';
+    }
+    return '';
+  }
 
   let apiBaseURL = 'https://127.0.0.1:22420';
   let localCredentialRef = '';
@@ -2508,7 +2525,7 @@
         {:else}
           <ul aria-label="Configured peers">
             {#each daemonPeers as peer}
-              <li><strong>{peer.id}</strong> · {(peer.endpoints && peer.endpoints.length > 0) ? peer.endpoints.join(' · ') : (peer.endpoint ?? 'endpoint unavailable')} · {peer.status ?? 'configured'} · <span data-testid="peer-connection-path">{peer.connectionPath || (peer.status === 'discovered' || (peer.endpoint ?? '').startsWith('discovered') ? 'discovered' : 'unreachable')}</span> · receive {peer.receiveRemainingBytes ?? 0} B left at {peer.averageReceiveBytesPerSecond ?? 0} B/s</li>
+              <li><strong>{peer.id}</strong> · {(peer.endpoints && peer.endpoints.length > 0) ? peer.endpoints.join(' · ') : (peer.endpoint ?? 'endpoint unavailable')} · {peer.status ?? 'configured'} · <span data-testid="peer-connection-path">{peer.connectionPath ? formatConnectionPath(peer.connectionPath) : (peer.status === 'discovered' || (peer.endpoint ?? '').startsWith('discovered') ? 'discovered' : 'unreachable')}</span>{#if limitedRelayGuidance(peer)} <span data-testid="peer-limited-relay">{limitedRelayGuidance(peer)}</span>{/if} · receive {peer.receiveRemainingBytes ?? 0} B left at {peer.averageReceiveBytesPerSecond ?? 0} B/s</li>
             {/each}
           </ul>
         {/if}

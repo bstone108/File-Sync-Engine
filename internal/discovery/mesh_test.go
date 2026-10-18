@@ -107,6 +107,39 @@ func TestParseObservation(t *testing.T) {
 	}
 }
 
+func TestHelperRelayHasNoDataLimit(t *testing.T) {
+	resources := helperResources()
+	if resources.Limit != nil {
+		t.Fatalf("helper limit = %+v", resources.Limit)
+	}
+	if resources.MaxCircuits != 4 || resources.MaxReservations < 1 {
+		t.Fatalf("caps = %+v", resources)
+	}
+}
+
+func TestUnlimitedRelaysSkipDefaultBootstrap(t *testing.T) {
+	mesh.mu.Lock()
+	prevPublic := append([]string(nil), mesh.publicRelays...)
+	prevIdentity := append([]string(nil), mesh.identityRelays...)
+	mesh.publicRelays = nil
+	mesh.identityRelays = []string{"/ip4/198.51.100.8/tcp/22421/p2p/12D3KooWhelper"}
+	mesh.mu.Unlock()
+	t.Cleanup(func() {
+		mesh.mu.Lock()
+		mesh.publicRelays = prevPublic
+		mesh.identityRelays = prevIdentity
+		mesh.mu.Unlock()
+	})
+	got := UnlimitedRelayAddrs()
+	if len(got) != 1 || got[0] != "/ip4/198.51.100.8/tcp/22421/p2p/12D3KooWhelper" {
+		t.Fatalf("unlimited = %#v", got)
+	}
+	ordered := OrderedRelays()
+	if len(ordered) < 2 || ordered[0] != got[0] {
+		t.Fatalf("ordered = %#v", ordered)
+	}
+}
+
 func TestOrderedRelaysPreferIdentityHelpers(t *testing.T) {
 	mesh.mu.Lock()
 	mesh.publicRelays = []string{"/dnsaddr/bootstrap.libp2p.io"}

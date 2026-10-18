@@ -89,6 +89,7 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 	}
 	stages := endpointStages(peer)
 	var last error
+	sawLimited := false
 	tried := 0
 	for i, stage := range stages {
 		if i == libp2pStage {
@@ -101,6 +102,9 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 				return "", answered.err
 			}
 			if !errors.Is(err, errNoStream) && err != nil {
+				if errors.Is(err, discovery.ErrLimitedRelay) {
+					sawLimited = true
+				}
 				last = err
 				tried++
 			}
@@ -129,9 +133,16 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 		return "", errors.New("peer has no http endpoint")
 	}
 	discovery.NotePeerUnreachable(peer.ID)
-	nat.DefaultPaths.Forget(peer.ID)
-	if peer.DHTPeerID != "" {
-		nat.DefaultPaths.Forget(peer.DHTPeerID)
+	if sawLimited || errors.Is(last, discovery.ErrLimitedRelay) {
+		nat.DefaultPaths.ObserveLimited(peer.ID, "")
+		if peer.DHTPeerID != "" {
+			nat.DefaultPaths.ObserveLimited(peer.DHTPeerID, "")
+		}
+	} else {
+		nat.DefaultPaths.Forget(peer.ID)
+		if peer.DHTPeerID != "" {
+			nat.DefaultPaths.Forget(peer.DHTPeerID)
+		}
 	}
 	if last == nil {
 		last = errors.New("peer has no reachable endpoint")

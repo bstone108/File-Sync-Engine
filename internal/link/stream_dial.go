@@ -2,6 +2,7 @@ package link
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -87,17 +88,23 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 		}
 		err = do(ctx, discovery.StreamBaseURL, session.Client)
 		if err == nil {
-			path := session.Path
+			path := session.CurrentPath()
 			if path == "" {
 				path = nat.PathRelay
 			}
 			rememberDial(peer.ID, discovery.StreamBaseURL, session.Client)
-			nat.DefaultPaths.Observe(peer.ID, session.Remote, path)
+			nat.DefaultPaths.Observe(peer.ID, session.CurrentRemote(), path)
 			if peer.DHTPeerID != "" {
-				nat.DefaultPaths.Observe(peer.DHTPeerID, session.Remote, path)
+				nat.DefaultPaths.Observe(peer.DHTPeerID, session.CurrentRemote(), path)
 			}
 			discovery.NotePeerReachable(peer.ID)
 			return discovery.StreamBaseURL, nil
+		}
+		if errors.Is(err, discovery.ErrLimitedRelay) {
+			nat.DefaultPaths.ObserveLimited(peer.ID, session.CurrentRemote())
+			if peer.DHTPeerID != "" {
+				nat.DefaultPaths.ObserveLimited(peer.DHTPeerID, session.CurrentRemote())
+			}
 		}
 		if !failoverError(err) {
 			return "", answeredError{err: err}
