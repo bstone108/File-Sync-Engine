@@ -21,9 +21,13 @@ import (
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	routingdiscovery "github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
+	"github.com/libp2p/go-libp2p/p2p/protocol/autonatv2"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
+	"github.com/libp2p/go-libp2p/p2p/transport/quicreuse"
 	ma "github.com/multiformats/go-multiaddr"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/structuredlog"
 )
 
@@ -35,19 +39,26 @@ const dhtQueryLimit = 64
 // peers advertising the same namespace. Manual/configured peers remain wired as
 // separate static discovery sources by the daemon.
 type Libp2pDHTRouter struct {
-	host           host.Host
-	dht            *dht.IpfsDHT
-	discovery      *routingdiscovery.RoutingDiscovery
-	mu             sync.Mutex
-	advertise      map[string]struct{}
-	payloads       map[string][]byte
-	bootstrapped   bool
-	bootstrapAt    time.Time
-	bootstrapWait  chan struct{}
-	bootstrapErr   error
-	bootstrapPeers []string
-	resolver       multiaddrResolver
-	modeReason     string
+	host            host.Host
+	dht             *dht.IpfsDHT
+	discovery       *routingdiscovery.RoutingDiscovery
+	mu              sync.Mutex
+	advertise       map[string]struct{}
+	payloads        map[string][]byte
+	bootstrapped    bool
+	bootstrapAt     time.Time
+	bootstrapWait   chan struct{}
+	bootstrapErr    error
+	bootstrapPeers  []string
+	resolver        multiaddrResolver
+	modeReason      string
+	quicCM          *quicreuse.ConnManager
+	stopSTUN        func()
+	remotePublic    atomic.Bool
+	autonat         *autonatv2.AutoNAT
+	closed          chan struct{}
+	closeOnce       sync.Once
+	dialbackRunning atomic.Bool
 }
 
 type Libp2pDHTRouterOptions struct {
@@ -57,9 +68,9 @@ type Libp2pDHTRouterOptions struct {
 	// Announce replaces container-internal listen addresses with the
 	// host-reachable published port and the HTTPS API URL.
 	Announce bool
-	// DHTMode overrides the default. Empty means server when a published
-	// libp2p port or reachable advertise address is already known, and auto
-	// otherwise. A client can still look pairing records up.
+	// DHTMode overrides the default. Empty stays auto: the node reserves a
+	// relay while it is private and answers queries only after a remote
+	// peer dials it back. A self-dial, including NAT hairpin, is not that proof.
 	DHTMode string
 }
 
@@ -79,6 +90,10 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", opts.ListenPort),
 			fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", opts.ListenPort),
 		))
+		libp2pOpts = append(libp2pOpts, libp2pListenOptions(opts.ListenPort)...)
+		quicBuildMu.Lock()
+		quicBuilt.Store(nil)
+		defer quicBuildMu.Unlock()
 	}
 	mode, reason, err := libp2pDHTMode(opts.DHTMode)
 	if err != nil {
@@ -88,9 +103,9 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		libp2pOpts = append(libp2pOpts, libp2p.AddrsFactory(announcedAddrs))
 	}
 	// Traversal stays on unless discovery.nat.disabled or FSE_NAT_TRAVERSAL
-	// turns it off. AutoNAT decides whether this node is a public helper.
-	// A published port still selects DHT server mode so pairing records can be
-	// stored, without forcing every published port to look publicly reachable.
+	// turns it off. The host stays private, and AutoRelay keeps a reservation,
+	// until AutoNAT v2 or an authenticated peer dials this node from outside.
+	// A dial this process makes to itself is not that confirmation.
 	if NATEnabled() {
 		libp2pOpts = append(libp2pOpts,
 			libp2p.EnableRelay(),
@@ -100,13 +115,15 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			libp2p.EnableRelayService(helperRelayOptions()...),
 			libp2p.EnableAutoRelayWithPeerSource(func(relayCtx context.Context, num int) <-chan peer.AddrInfo {
 				return relayCandidates(relayCtx, num, &hostBox, &dhtBox)
-			}),
+			}, autorelay.WithMinCandidates(1), autorelay.WithBootDelay(5*time.Second), autorelay.WithBackoff(30*time.Second), autorelay.WithMinInterval(2*time.Second)),
+			libp2p.ForceReachabilityPrivate(),
 		)
 	}
 	h, err := libp2p.New(libp2pOpts...)
 	if err != nil {
 		return nil, err
 	}
+	quicCM := takeQUICConnManager()
 	hostBox.Store(h)
 	kad, err := dht.New(ctx, h, dht.Mode(mode), dht.DisableAutoRefresh())
 	if err != nil {
@@ -121,12 +138,19 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		advertise:  map[string]struct{}{},
 		payloads:   map[string][]byte{},
 		modeReason: reason,
+		quicCM:     quicCM,
+		stopSTUN:   startLibp2pSTUN(h, quicCM),
+		closed:     make(chan struct{}),
 	}
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
 	h.SetStreamHandler(protocol.ID(ObserveProtocol), router.handleObserve)
 	noteRouterHost(h)
+	registerRouter(router)
 	watchConnections(h.Network())
 	go watchReachability(h)
+	go watchAutoRelay(h)
+	go router.watchAutoNAT()
+	go router.republishWhenRelayReserved()
 	if opts.Announce {
 		structuredlog.Event("info", "libp2p.announce", "libp2p is advertising the published port", map[string]any{
 			"peerId":        h.ID().String(),
@@ -136,6 +160,14 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			"dhtModeReason": reason,
 			"addresses":     multiaddrStrings(h.Addrs()),
 		})
+	}
+	// Stay private so AutoRelay reserves a relay until a remote peer dials back.
+	if NATEnabled() {
+		router.notePrivateReachability()
+		// Start before any peer connects so the AutoNAT client observes the
+		// identify event. A client started later never learns that peer.
+		router.remoteAutoNAT()
+		go router.runRemoteDialback()
 	}
 	return router, nil
 }
@@ -251,10 +283,9 @@ func (r *Libp2pDHTRouter) BootstrapPeers() []string {
 }
 
 // libp2pDHTMode chooses who answers DHT queries. An explicit FSE_LIBP2P_DHT_MODE
-// wins. Otherwise a published libp2p port or a reachable advertise address
-// makes this node a server, so public peers can dial it and store provider
-// records. With neither, ModeAuto stays a client behind NAT and uses relay
-// addresses; it can still look pairing records up.
+// wins. Otherwise the node stays in auto mode: it reserves a relay while it
+// is private, and it answers queries only after a dial-back proves the libp2p
+// port is open. A published port or a LAN address is not that proof.
 func libp2pDHTMode(override string) (dht.ModeOpt, string, error) {
 	envMode := override
 	if strings.TrimSpace(override) == "" {
@@ -275,12 +306,12 @@ func selectLibp2pDHTMode(envMode string, publishedPort bool, reachableHost bool)
 	default:
 		return 0, "", fmt.Errorf("FSE_LIBP2P_DHT_MODE must be auto, auto-server, or server")
 	}
-	if publishedPort {
-		return dht.ModeServer, "published-port", nil
-	}
-	if reachableHost {
-		return dht.ModeServer, "advertise-address", nil
-	}
+	// A mapped port and a LAN advertise address are not dial-back proof. ModeAuto
+	// answers DHT queries only after reachability is public, and it reserves a
+	// relay while it is private. Forcing server mode here made a NATed node
+	// advertise a closed port and skip relay reservation.
+	_ = publishedPort
+	_ = reachableHost
 	return dht.ModeAuto, "auto", nil
 }
 
@@ -304,25 +335,155 @@ func dhtModeName(mode dht.ModeOpt) string {
 	}
 }
 
-// notePublicReachability tells a ModeAuto node that its published address is
-// dialable, so it starts answering DHT queries. A node that already started
-// as a server does not need this.
-func (r *Libp2pDHTRouter) notePublicReachability() {
-	if r == nil || r.host == nil || r.dht == nil || r.dht.Mode() == dht.ModeServer {
+// notePublicReachability tells a ModeAuto node that a remote peer dialed it,
+// so it starts answering DHT queries. source is autonat-v2 or
+// authenticated-peer. A node that already started as a server does not need this.
+func (r *Libp2pDHTRouter) notePublicReachability(source string) {
+	if r == nil || r.host == nil || r.dht == nil || source == "" || r.dht.Mode() == dht.ModeServer {
 		return
 	}
+	if !r.remotePublic.CompareAndSwap(false, true) {
+		return
+	}
+	mesh.autonatPublic.Store(true)
 	markSelfReachabilityEmit()
 	emitter, err := r.host.EventBus().Emitter(new(event.EvtLocalReachabilityChanged))
 	if err != nil {
-		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error()})
+		r.remotePublic.Store(false)
+		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error(), "source": source})
 		return
 	}
 	defer emitter.Close()
 	if err := emitter.Emit(event.EvtLocalReachabilityChanged{Reachability: network.ReachabilityPublic}); err != nil {
-		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error()})
+		r.remotePublic.Store(false)
+		structuredlog.Event("warn", "libp2p.dht.reachable", "libp2p could not mark its published address reachable", map[string]any{"error": err.Error(), "source": source})
 		return
 	}
-	structuredlog.Event("info", "libp2p.dht.reachable", "reachable address is advertised to the DHT", map[string]any{"dhtModeReason": r.modeReason})
+	structuredlog.Event("info", "libp2p.dht.reachable", "a remote peer dialed this node", map[string]any{"dhtModeReason": r.modeReason, "source": source})
+}
+
+// watchAutoNAT promotes the node when AutoNAT v2 learns that another node
+// could dial an advertised address. The probe is not a connection this
+// process opened.
+func (r *Libp2pDHTRouter) watchAutoNAT() {
+	if r == nil || r.host == nil {
+		return
+	}
+	sub, err := r.host.EventBus().Subscribe(new(event.EvtHostReachableAddrsChanged))
+	if err != nil {
+		return
+	}
+	defer sub.Close()
+	for ev := range sub.Out() {
+		changed, ok := ev.(event.EvtHostReachableAddrsChanged)
+		if !ok {
+			continue
+		}
+		source := remoteReachabilitySource(len(changed.Reachable), "", r.host.ID(), false, false, false)
+		if source == "" {
+			continue
+		}
+		r.notePublicReachability(source)
+	}
+}
+
+// notePrivateReachability tells AutoRelay this node cannot be dialed directly,
+// so it reserves a relay instead of advertising a closed port.
+func (r *Libp2pDHTRouter) notePrivateReachability() {
+	if r == nil || r.host == nil {
+		return
+	}
+	emitter, err := r.host.EventBus().Emitter(new(event.EvtLocalReachabilityChanged))
+	if err != nil {
+		structuredlog.Event("warn", "libp2p.dht.private", "libp2p could not mark itself private", map[string]any{"error": err.Error()})
+		return
+	}
+	defer emitter.Close()
+	if err := emitter.Emit(event.EvtLocalReachabilityChanged{Reachability: network.ReachabilityPrivate}); err != nil {
+		structuredlog.Event("warn", "libp2p.dht.private", "libp2p could not mark itself private", map[string]any{"error": err.Error()})
+		return
+	}
+	structuredlog.Event("info", "libp2p.dht.private", "libp2p is behind NAT and will reserve a relay", map[string]any{"dhtModeReason": r.modeReason})
+}
+
+// republishWhenRelayReserved refreshes provider records after a circuit
+// address exists. A record published at startup otherwise names only the
+// private listen address, and a peer behind another NAT cannot dial it.
+func (r *Libp2pDHTRouter) republishWhenRelayReserved() {
+	if r == nil || r.host == nil {
+		return
+	}
+	sub, err := r.host.EventBus().Subscribe(new(event.EvtAutoRelayAddrsUpdated))
+	if err != nil {
+		return
+	}
+	defer sub.Close()
+	for ev := range sub.Out() {
+		updated, ok := ev.(event.EvtAutoRelayAddrsUpdated)
+		if !ok || len(updated.RelayAddrs) == 0 || r.discovery == nil {
+			continue
+		}
+		r.mu.Lock()
+		namespaces := make([]string, 0, len(r.advertise))
+		for namespace := range r.advertise {
+			namespaces = append(namespaces, namespace)
+		}
+		r.mu.Unlock()
+		if len(namespaces) == 0 {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		for _, namespace := range namespaces {
+			if _, advErr := r.discovery.Advertise(ctx, namespace); advErr != nil {
+				structuredlog.Event("warn", "libp2p.relay.republish", "relay reservation did not refresh the DHT record", map[string]any{
+					"namespace": namespace,
+					"error":     advErr.Error(),
+				})
+			}
+		}
+		cancel()
+		structuredlog.Event("info", "libp2p.relay.republish", "DHT records were refreshed on the reserved relay", map[string]any{"namespaces": len(namespaces)})
+	}
+}
+
+// Addrs are the addresses the host is advertising, including relay circuits
+// after a reservation.
+func (r *Libp2pDHTRouter) Addrs() []string {
+	if r == nil || r.host == nil {
+		return nil
+	}
+	return multiaddrStrings(r.host.Addrs())
+}
+
+// LookupPeerAddrs asks the DHT for a paired peer when no relay address was stored.
+func (r *Libp2pDHTRouter) LookupPeerAddrs(ctx context.Context, peerID string) []string {
+	if r == nil || r.host == nil || strings.TrimSpace(peerID) == "" {
+		return nil
+	}
+	pid, err := peer.Decode(strings.TrimSpace(peerID))
+	if err != nil {
+		return nil
+	}
+	addrs := r.host.Peerstore().Addrs(pid)
+	if len(addrs) == 0 && r.dht != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		findCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		info, findErr := r.dht.FindPeer(findCtx, pid)
+		cancel()
+		if findErr == nil {
+			addrs = info.Addrs
+		}
+	}
+	out := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		if addr == nil {
+			continue
+		}
+		out = append(out, addr.Encapsulate(ma.StringCast("/p2p/"+pid.String())).String())
+	}
+	return out
 }
 
 func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value) <-chan peer.AddrInfo {
@@ -347,24 +508,54 @@ func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value
 			return
 		}
 		h, _ := hostBox.Load().(host.Host)
-		kad, _ := dhtBox.Load().(*dht.IpfsDHT)
-		if h == nil || kad == nil || kad.RoutingTable() == nil {
+		if h == nil {
 			return
 		}
-		peers := kad.RoutingTable().ListPeers()
-		if len(peers) > num {
-			peers = peers[:num]
-		}
-		for _, id := range peers {
+		seen := map[peer.ID]struct{}{}
+		send := func(id peer.ID) bool {
+			if id == "" || id == h.ID() {
+				return true
+			}
+			if _, ok := seen[id]; ok {
+				return true
+			}
+			seen[id] = struct{}{}
 			info := peer.AddrInfo{ID: id, Addrs: h.Peerstore().Addrs(id)}
 			select {
 			case <-ctx.Done():
-				return
+				return false
 			case ch <- info:
+			}
+			return true
+		}
+		// Connected peers include the bootstrap dial, which may not be in the
+		// routing table yet. Those peers are the only relay candidates when
+		// no relay was configured.
+		for _, id := range h.Network().Peers() {
+			num--
+			if num < 0 || !send(id) {
+				return
+			}
+		}
+		kad, _ := dhtBox.Load().(*dht.IpfsDHT)
+		if kad == nil || kad.RoutingTable() == nil {
+			return
+		}
+		for _, id := range kad.RoutingTable().ListPeers() {
+			num--
+			if num < 0 || !send(id) {
+				return
 			}
 		}
 	}()
 	return ch
+}
+
+func lastAddrOf(info peer.AddrInfo) string {
+	if len(info.Addrs) == 0 || info.Addrs[0] == nil {
+		return ""
+	}
+	return info.Addrs[0].String()
 }
 
 func (r *Libp2pDHTRouter) connectBootstrap(ctx context.Context, infos []peer.AddrInfo) int {
@@ -379,11 +570,19 @@ func (r *Libp2pDHTRouter) connectBootstrap(ctx context.Context, infos []peer.Add
 	var lastErr error
 	var lastAddr string
 	for _, info := range attempts[:limit] {
+		if ctx.Err() != nil {
+			lastErr = ctx.Err()
+			break
+		}
 		r.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
 		connectCtx, cancel := context.WithTimeout(ctx, bootstrapDialTimeout)
 		err := r.host.Connect(connectCtx, info)
 		cancel()
 		if err == nil {
+			structuredlog.Event("info", "libp2p.bootstrap.connected", "libp2p bootstrap dial connected", map[string]any{
+				"address": lastAddrOf(info),
+				"peer":    info.ID.String(),
+			})
 			return 1
 		}
 		lastErr = err
@@ -450,14 +649,19 @@ func (r *Libp2pDHTRouter) FindPeers(ctx context.Context, namespace string) ([]Pe
 		return nil, fmt.Errorf("public DHT namespace is required")
 	}
 	r.mu.Lock()
-	if _, ok := r.advertise[namespace]; !ok {
-		if _, err := r.discovery.Advertise(ctx, namespace); err != nil {
-			r.mu.Unlock()
-			return nil, err
-		}
+	_, already := r.advertise[namespace]
+	if !already {
 		r.advertise[namespace] = struct{}{}
 	}
 	r.mu.Unlock()
+	if !already {
+		if _, err := r.discovery.Advertise(ctx, namespace); err != nil {
+			r.mu.Lock()
+			delete(r.advertise, namespace)
+			r.mu.Unlock()
+			return nil, err
+		}
+	}
 	peerCh, err := r.discovery.FindPeers(ctx, namespace, corediscovery.Limit(dhtQueryLimit))
 	if err != nil {
 		return nil, err
@@ -479,8 +683,42 @@ func (r *Libp2pDHTRouter) FindPeers(ctx context.Context, namespace string) ([]Pe
 	return peers, nil
 }
 
+// ProbeSTUNNow sends one STUN round from this router's QUIC socket.
+// The background probe does not run under go test, so tests call this.
+func (r *Libp2pDHTRouter) ProbeSTUNNow(ctx context.Context) (advertise.NATStatus, error) {
+	if r == nil || r.host == nil || r.quicCM == nil {
+		return advertise.NATStatus{}, fmt.Errorf("libp2p UDP socket is not available")
+	}
+	conn, _, err := shareQUICSocket(r.host, r.quicCM)
+	if err != nil {
+		return advertise.NATStatus{}, err
+	}
+	defer conn.Close()
+	return advertise.ObserveSTUN(ctx, conn), nil
+}
+
 func (r *Libp2pDHTRouter) Close() error {
-	if r == nil || r.host == nil {
+	if r == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() {
+		if r.closed != nil {
+			close(r.closed)
+		}
+	})
+	unregisterRouter(r)
+	if r.stopSTUN != nil {
+		r.stopSTUN()
+		r.stopSTUN = nil
+	}
+	r.mu.Lock()
+	an := r.autonat
+	r.autonat = nil
+	r.mu.Unlock()
+	if an != nil {
+		an.Close()
+	}
+	if r.host == nil {
 		return nil
 	}
 	return r.host.Close()

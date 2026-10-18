@@ -90,6 +90,7 @@
     defaultExpandedInstanceGroups,
     defaultLocalDaemonInstance,
     ensureLocalInstanceFirst,
+    formatConnectionPath,
     formatConnectionStateLabel,
     formatTransferByteSummary,
     groupDaemonInstances,
@@ -106,6 +107,39 @@
     summary: string;
     detail?: string;
   };
+
+  function natTypeLabel(natType: string | undefined): string {
+    switch (natType) {
+      case 'cone':
+        return 'Cone NAT';
+      case 'symmetric':
+        return 'Symmetric NAT';
+      case 'unknown':
+        return 'NAT unknown';
+      case 'disabled':
+        return 'NAT detection off';
+      case 'pending':
+        return 'Checking NAT';
+      default:
+        return natType ? natType : 'Checking NAT';
+    }
+  }
+
+  function limitedRelayGuidance(peer: DaemonPeer): string {
+    const diagnostics = peer.networkDiagnostics;
+    if (Array.isArray(diagnostics)) {
+      for (const item of diagnostics) {
+        if (item && typeof item === 'object' && 'code' in item && item.code === 'limited-relay') {
+          const guidance = 'guidance' in item ? item.guidance : '';
+          return typeof guidance === 'string' ? guidance : '';
+        }
+      }
+    }
+    if (peer.connectionPath === 'limited-relay') {
+      return 'Only a limited relay is reachable. File transfer needs a direct path or an unlimited relay.';
+    }
+    return '';
+  }
 
   let apiBaseURL = 'https://127.0.0.1:22420';
   let localCredentialRef = '';
@@ -279,22 +313,6 @@
       && !/is ready|paired by code/i.test(message);
   }
 
-  function onPairingButtonClick(event: MouseEvent) {
-    const target = event.target;
-    if (!(target instanceof Element)) {
-      return;
-    }
-    const button = target.closest('[data-testid="show-pairing-code"], [data-testid="redeem-pairing-code"]');
-    if (!(button instanceof HTMLButtonElement) || button.disabled) {
-      return;
-    }
-    event.preventDefault();
-    if (button.getAttribute('data-testid') === 'show-pairing-code') {
-      void showPairingCode();
-      return;
-    }
-    void redeemRemotePairingCode();
-  }
   let managedDaemonInstances: ManagedDaemonInstance[] = ensureLocalInstanceFirst([defaultLocalDaemonInstance()]);
   let selectedInstanceID = managedDaemonInstances[0].id;
   let expandedInstanceGroups: Record<string, boolean> = defaultExpandedInstanceGroups(managedDaemonInstances);
@@ -1817,7 +1835,6 @@
   }
 
   onMount(() => {
-    document.addEventListener('click', onPairingButtonClick);
     if (window.matchMedia('(prefers-color-scheme: light)').matches) {
       theme = 'light';
     }
@@ -1829,7 +1846,6 @@
         void tick();
       }, 3000);
       return () => {
-        document.removeEventListener('click', onPairingButtonClick);
         clearInterval(timer);
       };
     }
@@ -1843,7 +1859,6 @@
       void refreshDesktopAppUpdateStatus();
     }, 15000);
     return () => {
-      document.removeEventListener('click', onPairingButtonClick);
       clearInterval(statusTimer);
     };
   });
@@ -2081,6 +2096,7 @@
         <dt>Identity</dt><dd>{status?.identityPublicKey ?? 'Loading'}</dd>
         <dt>Engine schema</dt><dd>{status?.engineSchemaVersion ?? '—'}</dd>
         <dt>Daemon</dt><dd>{status?.status ?? 'starting'}</dd>
+        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status?.natType)}{#if status?.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}</dd>
         <dt>Folders</dt><dd>{daemonFolders.length}</dd>
         <dt>Peers</dt><dd>{daemonPeers.length}</dd>
       </dl>
@@ -2108,6 +2124,7 @@
     {#if status}
       <dl class="host-status-grid" aria-label="Daemon operational summary">
         <dt>Daemon</dt><dd>{status.status ?? 'running'}</dd>
+        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status.natType)}{#if status.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}</dd>
         <dt>Folders</dt><dd>{daemonFolders.length}</dd>
         <dt>Peers</dt><dd>{daemonPeers.length}</dd>
         <dt>Started</dt><dd>{status.startedAt ?? 'unknown'}</dd>
@@ -2508,7 +2525,7 @@
         {:else}
           <ul aria-label="Configured peers">
             {#each daemonPeers as peer}
-              <li><strong>{peer.id}</strong> · {(peer.endpoints && peer.endpoints.length > 0) ? peer.endpoints.join(' · ') : (peer.endpoint ?? 'endpoint unavailable')} · {peer.status ?? 'configured'} · <span data-testid="peer-connection-path">{peer.connectionPath || (peer.status === 'discovered' || (peer.endpoint ?? '').startsWith('discovered') ? 'discovered' : 'unreachable')}</span> · receive {peer.receiveRemainingBytes ?? 0} B left at {peer.averageReceiveBytesPerSecond ?? 0} B/s</li>
+              <li><strong>{peer.id}</strong> · {(peer.endpoints && peer.endpoints.length > 0) ? peer.endpoints.join(' · ') : (peer.endpoint ?? 'endpoint unavailable')} · {peer.status ?? 'configured'} · <span data-testid="peer-connection-path">{peer.connectionPath ? formatConnectionPath(peer.connectionPath) : (peer.status === 'discovered' || (peer.endpoint ?? '').startsWith('discovered') ? 'discovered' : 'unreachable')}</span>{#if limitedRelayGuidance(peer)} <span data-testid="peer-limited-relay">{limitedRelayGuidance(peer)}</span>{/if} · receive {peer.receiveRemainingBytes ?? 0} B left at {peer.averageReceiveBytesPerSecond ?? 0} B/s</li>
             {/each}
           </ul>
         {/if}

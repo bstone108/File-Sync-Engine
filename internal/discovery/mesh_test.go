@@ -79,6 +79,11 @@ func TestRefreshIdentityMembersUsesEnabledGroupsOnly(t *testing.T) {
 	if _, ok := mesh.configMembers["12D3KooWcode"]; ok {
 		t.Fatal("code-paired peer was treated as same identity")
 	}
+	for _, id := range []string{"12D3KooWfamily", "12D3KooWguest", "12D3KooWcode"} {
+		if _, ok := mesh.dialbackPeers[id]; !ok {
+			t.Fatalf("dial-back peers = %#v", mesh.dialbackPeers)
+		}
+	}
 }
 
 func TestHolePunchUpgradesRelayPath(t *testing.T) {
@@ -104,6 +109,39 @@ func TestParseObservation(t *testing.T) {
 	observed, relayAddr := ParseObservation("observed /ip4/203.0.113.8/tcp/42421\nrelay /ip4/198.51.100.4/tcp/22421/p2p/12D3KooWhelper\n")
 	if observed != "/ip4/203.0.113.8/tcp/42421" || relayAddr != "/ip4/198.51.100.4/tcp/22421/p2p/12D3KooWhelper" {
 		t.Fatalf("observed=%q relay=%q", observed, relayAddr)
+	}
+}
+
+func TestHelperRelayHasNoDataLimit(t *testing.T) {
+	resources := helperResources()
+	if resources.Limit != nil {
+		t.Fatalf("helper limit = %+v", resources.Limit)
+	}
+	if resources.MaxCircuits != 4 || resources.MaxReservations < 1 {
+		t.Fatalf("caps = %+v", resources)
+	}
+}
+
+func TestUnlimitedRelaysSkipDefaultBootstrap(t *testing.T) {
+	mesh.mu.Lock()
+	prevPublic := append([]string(nil), mesh.publicRelays...)
+	prevIdentity := append([]string(nil), mesh.identityRelays...)
+	mesh.publicRelays = nil
+	mesh.identityRelays = []string{"/ip4/198.51.100.8/tcp/22421/p2p/12D3KooWhelper"}
+	mesh.mu.Unlock()
+	t.Cleanup(func() {
+		mesh.mu.Lock()
+		mesh.publicRelays = prevPublic
+		mesh.identityRelays = prevIdentity
+		mesh.mu.Unlock()
+	})
+	got := UnlimitedRelayAddrs()
+	if len(got) != 1 || got[0] != "/ip4/198.51.100.8/tcp/22421/p2p/12D3KooWhelper" {
+		t.Fatalf("unlimited = %#v", got)
+	}
+	ordered := OrderedRelays()
+	if len(ordered) < 2 || ordered[0] != got[0] {
+		t.Fatalf("ordered = %#v", ordered)
 	}
 }
 

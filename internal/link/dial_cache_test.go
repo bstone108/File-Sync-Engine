@@ -2,9 +2,12 @@ package link
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 
@@ -19,18 +22,21 @@ func TestDialReusesTheConnectionForTheNextSmallFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	var accepts atomic.Int32
-	counting := &countListener{Listener: ln, accepts: &accepts}
-	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "ok")
-	})}
+	}))
+	server.Listener = &countListener{Listener: ln, accepts: &accepts}
+	server.StartTLS()
 	defer server.Close()
-	go func() { _ = server.Serve(counting) }()
+	sum := sha256.Sum256(server.Certificate().Raw)
 
 	peer := config.PeerConfig{
-		ID:     "keep-alive",
-		APIKey: "secret",
+		ID:                   "keep-alive",
+		APIKey:               "secret",
+		IdentityPublicKey:    "keep-alive-identity",
+		APICertificateSHA256: hex.EncodeToString(sum[:]),
 		Endpoints: []config.EndpointConfig{{
-			Kind: "manual", Address: "http://" + ln.Addr().String(), NetworkHint: "local",
+			Kind: "manual", Address: server.URL, NetworkHint: "local", Authenticated: true,
 		}},
 	}
 	fetch := func() {

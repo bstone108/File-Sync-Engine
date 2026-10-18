@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"filesyncengine/internal/api"
@@ -66,10 +67,23 @@ func HandleConfigSync(configPath string) (ConfigSyncResponse, error) {
 	if err := executePendingOnboarding(context.Background(), configPath, &replica); err != nil {
 		return ConfigSyncResponse{}, err
 	}
-	if err := store.Save(replica); err != nil {
+	saved, err := store.Update(func(current *configsync.Replica) error {
+		if conn, ok := replica.Connections[replica.InstanceID]; ok {
+			existing := current.Connections[replica.InstanceID]
+			if current.Connections == nil || configsync.Compare(conn.Clock, existing.Clock) > 0 {
+				if current.Connections == nil {
+					current.Connections = map[string]configsync.Connection{}
+				}
+				current.Connections[replica.InstanceID] = conn
+			}
+		}
+		current.AdoptOnboarding(replica.Onboarding)
+		return nil
+	})
+	if err != nil {
 		return ConfigSyncResponse{}, err
 	}
-	return responseFrom(replica), nil
+	return responseFrom(saved), nil
 }
 
 // HandleConfigSyncEdit queues a field change for one linked engine.
@@ -170,34 +184,88 @@ func executePendingOnboarding(ctx context.Context, configPath string, replica *c
 		if !ok {
 			continue
 		}
-		var err error
-		switch command.Action {
-		case configsync.OnboardingIssue:
-			issued, issueErr := HandleIssuePairCode(configPath)
-			if issueErr != nil {
-				_, err = replica.CompleteOnboarding(id, configsync.OnboardingFailed, "", "", onboardingFailure(issueErr, command.Code), now)
-			} else {
-				_, err = replica.CompleteOnboarding(id, configsync.OnboardingDone, issued.Code, issued.ExpiresAt.UTC().Format(time.RFC3339), "Pairing code is ready. It can be used once.", now)
-			}
-		case configsync.OnboardingAccept:
-			response, redeemErr := HandleRedeemPairCode(ctx, configPath, api.PairCodeRedeemRequest{Code: command.Code})
-			if redeemErr != nil {
-				_, err = replica.CompleteOnboarding(id, configsync.OnboardingFailed, "", "", onboardingFailure(redeemErr, command.Code), now)
-			} else {
-				message := response.Message
-				if message == "" {
-					message = "paired by code"
-				}
-				_, err = replica.CompleteOnboarding(id, configsync.OnboardingDone, "", "", message, now)
-			}
-		default:
-			_, err = replica.CompleteOnboarding(id, configsync.OnboardingFailed, "", "", "unsupported onboarding action", now)
+		if !claimOnboarding(id) {
+			continue
 		}
+		err := runOnboardingCommand(ctx, configPath, replica, command, now)
+		releaseOnboarding(id)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+var (
+	onboardMu   sync.Mutex
+	onboardBusy = map[string]struct{}{}
+)
+
+func claimOnboarding(id string) bool {
+	onboardMu.Lock()
+	defer onboardMu.Unlock()
+	if _, busy := onboardBusy[id]; busy {
+		return false
+	}
+	onboardBusy[id] = struct{}{}
+	return true
+}
+
+func releaseOnboarding(id string) {
+	onboardMu.Lock()
+	delete(onboardBusy, id)
+	onboardMu.Unlock()
+}
+
+func runOnboardingCommand(ctx context.Context, configPath string, replica *configsync.Replica, command configsync.OnboardingCommand, now int64) error {
+	switch command.Action {
+	case configsync.OnboardingIssue:
+		issued, issueErr := HandleIssuePairCode(configPath)
+		if issueErr != nil {
+			_, err := replica.CompleteOnboarding(command.ID, configsync.OnboardingFailed, "", "", onboardingFailure(issueErr, command.Code), now)
+			return err
+		}
+		_, err := replica.CompleteOnboarding(command.ID, configsync.OnboardingDone, issued.Code, issued.ExpiresAt.UTC().Format(time.RFC3339), "Pairing code is ready. It can be used once.", now)
+		return err
+	case configsync.OnboardingAccept:
+		response, redeemErr := HandleRedeemPairCode(ctx, configPath, api.PairCodeRedeemRequest{Code: command.Code})
+		if redeemErr != nil {
+			_, err := replica.CompleteOnboarding(command.ID, configsync.OnboardingFailed, "", "", onboardingFailure(redeemErr, command.Code), now)
+			return err
+		}
+		message := response.Message
+		if message == "" {
+			message = "paired by code"
+		}
+		_, err := replica.CompleteOnboarding(command.ID, configsync.OnboardingDone, "", "", message, now)
+		return err
+	default:
+		_, err := replica.CompleteOnboarding(command.ID, configsync.OnboardingFailed, "", "", "unsupported onboarding action", now)
+		return err
+	}
+}
+
+func mergeOnboarding(current *configsync.Replica, executed []configsync.OnboardingCommand) {
+	if current == nil {
+		return
+	}
+	byID := map[string]configsync.OnboardingCommand{}
+	for _, command := range executed {
+		byID[command.ID] = command
+	}
+	seen := map[string]struct{}{}
+	for i, command := range current.Onboarding {
+		if updated, ok := byID[command.ID]; ok {
+			current.Onboarding[i] = updated
+			seen[command.ID] = struct{}{}
+		}
+	}
+	for _, command := range executed {
+		if _, ok := seen[command.ID]; ok {
+			continue
+		}
+		current.Onboarding = append(current.Onboarding, command)
+	}
 }
 
 func onboardingByID(replica configsync.Replica, id string) (configsync.OnboardingCommand, bool) {
@@ -262,8 +330,15 @@ func HandleOnboarding(ctx context.Context, configPath string, raw json.RawMessag
 	}
 	commandID := replica.Onboarding[len(replica.Onboarding)-1].ID
 	if req.TargetInstanceID == replica.InstanceID {
-		replica, err = store.Update(func(replica *configsync.Replica) error {
-			return executePendingOnboarding(ctx, configPath, replica)
+		// Pairing lookup and the claim dial can take the DHT budget. Doing
+		// that work while the config-sync lock is held stalls every GUI poll
+		// and deadlocks if the dial calls back into this store.
+		if err := executePendingOnboarding(ctx, configPath, &replica); err != nil {
+			return OnboardingResponse{}, err
+		}
+		replica, err = store.Update(func(current *configsync.Replica) error {
+			mergeOnboarding(current, replica.Onboarding)
+			return nil
 		})
 		if err != nil {
 			return OnboardingResponse{}, err

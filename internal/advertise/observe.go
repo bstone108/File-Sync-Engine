@@ -13,6 +13,7 @@ import (
 
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/routing"
+	"filesyncengine/internal/structuredlog"
 	"github.com/huin/goupnp/dcps/internetgateway2"
 	natpmp "github.com/jackpal/go-nat-pmp"
 )
@@ -67,6 +68,7 @@ func SetReachabilityProbe(fn func(context.Context, string, int) error) {
 	observationMu.Lock()
 	probeFn = fn
 	observationMu.Unlock()
+	clearDialbackCache()
 }
 
 // CurrentObservations is the set Apply uses while choosing an advertise URL.
@@ -195,9 +197,16 @@ func persistRefreshedURL(path string) (string, error) {
 	return cfg.API.AdvertiseURL, applyErr
 }
 
-// StartAutoDetect asks the local gateway for a port mapping onto the published
-// API port. Failure leaves the other detectors in place.
-func StartAutoDetect(ctx context.Context, cfg config.Config) {
+type portMapping struct {
+	service  string
+	internal int
+	external int
+}
+
+// portMappingTargets is the API port and the libp2p port. The names match
+// FSE_LIBP2P_PORT and FSE_PUBLISHED_LIBP2P_PORT. This package does not import
+// discovery.
+func portMappingTargets(cfg config.Config) []portMapping {
 	internal := listenPortNumber(cfg.API.Listen)
 	if internal == 0 {
 		internal = 22420
@@ -206,32 +215,67 @@ func StartAutoDetect(ctx context.Context, cfg config.Config) {
 	if external == 0 {
 		external = internal
 	}
+	targets := []portMapping{{service: "api", internal: internal, external: external}}
+	libp2pInternal := envPort("FSE_LIBP2P_PORT", 22421)
+	libp2pExternal := envPort("FSE_PUBLISHED_LIBP2P_PORT", libp2pInternal)
+	if libp2pInternal != internal || libp2pExternal != external {
+		targets = append(targets, portMapping{service: "libp2p", internal: libp2pInternal, external: libp2pExternal})
+	}
+	return targets
+}
+
+func envPort(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 1 || port > 65535 {
+		return fallback
+	}
+	return port
+}
+
+// StartAutoDetect asks the local gateway to map the API port and the libp2p
+// port. Each NAT-PMP and UPnP attempt is logged. STUN runs separately, on the
+// libp2p QUIC socket, including when a gateway mapping succeeds. A mapped
+// STUN port is not stored as the API port.
+func StartAutoDetect(ctx context.Context, cfg config.Config) {
+	targets := portMappingTargets(cfg)
 	go func() {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		detectCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		detectCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		defer cancel()
-		ip, port, err := mapExternalPort(detectCtx, internal, external)
-		if err == nil && ip != "" && port != 0 {
-			NoteNAT(ip, port)
-			if mappingHook != nil {
-				mappingHook(ip, port)
+		for _, target := range targets {
+			ip, port, err := mapExternalPort(detectCtx, target.internal, target.external)
+			fields := map[string]any{
+				"service":  target.service,
+				"internal": target.internal,
+				"external": target.external,
 			}
-			return
+			if err == nil && ip != "" && port != 0 {
+				fields["ip"] = ip
+				fields["mapped"] = port
+				structuredlog.Event("info", "nat.mapping.ok", "gateway mapped a local port", fields)
+				if target.service == "api" {
+					NoteNAT(ip, port)
+				}
+				if mappingHook != nil {
+					mappingHook(ip, port)
+				}
+				continue
+			}
+			if err != nil {
+				fields["error"] = err.Error()
+			}
+			structuredlog.Event("warn", "nat.mapping.failed", "gateway did not map a local port", fields)
 		}
-		stunIP, _, stunErr := stunDiscover(detectCtx)
-		if stunErr != nil || stunIP == "" {
-			return
-		}
-		NoteObservedIP(stunIP)
 	}()
 }
 
-var (
-	mappingHook  func(string, int)
-	stunDiscover = DiscoverExternalIP
-)
+var mappingHook func(string, int)
 
 // SetExternalMappingHook receives a successful UPnP or NAT-PMP mapping.
 func SetExternalMappingHook(fn func(ip string, port int)) {
@@ -282,6 +326,43 @@ func activeProbe(obs Observations) func(context.Context, string, int) error {
 	return dialProbe
 }
 
+// NeedsPublicDialback reports whether host is a global address. LAN and
+// Tailscale addresses are not dialed back by this check.
+func NeedsPublicDialback(host string) bool {
+	return publicNeedsDialback(host)
+}
+
+// MayAnnounceLibp2p reports whether host may be published on the libp2p port.
+// A public address is announced only after a TCP dial-back to that port
+// succeeds. A private address is announced when it is on a local interface
+// and is not the default gateway.
+func MayAnnounceLibp2p(host string, port int) bool {
+	host = hostname(host)
+	if host == "" || !HostReachable(host) {
+		return false
+	}
+	if publicNeedsDialback(host) {
+		if port < 1 || port > 65535 {
+			port = 22421
+		}
+		return PublicDialbackOK(host, port)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsLoopback() {
+		return true
+	}
+	if gw := defaultGateway(); gw != nil && ip.Equal(gw) {
+		return false
+	}
+	if isTailscaleIP(ip) {
+		return true
+	}
+	if ip.IsPrivate() {
+		return hostOnInterface(ip)
+	}
+	return false
+}
+
 // publicNeedsDialback is true for a global address that is not a LAN or
 // Tailscale address. Those addresses are advertised only after a TCP dial-back
 // to the API port succeeds. AutoNAT reachability of the libp2p port is not
@@ -297,8 +378,57 @@ func publicNeedsDialback(host string) bool {
 	return ip.IsGlobalUnicast()
 }
 
+// dialbackTTL is how long a dial-back result is reused before a refresh.
+// Announce and the GUI config poll call this for every public candidate.
+// Dialing again on each call stacked multi-second stalls onto the browser
+// connection pool and the identity-package request never got a socket.
+const dialbackTTL = 30 * time.Second
+
+type dialbackEntry struct {
+	ok    bool
+	until time.Time
+}
+
+type dialbackFlight struct {
+	done chan struct{}
+	ok   bool
+}
+
+var (
+	dialbackMu       sync.Mutex
+	dialbackGen      uint64
+	dialbackCache    = map[string]dialbackEntry{}
+	dialbackInflight = map[string]*dialbackFlight{}
+)
+
+// DialbackProvesRemoteReachability reports whether a TCP dial to host can show
+// that another network reached this process. A hostname that only resolves to
+// an address on a local interface just proves the process is listening.
+func DialbackProvesRemoteReachability(host string) bool {
+	host = hostname(host)
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback() && !hostOnInterface(ip)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return true
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || hostOnInterface(ip) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // PublicDialbackOK reports whether a learned public host may be announced.
 // LAN, Tailscale, and empty hosts are left to the caller's other checks.
+// The first lookup dials. Later lookups reuse that result, and an expired
+// result is returned immediately while one refresh runs in the background.
 func PublicDialbackOK(host string, port int) bool {
 	host = hostname(host)
 	if host == "" || !publicNeedsDialback(host) {
@@ -307,9 +437,87 @@ func PublicDialbackOK(host string, port int) bool {
 	if port < 1 || port > 65535 {
 		port = 22420
 	}
+	key := net.JoinHostPort(host, strconv.Itoa(port))
+	now := time.Now()
+	dialbackMu.Lock()
+	if entry, ok := dialbackCache[key]; ok && now.Before(entry.until) {
+		dialbackMu.Unlock()
+		return entry.ok
+	}
+	if entry, ok := dialbackCache[key]; ok {
+		if _, busy := dialbackInflight[key]; !busy {
+			flight := &dialbackFlight{done: make(chan struct{})}
+			dialbackInflight[key] = flight
+			gen := dialbackGen
+			dialbackMu.Unlock()
+			go finishDialback(key, host, port, flight, gen)
+		} else {
+			dialbackMu.Unlock()
+		}
+		return entry.ok
+	}
+	if flight, ok := dialbackInflight[key]; ok {
+		dialbackMu.Unlock()
+		<-flight.done
+		return flight.ok
+	}
+	flight := &dialbackFlight{done: make(chan struct{})}
+	dialbackInflight[key] = flight
+	gen := dialbackGen
+	dialbackMu.Unlock()
+	return finishDialback(key, host, port, flight, gen)
+}
+
+func finishDialback(key, host string, port int, flight *dialbackFlight, gen uint64) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
-	defer cancel()
-	return activeProbe(Observations{})(ctx, host, port) == nil
+	ok := activeProbe(Observations{})(ctx, host, port) == nil
+	cancel()
+	flight.ok = ok
+	dialbackMu.Lock()
+	if dialbackGen == gen {
+		dialbackCache[key] = dialbackEntry{ok: ok, until: time.Now().Add(dialbackTTL)}
+		if dialbackInflight[key] == flight {
+			delete(dialbackInflight, key)
+		}
+	}
+	dialbackMu.Unlock()
+	close(flight.done)
+	return ok
+}
+
+// ForcePublicDialback dials host even when an earlier check is cached.
+// Router startup dials before the libp2p socket is listening, and that
+// closed result must not decide reachability after the port is open.
+func ForcePublicDialback(host string, port int) bool {
+	host = hostname(host)
+	if host == "" || !publicNeedsDialback(host) {
+		return host != ""
+	}
+	if port < 1 || port > 65535 {
+		port = 22420
+	}
+	key := net.JoinHostPort(host, strconv.Itoa(port))
+	dialbackMu.Lock()
+	delete(dialbackCache, key)
+	gen := dialbackGen
+	dialbackMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	ok := activeProbe(Observations{})(ctx, host, port) == nil
+	cancel()
+	dialbackMu.Lock()
+	if dialbackGen == gen {
+		dialbackCache[key] = dialbackEntry{ok: ok, until: time.Now().Add(dialbackTTL)}
+	}
+	dialbackMu.Unlock()
+	return ok
+}
+
+func clearDialbackCache() {
+	dialbackMu.Lock()
+	dialbackGen++
+	dialbackCache = map[string]dialbackEntry{}
+	dialbackInflight = map[string]*dialbackFlight{}
+	dialbackMu.Unlock()
 }
 
 func reachPort(cfg config.Config) int {
@@ -360,7 +568,25 @@ func discoverMappedPort(ctx context.Context, internalPort, externalPort int) (st
 	return upnpMap(ctx, internalPort, externalPort)
 }
 
+func logMappingAttempt(protocol string, internalPort, externalPort int, ip string, port int, err error) {
+	fields := map[string]any{"internal": internalPort, "external": externalPort}
+	if err != nil {
+		fields["error"] = err.Error()
+		structuredlog.Event("warn", "nat."+protocol+".failed", protocol+" port mapping failed", fields)
+		return
+	}
+	fields["ip"] = ip
+	fields["mapped"] = port
+	structuredlog.Event("info", "nat."+protocol+".ok", protocol+" port mapping succeeded", fields)
+}
+
 func natPMPMap(ctx context.Context, internalPort, externalPort int) (string, int, error) {
+	ip, port, err := natPMPMapOnce(ctx, internalPort, externalPort)
+	logMappingAttempt("pmp", internalPort, externalPort, ip, port, err)
+	return ip, port, err
+}
+
+func natPMPMapOnce(ctx context.Context, internalPort, externalPort int) (string, int, error) {
 	if err := validMappingPorts(internalPort, externalPort); err != nil {
 		return "", 0, err
 	}
@@ -408,6 +634,12 @@ func natPMPMap(ctx context.Context, internalPort, externalPort int) (string, int
 }
 
 func upnpMap(ctx context.Context, internalPort, externalPort int) (string, int, error) {
+	ip, port, err := upnpMapOnce(ctx, internalPort, externalPort)
+	logMappingAttempt("upnp", internalPort, externalPort, ip, port, err)
+	return ip, port, err
+}
+
+func upnpMapOnce(ctx context.Context, internalPort, externalPort int) (string, int, error) {
 	if err := validMappingPorts(internalPort, externalPort); err != nil {
 		return "", 0, err
 	}
@@ -465,6 +697,12 @@ func localIPToward(dst net.IP) string {
 	return addr.IP.String()
 }
 
+// IsDefaultGateway reports the IPv4 default route's next hop.
+func IsDefaultGateway(ip net.IP) bool {
+	gw := defaultGateway()
+	return ip != nil && gw != nil && ip.Equal(gw)
+}
+
 func defaultGateway() net.IP {
 	data, err := readRouteTable()
 	if err != nil {
@@ -478,6 +716,20 @@ var readRouteTable = func() ([]byte, error) {
 }
 
 func gatewayFromRouteTable(table string) net.IP {
+	_, gw := defaultRouteFromTable(table)
+	return gw
+}
+
+func defaultRouteIface() string {
+	data, err := readRouteTable()
+	if err != nil {
+		return ""
+	}
+	iface, _ := defaultRouteFromTable(string(data))
+	return iface
+}
+
+func defaultRouteFromTable(table string) (string, net.IP) {
 	for _, line := range strings.Split(table, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 3 || fields[1] != "00000000" {
@@ -487,9 +739,66 @@ func gatewayFromRouteTable(table string) net.IP {
 		if ip == nil || ip.IsUnspecified() {
 			continue
 		}
-		return ip
+		return fields[0], ip
 	}
-	return nil
+	return "", nil
+}
+
+func hostOnInterface(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || routing.ContainerInterface(iface.Name) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if other := addrIP(addr); other != nil && other.Equal(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func routeInterfaceChoice(ips []string) string {
+	ifaceName := defaultRouteIface()
+	if ifaceName == "" || len(ips) == 0 {
+		return ""
+	}
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return ""
+	}
+	onIface := map[string]struct{}{}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		if ip := addrIP(addr); ip != nil {
+			onIface[ip.String()] = struct{}{}
+		}
+	}
+	var matches []string
+	for _, raw := range ips {
+		ip := net.ParseIP(strings.TrimSpace(raw))
+		if ip == nil {
+			continue
+		}
+		if _, ok := onIface[ip.String()]; ok {
+			matches = append(matches, ip.String())
+		}
+	}
+	return firstDetected(matches)
 }
 
 func parseLittleEndianIPv4(hexword string) net.IP {
@@ -515,7 +824,6 @@ func (e errString) Error() string { return string(e) }
 
 func resetObservations() {
 	observationMu.Lock()
-	defer observationMu.Unlock()
 	guiHost = ""
 	learnedIPs = nil
 	natIP = ""
@@ -524,4 +832,6 @@ func resetObservations() {
 	probeFn = nil
 	changeFn = nil
 	lastAttempt = time.Time{}
+	observationMu.Unlock()
+	clearDialbackCache()
 }

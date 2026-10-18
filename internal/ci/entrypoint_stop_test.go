@@ -1,10 +1,12 @@
 package ci
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,7 +18,7 @@ func TestEntrypointSIGTERMExitsZero(t *testing.T) {
 	if _, err := exec.LookPath("sudo"); err != nil {
 		t.Skip("sudo is not installed")
 	}
-	cmd := startEntrypoint(t, `#!/bin/sh
+	script := `#!/bin/sh
 case "$1" in
 start)
   trap 'exit 2' TERM
@@ -26,16 +28,28 @@ start)
   exit 0
   ;;
 esac
-`)
-	time.Sleep(400 * time.Millisecond)
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		_ = cmd.Process.Kill()
-		t.Fatal(err)
+`
+	var waitErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmd := startEntrypoint(t, script)
+		time.Sleep(400 * time.Millisecond)
+		// sudo dies from SIGTERM before the shell trap can exit 0. Signal the
+		// entrypoint shell, which is the process Docker stops. A signal that
+		// lands before that trap is installed kills sudo with the signal;
+		// retry instead of treating that race as a failed stop.
+		if err := signalEntrypoint(cmd.Process.Pid); err != nil {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+			waitErr = err
+			continue
+		}
+		waitErr = waitFor(t, cmd, 5*time.Second)
+		if waitErr == nil {
+			return
+		}
+		t.Logf("SIGTERM attempt %d: %v", attempt, waitErr)
 	}
-	waitErr := waitFor(t, cmd, 5*time.Second)
-	if waitErr != nil {
-		t.Fatalf("SIGTERM entrypoint exit = %v", waitErr)
-	}
+	t.Fatalf("SIGTERM entrypoint exit = %v", waitErr)
 }
 
 func TestEntrypointCrashStillExitsNonZero(t *testing.T) {
@@ -104,6 +118,40 @@ func startEntrypoint(t *testing.T, fake string) *exec.Cmd {
 		}
 	})
 	return cmd
+}
+
+func signalEntrypoint(sudoPID int) error {
+	deadline := time.Now().Add(2 * time.Second)
+	var pid int
+	var err error
+	for time.Now().Before(deadline) {
+		pid, err = firstChild(sudoPID)
+		if err == nil && pid > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pid <= 0 {
+		if err == nil {
+			err = fmt.Errorf("entrypoint shell did not start")
+		}
+		return err
+	}
+	// The shell runs as root under sudo. This process can signal sudo, and sudo
+	// can signal the shell. Signaling the shell directly is EPERM.
+	return exec.Command("sudo", "-n", "kill", "-TERM", strconv.Itoa(pid)).Run()
+}
+
+func firstChild(pid int) (int, error) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
+	if err != nil {
+		return 0, err
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) == 0 {
+		return 0, fmt.Errorf("no child of %d", pid)
+	}
+	return strconv.Atoi(fields[0])
 }
 
 func waitFor(t *testing.T, cmd *exec.Cmd, timeout time.Duration) error {

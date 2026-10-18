@@ -44,6 +44,8 @@ type State struct {
 	Maintenance         MaintenanceState `json:"maintenance"`
 	Backup              BackupState      `json:"backup"`
 	WebGUI              WebGUIState      `json:"webGUI,omitempty"`
+	NATType             string           `json:"natType,omitempty"`
+	STUNMappedAddress   string           `json:"stunMappedAddress,omitempty"`
 	FoldersState        []FolderState    `json:"-"`
 	PeersState          []PeerState      `json:"-"`
 }
@@ -549,6 +551,10 @@ type PairCodeHandler func(context.Context) (PairCodeResponse, error)
 type PairCodeRedeemHandler func(context.Context, PairCodeRedeemRequest) (PairCodeRedeemResponse, error)
 type PairCodeClaimHandler func(context.Context, link.ClaimRequest) (link.ClaimResponse, error)
 
+// PairCodeClaimCommit burns a pairing code after the claim response was written.
+// A dropped connection must not call it.
+type PairCodeClaimCommit func(link.ClaimRequest) error
+
 // PairCodeRecordHandler returns the sealed pairing payload for a DHT namespace.
 // The browser never calls it. Another engine uses it when the libp2p stream fails.
 type PairCodeRecordHandler func(context.Context, string) ([]byte, error)
@@ -772,6 +778,7 @@ type Server struct {
 	pairCodeHandler            PairCodeHandler
 	pairCodeRedeemHandler      PairCodeRedeemHandler
 	pairCodeClaimHandler       PairCodeClaimHandler
+	pairCodeClaimCommit        PairCodeClaimCommit
 	pairCodeRecordHandler      PairCodeRecordHandler
 	linkProfileHandler         LinkProfileHandler
 	linkProfilePushHandler     LinkProfilePushHandler
@@ -960,6 +967,12 @@ func (s *Server) SetPairCodeClaimHandler(handler PairCodeClaimHandler) {
 	s.pairCodeClaimHandler = handler
 }
 
+func (s *Server) SetPairCodeClaimCommit(commit PairCodeClaimCommit) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pairCodeClaimCommit = commit
+}
+
 func (s *Server) SetPairCodeRecordHandler(handler PairCodeRecordHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1124,7 +1137,14 @@ func (s *Server) requireKey(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, s.snapshotState())
+	writeJSON(w, withNATStatus(s.snapshotState()))
+}
+
+func withNATStatus(state State) State {
+	natType, mapped := advertise.ReportedNAT()
+	state.NATType = natType
+	state.STUNMappedAddress = mapped
+	return state
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -1202,6 +1222,10 @@ func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, foldersVisibleToGUI(state))
 }
 
+// emptyStateHash is SHA-256 of an empty metadata summary. foldershare journals
+// replace it when the metadata store has not indexed the folder.
+const emptyStateHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
 // foldersVisibleToGUI lists the folders stored in config without waiting for
 // hot reload. The daemon adopts config only after a quiet period, which is
 // too late for the folder row the GUI shows as soon as an add is accepted.
@@ -1230,9 +1254,30 @@ func foldersVisibleToGUI(state State) []FolderState {
 		current.Enabled = folder.SharingEnabled()
 		current.SharedWith = append([]string(nil), folder.SharedWith...)
 		current.Ignore = append([]string(nil), folder.Ignore...)
-		if current.Index.TotalFiles == 0 {
-			if n := foldershare.CountLiveFiles(state.ConfigPath, folder.ID); n > 0 {
-				current.Index.TotalFiles = n
+		if current.Index.VerifiedFiles == 0 && current.Index.KnownBlocks == 0 {
+			if live, verified, blocks, bytes, hash, ok := foldershare.JournalIndex(state.ConfigPath, folder.ID); ok {
+				if current.Index.TotalFiles == 0 {
+					current.Index.TotalFiles = live
+				}
+				current.Index.VerifiedFiles = verified
+				current.Index.KnownBlocks = blocks
+				if current.Index.Mode == "" {
+					current.Index.Mode = "verified"
+				}
+				if current.LocalBytes == 0 {
+					current.LocalBytes = bytes
+				}
+				if current.Sync.LocalStateHash == "" || current.Sync.LocalStateHash == emptyStateHash {
+					current.Sync.LocalStateHash = hash
+				}
+				if current.ProgressLabel == "" || current.ProgressLabel == "Not scanned" {
+					if live > 0 && verified == live {
+						current.ProgressLabel = "Up to date"
+						current.SyncPercent = 100
+					} else if live > 0 {
+						current.ProgressLabel = "Syncing"
+					}
+				}
 			}
 		}
 		if !current.Enabled {
@@ -1283,7 +1328,7 @@ func peersVisibleToGUI(state State) []PeerState {
 					current.Status = "configured"
 				}
 				current.ConnectionPath = activeConnectionPath(peer.ID)
-				out = append(out, current)
+				out = append(out, annotateLimitedRelay(current))
 			}
 			return out
 		}
@@ -1297,7 +1342,7 @@ func peersVisibleToGUI(state State) []PeerState {
 			continue
 		}
 		peer.ConnectionPath = activeConnectionPath(peer.ID)
-		out = append(out, peer)
+		out = append(out, annotateLimitedRelay(peer))
 	}
 	return out
 }
@@ -1307,6 +1352,23 @@ func activeConnectionPath(peerID string) string {
 		return string(obs.Path)
 	}
 	return ""
+}
+
+func annotateLimitedRelay(peer PeerState) PeerState {
+	if peer.ConnectionPath != string(nat.PathLimitedRelay) {
+		return peer
+	}
+	for _, diagnostic := range peer.NetworkDiagnostics {
+		if diagnostic.Code == "limited-relay" {
+			return peer
+		}
+	}
+	peer.NetworkDiagnostics = append(append([]PeerNetworkDiagnostic(nil), peer.NetworkDiagnostics...), PeerNetworkDiagnostic{
+		Code:      "limited-relay",
+		RoutePath: "limited-relay",
+		Guidance:  "Only a limited relay is reachable. Pairing and journal checks can use it. File transfer needs a direct path or an unlimited relay.",
+	})
+	return peer
 }
 
 // livePeerStates overlays the path and receive progress recorded by the last
@@ -1324,6 +1386,7 @@ func livePeerStates(peers []PeerState) []PeerState {
 		if obs, ok := nat.DefaultPaths.Active(out[i].ID); ok {
 			out[i].ConnectionPath = string(obs.Path)
 		}
+		out[i] = annotateLimitedRelay(out[i])
 		progress := transferprogress.Get(out[i].ID)
 		out[i].ReceiveRemainingBytes = progress.RemainingBytes
 		out[i].AverageReceiveBytesPerSecond = progress.BytesPerSecond
@@ -1926,10 +1989,24 @@ func (s *Server) handlePairCodeClaim(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(err.Error(), "already used") || strings.Contains(err.Error(), "expired") {
 			status = http.StatusGone
 		}
+		if strings.Contains(err.Error(), "reserved") {
+			status = http.StatusConflict
+		}
 		http.Error(w, err.Error(), status)
 		return
 	}
-	writeJSON(w, response)
+	if err := writeJSONResult(w, response); err != nil {
+		// The bytes did not leave. The reservation stays with this redeemer.
+		return
+	}
+	s.mu.RLock()
+	commit := s.pairCodeClaimCommit
+	s.mu.RUnlock()
+	if commit != nil {
+		// The response is already on the wire. A duplicate delivery from the
+		// same key can lose the burn race; the code is still single-use.
+		_ = commit(req)
+	}
 }
 
 func (s *Server) handlePairCodeRecord(w http.ResponseWriter, r *http.Request) {
@@ -2784,8 +2861,12 @@ func (s *Server) removeSubscriber(ch chan Event) {
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
+	_ = writeJSONResult(w, value)
+}
+
+func writeJSONResult(w http.ResponseWriter, value any) error {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(value)
+	return json.NewEncoder(w).Encode(value)
 }
 
 func writeSSE(w http.ResponseWriter, event Event) {

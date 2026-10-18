@@ -111,7 +111,22 @@ func sharedHost() host.Host {
 
 func registerAPIStream(h host.Host, handler http.Handler) {
 	h.SetStreamHandler(protocol.ID(APIProtocol), func(stream network.Stream) {
-		serveAPIStream(stream, handler)
+		serveAPIStream(stream, rejectLimitedBulk(handler))
+	})
+}
+
+func rejectLimitedBulk(next http.Handler) http.Handler {
+	if next == nil {
+		return nil
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		stream, ok := streamFromContext(r.Context())
+		if ok && stream != nil && stream.Conn() != nil && stream.Conn().Stat().Limited && !AllowsLimitedAPI(r.URL.Path) {
+			w.Header().Set("X-FSE-Limited-Relay", "1")
+			http.Error(w, "limited relay cannot carry file data", http.StatusServiceUnavailable)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -124,7 +139,16 @@ func serveAPIStream(stream network.Stream, handler http.Handler) {
 	}
 	defer stream.Close()
 	ln := newOnceListener(streamConn{Stream: stream})
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 30 * time.Second}
+	srv := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 30 * time.Second,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if found, ok := streamFromConn(c); ok {
+				return context.WithValue(ctx, streamContextKey, found)
+			}
+			return ctx
+		},
+	}
 	// Serve accepts the one connection, then blocks until that connection
 	// closes. Returning here releases the stream instead of leaking a handler
 	// goroutine per block.
@@ -138,6 +162,8 @@ type StreamSession struct {
 	Client *http.Client
 	Remote string
 	Path   nat.Path
+	live   *nat.Path
+	remote *string
 }
 
 // DialStream connects to peerID using only the supplied multiaddrs and returns
@@ -165,27 +191,100 @@ func DialStream(ctx context.Context, peerID string, addrs []string) (StreamSessi
 	if len(parsed) == 0 {
 		return StreamSession{}, errNoAPIHost
 	}
-	for _, addr := range parsed {
-		connectRelayHop(ctx, h, addr)
+	direct, circuits := partitionStreamAddrs(parsed)
+	// A public relay hop can sit there until the claim budget is gone. Dial a
+	// direct address first, and only then spend time opening a circuit.
+	if len(direct) > 0 {
+		if err := h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: direct}); err == nil {
+			return newStreamSession(h, pid)
+		} else if ctx.Err() != nil || len(circuits) == 0 {
+			return StreamSession{}, err
+		}
 	}
-	h.Peerstore().AddAddrs(pid, parsed, 2*time.Minute)
-	if err := h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: parsed}); err != nil {
+	if len(circuits) == 0 {
+		return StreamSession{}, errNoAPIHost
+	}
+	connectRelayHops(ctx, h, circuits)
+	if err := h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: circuits}); err != nil {
 		return StreamSession{}, err
 	}
-	remote := ""
-	conns := h.Network().ConnsToPeer(pid)
-	if len(conns) > 0 && conns[0].RemoteMultiaddr() != nil {
-		remote = conns[0].RemoteMultiaddr().String()
+	return newStreamSession(h, pid)
+}
+
+func partitionStreamAddrs(addrs []ma.Multiaddr) (direct, circuits []ma.Multiaddr) {
+	for _, addr := range addrs {
+		if addr == nil {
+			continue
+		}
+		if strings.Contains(addr.String(), "p2p-circuit") {
+			circuits = append(circuits, addr)
+			continue
+		}
+		direct = append(direct, addr)
 	}
-	path := nat.Classify(remote)
-	if path == "" {
-		path = nat.PathRelay
+	return direct, circuits
+}
+
+func newStreamSession(h host.Host, pid peer.ID) (StreamSession, error) {
+	if !peerIDMatches(h, pid) {
+		return StreamSession{}, errPeerMismatch
 	}
-	return StreamSession{
-		Client: &http.Client{Transport: streamRoundTripper{host: h, peer: pid}},
+	path, remote := peerSessionPath(h, pid)
+	live := path
+	session := StreamSession{
 		Remote: remote,
 		Path:   path,
-	}, nil
+		live:   &live,
+		remote: &remote,
+	}
+	session.Client = &http.Client{Transport: streamRoundTripper{host: h, peer: pid, live: session.live, remote: session.remote}}
+	return session, nil
+}
+
+func peerSessionPath(h host.Host, pid peer.ID) (nat.Path, string) {
+	if conn := unlimitedPeerConn(h, pid); conn != nil {
+		return connPath(conn)
+	}
+	conns := h.Network().ConnsToPeer(pid)
+	for _, conn := range conns {
+		if conn != nil {
+			return connPath(conn)
+		}
+	}
+	return nat.PathRelay, ""
+}
+
+// CurrentPath is the path of the stream that carried the last request.
+func (s StreamSession) CurrentPath() nat.Path {
+	if s.live != nil && *s.live != "" {
+		return *s.live
+	}
+	return s.Path
+}
+
+// CurrentRemote is the multiaddr of the stream that carried the last request.
+func (s StreamSession) CurrentRemote() string {
+	if s.remote != nil && *s.remote != "" {
+		return *s.remote
+	}
+	return s.Remote
+}
+
+// connectRelayHops opens relay hops, but only for a few seconds altogether.
+// One unreachable public relay must not consume a claim or sync budget
+// before Connect tries the circuit itself.
+func connectRelayHops(ctx context.Context, h host.Host, addrs []ma.Multiaddr) {
+	if ctx == nil || len(addrs) == 0 {
+		return
+	}
+	budget, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	for _, addr := range addrs {
+		if budget.Err() != nil {
+			return
+		}
+		connectRelayHop(budget, h, addr)
+	}
 }
 
 // connectRelayHop dials the relay named by a circuit address before the
@@ -204,20 +303,63 @@ func connectRelayHop(ctx context.Context, h host.Host, addr ma.Multiaddr) {
 	if err != nil || info.ID == "" {
 		return
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	_ = h.Connect(dialCtx, *info)
 }
 
-var errNoAPIHost = streamError("libp2p API host is not running")
+var (
+	errNoAPIHost    = streamError("libp2p API host is not running")
+	errPeerMismatch = streamError("peer id mismatch")
+)
+
+func peerIDMatches(h host.Host, pid peer.ID) bool {
+	if h == nil || pid == "" {
+		return false
+	}
+	for _, conn := range h.Network().ConnsToPeer(pid) {
+		if conn != nil && conn.RemotePeer() == pid {
+			return true
+		}
+	}
+	return false
+}
 
 type streamError string
 
 func (e streamError) Error() string { return string(e) }
 
+type streamContextKeyType struct{}
+
+var streamContextKey = streamContextKeyType{}
+
+func streamFromConn(c net.Conn) (network.Stream, bool) {
+	for c != nil {
+		switch conn := c.(type) {
+		case *trackConn:
+			c = conn.Conn
+		case streamConn:
+			return conn.Stream, conn.Stream != nil
+		default:
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
+func streamFromContext(ctx context.Context) (network.Stream, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	stream, ok := ctx.Value(streamContextKey).(network.Stream)
+	return stream, ok && stream != nil
+}
+
 type streamRoundTripper struct {
-	host host.Host
-	peer peer.ID
+	host   host.Host
+	peer   peer.ID
+	live   *nat.Path
+	remote *string
 }
 
 func (t streamRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -228,13 +370,24 @@ func (t streamRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// A relayed connection is limited. Application streams are refused on it
-	// until the dialer opts in, which is how a NAT'd peer reaches another.
-	ctx = network.WithAllowLimitedConn(ctx, "fse-api")
+	path := ""
+	if req.URL != nil {
+		path = req.URL.Path
+	}
+	if AllowsLimitedAPI(path) {
+		return t.exchange(apiStreamContext(ctx, path), req)
+	}
+	return openBulk(ctx, t.host, t.peer, func(ctx context.Context) (*http.Response, error) {
+		return t.exchange(ctx, req)
+	})
+}
+
+func (t streamRoundTripper) exchange(ctx context.Context, req *http.Request) (*http.Response, error) {
 	stream, err := t.host.NewStream(ctx, t.peer, protocol.ID(APIProtocol))
 	if err != nil {
 		return nil, err
 	}
+	noteResponsePath(t.live, t.remote, stream)
 	_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
 	outbound := req.Clone(ctx)
 	if outbound == nil {
@@ -243,6 +396,10 @@ func (t streamRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	// One request per stream. The handler returns after this response, so a
 	// keep-alive read would block until the peer closed the stream.
 	outbound.Close = true
+	if stream.Conn() == nil || stream.Conn().RemotePeer() != t.peer {
+		_ = stream.Reset()
+		return nil, errPeerMismatch
+	}
 	if err := outbound.Write(stream); err != nil {
 		_ = stream.Reset()
 		return nil, err
@@ -251,6 +408,11 @@ func (t streamRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	if err != nil {
 		_ = stream.Reset()
 		return nil, err
+	}
+	if limitedRelayResponse(resp) {
+		_ = resp.Body.Close()
+		nat.DefaultPaths.ObserveLimited(t.peer.String(), "")
+		return nil, ErrLimitedRelay
 	}
 	resp.Body = &streamBody{ReadCloser: resp.Body, stream: stream}
 	return resp, nil

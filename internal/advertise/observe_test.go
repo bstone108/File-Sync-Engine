@@ -1,16 +1,21 @@
 package advertise
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/structuredlog"
 )
 
 func TestResolveUsesVerifiedGUIHostWhenBridgeIsTheOnlyLocalAddress(t *testing.T) {
@@ -189,11 +194,80 @@ func TestPortMappingRejectsPortsOutsideUint16(t *testing.T) {
 	}
 }
 
+func TestClosedPublicPortAndGatewayAreNotAnnounced(t *testing.T) {
+	previous := readRouteTable
+	readRouteTable = func() ([]byte, error) {
+		return []byte("Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\neth0 00000000 6501A8C0 0003 0 0 0 00000000 0 0 0\n"), nil
+	}
+	t.Cleanup(func() { readRouteTable = previous })
+	SetReachabilityProbe(func(context.Context, string, int) error { return errors.New("i/o timeout") })
+	t.Cleanup(func() { SetReachabilityProbe(nil) })
+	if MayAnnounceLibp2p("203.0.113.9", 22421) {
+		t.Fatal("closed public libp2p port was announced")
+	}
+	if MayAnnounceLibp2p("192.168.1.101", 22421) {
+		t.Fatal("default gateway was announced")
+	}
+	SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	if !MayAnnounceLibp2p("203.0.113.9", 22421) {
+		t.Fatal("open public libp2p port was omitted")
+	}
+}
+
 func TestGatewayFromProcNetRoute(t *testing.T) {
 	table := "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\neth0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
 	got := gatewayFromRouteTable(table)
 	if got == nil || !got.Equal(net.ParseIP("192.168.1.1")) {
 		t.Fatalf("gateway = %v", got)
+	}
+}
+
+func TestPortMappingTargetsIncludeLibp2pAndLogFailures(t *testing.T) {
+	t.Setenv("FSE_LIBP2P_PORT", "22421")
+	t.Setenv("FSE_PUBLISHED_LIBP2P_PORT", "32421")
+	got := portMappingTargets(config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}})
+	if len(got) != 2 || got[0].service != "api" || got[0].internal != 22420 || got[1].service != "libp2p" || got[1].internal != 22421 || got[1].external != 32421 {
+		t.Fatalf("targets = %+v", got)
+	}
+	structuredlog.Reset()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		structuredlog.Reset()
+	})
+	if _, _, err := natPMPMap(context.Background(), 0, 22420); err == nil || !strings.Contains(buf.String(), "nat.pmp.failed") {
+		t.Fatalf("pmp log err=%v body=%s", err, buf.String())
+	}
+	buf.Reset()
+	previous := mapExternalPort
+	var mu sync.Mutex
+	var ports [][2]int
+	mapExternalPort = func(_ context.Context, internal, external int) (string, int, error) {
+		mu.Lock()
+		ports = append(ports, [2]int{internal, external})
+		mu.Unlock()
+		return "", 0, errors.New("no gateway")
+	}
+	t.Cleanup(func() { mapExternalPort = previous })
+	StartAutoDetect(context.Background(), config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(ports)
+		mu.Unlock()
+		if n >= 2 && strings.Contains(buf.String(), "nat.mapping.failed") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ports) != 2 || ports[0] != [2]int{22420, 22420} || ports[1] != [2]int{22421, 32421} {
+		t.Fatalf("mapped ports = %+v log=%s", ports, buf.String())
+	}
+	if !strings.Contains(buf.String(), `"service":"api"`) || !strings.Contains(buf.String(), `"service":"libp2p"`) {
+		t.Fatalf("log = %s", buf.String())
 	}
 }
 
@@ -262,5 +336,121 @@ func TestRefreshNowDoesNotCallProbeForExplicitOverride(t *testing.T) {
 	}
 	if strings.Contains(string(mustRead(t, path)), "192.0.2.40") {
 		t.Fatal("GUI host replaced the override")
+	}
+}
+
+func TestPublicDialbackIsSharedUntilTheProbeChanges(t *testing.T) {
+	t.Cleanup(resetObservations)
+	var calls atomic.Int32
+	SetReachabilityProbe(func(context.Context, string, int) error {
+		calls.Add(1)
+		return errors.New("closed")
+	})
+	if PublicDialbackOK("203.0.113.9", 22421) {
+		t.Fatal("closed port was accepted")
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if PublicDialbackOK("203.0.113.9", 22421) {
+				t.Error("cached closed port was accepted")
+			}
+		}()
+	}
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatalf("dial-backs = %d, want 1", calls.Load())
+	}
+
+	key := net.JoinHostPort("203.0.113.9", "22421")
+	dialbackMu.Lock()
+	entry := dialbackCache[key]
+	entry.until = time.Now().Add(-time.Second)
+	dialbackCache[key] = entry
+	dialbackMu.Unlock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	observationMu.Lock()
+	probeFn = func(context.Context, string, int) error {
+		close(started)
+		<-release
+		return nil
+	}
+	observationMu.Unlock()
+	if PublicDialbackOK("203.0.113.9", 22421) {
+		t.Fatal("expired cache blocked on a refresh instead of returning the last result")
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expired dial-back did not refresh")
+	}
+	close(release)
+
+	SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	if !PublicDialbackOK("203.0.113.9", 22421) {
+		t.Fatal("probe change did not dial again")
+	}
+}
+
+func TestDialbackToALocalInterfaceIsNotRemoteProof(t *testing.T) {
+	if DialbackProvesRemoteReachability("127.0.0.1") || DialbackProvesRemoteReachability("localhost") {
+		t.Fatal("loopback dial-back counted as remote reachability")
+	}
+	if !DialbackProvesRemoteReachability("203.0.113.50") {
+		t.Fatal("public address was treated as a local interface")
+	}
+	if !DialbackProvesRemoteReachability("fse-dialback-no-such.invalid") {
+		t.Fatal("unresolved hostname was treated as a local interface")
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err != nil || ip == nil || ip.IsLoopback() {
+				continue
+			}
+			local = ip.String()
+			break
+		}
+		if local != "" {
+			break
+		}
+	}
+	if local != "" && DialbackProvesRemoteReachability(local) {
+		t.Fatalf("local interface %s counted as remote reachability", local)
+	}
+}
+
+func TestForcePublicDialbackIgnoresACachedFailure(t *testing.T) {
+	t.Cleanup(resetObservations)
+	var calls atomic.Int32
+	SetReachabilityProbe(func(context.Context, string, int) error {
+		if calls.Add(1) == 1 {
+			return errors.New("closed")
+		}
+		return nil
+	})
+	if PublicDialbackOK("203.0.113.10", 22421) {
+		t.Fatal("first dial-back was open")
+	}
+	if ForcePublicDialback("203.0.113.10", 22421) != true {
+		t.Fatal("fresh dial-back reused the closed result")
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("dials = %d, want 2", calls.Load())
 	}
 }

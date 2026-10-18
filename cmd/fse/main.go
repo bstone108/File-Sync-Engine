@@ -180,6 +180,11 @@ func run(configPath string) {
 	} else {
 		cfg = updated
 	}
+	if updated, purgeErr := config.PersistUnverifiedEndpointPurge(configPath, cfg); purgeErr != nil {
+		fmt.Fprintf(os.Stderr, "unverified peer endpoints were not purged: %v\n", purgeErr)
+	} else {
+		cfg = updated
+	}
 	if repaired, logErr := config.PersistLoggingOutput(configPath, cfg); logErr != nil {
 		fmt.Fprintf(os.Stderr, "log output was not restored: %v\n", logErr)
 	} else {
@@ -298,6 +303,9 @@ func run(configPath string) {
 	apiServer.SetPairCodeClaimHandler(func(ctx context.Context, req link.ClaimRequest) (link.ClaimResponse, error) {
 		return apicontrol.HandlePairCodeClaim(configPath, req)
 	})
+	apiServer.SetPairCodeClaimCommit(func(req link.ClaimRequest) error {
+		return apicontrol.CommitPairCodeClaim(req)
+	})
 	apiServer.SetPairCodeRecordHandler(func(ctx context.Context, namespace string) ([]byte, error) {
 		return apicontrol.ServedPairingPayload(namespace)
 	})
@@ -407,9 +415,9 @@ func run(configPath string) {
 	fatalexit.Go(func() { advertise.StartAutoDetect(detectCtx, cfg) })
 	fatalexit.Go(func() { daemonwebgui.StartAutoUpdate(detectCtx, configPath, apiServer.SetWebGUIState) })
 	discovery.SetAPIHandler(apiServer.Router())
-	foldershare.SetPassReporter(func(folderID string, peer config.PeerConfig, writes, fetched, reused int) {
+	foldershare.SetPassReporter(func(folderID string, peer config.PeerConfig, stats foldershare.PassStats) {
 		route := ""
-		if obs, ok := nat.DefaultPaths.Active(peer.ID); ok {
+		if obs, ok := nat.DefaultPaths.Active(peer.ID); ok && (stats.Writes+stats.Fetched+stats.Reused+stats.Deletes+stats.Moves) > 0 {
 			route = string(obs.Path)
 		}
 		apiServer.Publish(api.Event{
@@ -417,9 +425,11 @@ func run(configPath string) {
 			FolderID: folderID,
 			PeerID:   peer.ID,
 			Message: peerevents.SyncFinishedMessageWithRoute(peersync.Result{
-				Writes:        writes,
-				BlocksFetched: fetched,
-				BlocksReused:  reused,
+				Writes:        stats.Writes,
+				Deletes:       stats.Deletes,
+				FilesMoved:    stats.Moves,
+				BlocksFetched: stats.Fetched,
+				BlocksReused:  stats.Reused,
 			}, peerevents.Route{Path: route}),
 		})
 	})

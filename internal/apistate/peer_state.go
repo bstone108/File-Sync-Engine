@@ -120,6 +120,7 @@ func BuildState(opts StateBuildOptions) api.State {
 		peers = append(peers, BuildPeerState(opts.Config, peer, opts.Store))
 	}
 
+	natType, stunMapped := advertise.ReportedNAT()
 	backupState := api.BackupState{Enabled: opts.Config.Backup.Enabled, Mode: string(opts.Config.Backup.Mode)}
 	if opts.Config.Backup.Enabled {
 		if availability, err := backup.ComputeSnapshotAvailabilityStatus(backup.SnapshotAvailabilityOptions{ArchiveRoot: opts.ArchiveRoot, CheckpointRoot: opts.CheckpointRoot, Store: opts.Store}); err == nil {
@@ -142,6 +143,8 @@ func BuildState(opts StateBuildOptions) api.State {
 		Status:              opts.Status,
 		Maintenance:         api.MaintenanceState{Enabled: MaintenanceEnabled(opts.Config)},
 		Backup:              backupState,
+		NATType:             natType,
+		STUNMappedAddress:   stunMapped,
 		FoldersState:        folders,
 		PeersState:          peers,
 	}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/nat"
 	"filesyncengine/internal/pairing"
@@ -44,6 +45,28 @@ func TestStatusRequiresAPIKeyAndReturnsRuntimeSnapshot(t *testing.T) {
 	}
 	body := ok.Body.String()
 	for _, want := range []string{`"nodeName":"node-a"`, `"folders":2`, `"peers":3`, `"configVersion":4`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestStatusReportsNATType(t *testing.T) {
+	advertise.ResetNATStatus()
+	t.Cleanup(advertise.ResetNATStatus)
+	advertise.SetNATStatus(advertise.NATStatus{
+		Type: advertise.NATSymmetric, IP: "1.2.3.4", Port: 45000, Mapped: "1.2.3.4:45000",
+	})
+	server := NewServer(State{NodeName: "node-a"}, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	ok := httptest.NewRecorder()
+	server.Router().ServeHTTP(ok, req)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("status = %d %s", ok.Code, ok.Body.String())
+	}
+	body := ok.Body.String()
+	for _, want := range []string{`"natType":"symmetric"`, `"stunMappedAddress":"1.2.3.4:45000"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}

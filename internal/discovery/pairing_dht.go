@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	corediscovery "github.com/libp2p/go-libp2p/core/discovery"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -55,17 +56,26 @@ func (r *Libp2pDHTRouter) PublishPairing(ctx context.Context, namespace string, 
 	if err := r.storePairing(ctx, namespace, payload); err != nil {
 		return err
 	}
+	// Register before the walk so a relay reservation that lands during
+	// bootstrap refreshes this namespace with the circuit address.
+	r.mu.Lock()
+	r.advertise[namespace] = struct{}{}
+	r.mu.Unlock()
 	if err := r.ensureBootstrapped(ctx); err != nil {
 		structuredlog.Event("error", "pairing.publish.failed", "pairing DHT bootstrap failed", map[string]any{"namespace": namespace, "error": err.Error()})
 		return err
+	}
+	// A connected peer that is still a DHT client cannot store a provider
+	// record. The record stays on this node and that peer fetches it. Server
+	// mode still waits for a remote dial-back.
+	if r.routingTableSize() == 0 && r.connectedBootstrapIsClient() {
+		structuredlog.Event("info", "pairing.publish.ok", "pairing code is served to a connected peer", map[string]any{"namespace": namespace, "routingPeers": 0})
+		return nil
 	}
 	if err := r.advertisePairing(ctx, namespace); err != nil {
 		structuredlog.Event("error", "pairing.publish.failed", "pairing code was not advertised on the DHT", map[string]any{"namespace": namespace, "error": err.Error()})
 		return err
 	}
-	r.mu.Lock()
-	r.advertise[namespace] = struct{}{}
-	r.mu.Unlock()
 	structuredlog.Event("info", "pairing.publish.ok", "pairing code advertised on the DHT", map[string]any{"namespace": namespace, "routingPeers": r.routingTableSize()})
 	return nil
 }
@@ -136,12 +146,15 @@ func (r *Libp2pDHTRouter) LookupPairing(ctx context.Context, namespace string) (
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, pairingLookupTimeout)
 	defer cancel()
-	if err := r.ensureBootstrapped(lookupCtx); err != nil {
+	if err := r.ensureBootstrapped(lookupCtx); err != nil && !r.hasConnectedBootstrapPeer() {
 		structuredlog.Event("error", "pairing.lookup.failed", "pairing DHT bootstrap failed", map[string]any{"namespace": namespace, "error": err.Error()})
 		if lookupCtx.Err() != nil && ctx.Err() == nil {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if direct := r.fetchConnectedPairing(lookupCtx, namespace); len(direct) > 0 {
+		return direct, nil
 	}
 	peerCh, err := r.discovery.FindPeers(lookupCtx, namespace, corediscovery.Limit(16))
 	if err != nil {
@@ -153,7 +166,20 @@ func (r *Libp2pDHTRouter) LookupPairing(ctx context.Context, namespace string) (
 	}
 	payloads := [][]byte{}
 	var lastFetch error
-	for info := range peerCh {
+	for {
+		if lookupCtx.Err() != nil {
+			break
+		}
+		var info peer.AddrInfo
+		var open bool
+		select {
+		case <-lookupCtx.Done():
+			open = false
+		case info, open = <-peerCh:
+		}
+		if !open {
+			break
+		}
 		if info.ID == "" || info.ID == r.host.ID() {
 			continue
 		}
@@ -232,7 +258,7 @@ func (r *Libp2pDHTRouter) fetchPairingStream(ctx context.Context, info peer.Addr
 	if _, err := r.connectPaths(dialCtx, dialInfo); err != nil {
 		return nil, err
 	}
-	stream, err := r.host.NewStream(dialCtx, info.ID, protocol.ID(PairingProtocol))
+	stream, err := r.host.NewStream(pairingStreamContext(dialCtx), info.ID, protocol.ID(PairingProtocol))
 	if err != nil {
 		return nil, err
 	}
@@ -343,6 +369,80 @@ func (r *Libp2pDHTRouter) ensureBootstrapped(ctx context.Context) error {
 	return errors.New("pairing DHT bootstrap did not finish")
 }
 
+// hasConnectedBootstrapPeer reports a configured bootstrap peer that completed
+// a libp2p connection. The peer may still be a DHT client.
+func (r *Libp2pDHTRouter) hasConnectedBootstrapPeer() bool {
+	return len(r.connectedBootstrapInfos()) > 0
+}
+
+// connectedBootstrapIsClient is true when every connected bootstrap peer is
+// still a DHT client. A peer that speaks the DHT protocol is left for the
+// routing table instead of the direct pairing stream.
+func (r *Libp2pDHTRouter) connectedBootstrapIsClient() bool {
+	infos := r.connectedBootstrapInfos()
+	if len(infos) == 0 {
+		return false
+	}
+	for _, info := range infos {
+		supported, err := r.host.Peerstore().SupportsProtocols(info.ID, dht.ProtocolDHT)
+		if err == nil && len(supported) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Libp2pDHTRouter) connectedBootstrapInfos() []peer.AddrInfo {
+	if r == nil || r.host == nil {
+		return nil
+	}
+	connected := map[peer.ID]struct{}{}
+	for _, id := range r.host.Network().Peers() {
+		if id != "" && id != r.host.ID() {
+			connected[id] = struct{}{}
+		}
+	}
+	var out []peer.AddrInfo
+	seen := map[peer.ID]struct{}{}
+	for _, raw := range r.bootstrapPeerList() {
+		addr, err := ma.NewMultiaddr(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		info, err := peer.AddrInfoFromP2pAddr(addr)
+		if err != nil || info == nil || info.ID == "" {
+			continue
+		}
+		if _, ok := connected[info.ID]; !ok {
+			continue
+		}
+		if _, ok := seen[info.ID]; ok {
+			continue
+		}
+		seen[info.ID] = struct{}{}
+		addrs := r.host.Peerstore().Addrs(info.ID)
+		if len(addrs) == 0 {
+			addrs = info.Addrs
+		}
+		out = append(out, peer.AddrInfo{ID: info.ID, Addrs: addrs})
+	}
+	return out
+}
+
+// fetchConnectedPairing reads the namespace from bootstrap peers we can
+// already dial. A private node does not need those peers to be DHT servers.
+func (r *Libp2pDHTRouter) fetchConnectedPairing(ctx context.Context, namespace string) [][]byte {
+	var out [][]byte
+	for _, info := range r.connectedBootstrapInfos() {
+		payload, err := r.FetchPairing(ctx, info, namespace)
+		if err != nil || len(payload) == 0 {
+			continue
+		}
+		out = append(out, payload)
+	}
+	return out
+}
+
 // finishBootstrap keeps dialing until a peer lands in the routing table.
 // The first attempt often runs before the other engine is listening, and an
 // empty table must not count as finished or pairing never retries the dial.
@@ -352,6 +452,17 @@ func (r *Libp2pDHTRouter) finishBootstrap(wait chan struct{}) {
 	var err error
 	for attempt := 0; attempt < 4; attempt++ {
 		if attempt > 0 {
+			// The peer we just dialed is still a DHT client until some other
+			// node dials one of our announced addresses back. Ask it to, then
+			// look at the routing table again. A peer that stays a client is
+			// still a place to serve the pairing stream.
+			if r.shouldProbeRemoteDialback() {
+				r.tryRemoteDialback(bootCtx, nil)
+			}
+			if r.connectedBootstrapIsClient() {
+				err = nil
+				break
+			}
 			timer := time.NewTimer(time.Second)
 			select {
 			case <-bootCtx.Done():

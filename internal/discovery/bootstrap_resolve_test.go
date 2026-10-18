@@ -54,7 +54,7 @@ func TestParseDefaultDNSAddrBootstrapResolvesToPeerID(t *testing.T) {
 	if len(infos) != 1 || infos[0].ID.String() != testPeerA {
 		t.Fatalf("infos = %+v", infos)
 	}
-	if len(infos[0].Addrs) != 1 || infos[0].Addrs[0].String() != DefaultPublicDHTBootstrapPeers[0] {
+	if len(infos[0].Addrs) != 1 || infos[0].Addrs[0].String() != "/dnsaddr/ams-1.bootstrap.libp2p.io" {
 		t.Fatalf("addrs = %v", infos[0].Addrs)
 	}
 }
@@ -106,7 +106,16 @@ func TestParseDNSAddrKeepsDialHostnames(t *testing.T) {
 	if len(infos) != 1 || infos[0].ID.String() != testPeerA {
 		t.Fatalf("infos = %+v", infos)
 	}
-	if len(infos[0].Addrs) != 1 || infos[0].Addrs[0].String() != DefaultPublicDHTBootstrapPeers[0] {
+	foundTCP := false
+	for _, addr := range infos[0].Addrs {
+		if addr.String() == "/dns4/chic-1.bootstrap.ipni.io/tcp/4001" {
+			foundTCP = true
+		}
+		if addr.String() == DefaultPublicDHTBootstrapPeers[0] {
+			t.Fatalf("parent dnsaddr replaced the resolved transport: %v", infos[0].Addrs)
+		}
+	}
+	if !foundTCP {
 		t.Fatalf("addrs = %v", infos[0].Addrs)
 	}
 }

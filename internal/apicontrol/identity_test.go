@@ -1,6 +1,8 @@
 package apicontrol
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -136,7 +138,7 @@ func TestIdentityImportUsesEngineAdvertiseURLAndKeepsLocalPrimary(t *testing.T) 
 	var gotOffer pairing.PairOffer
 	rejectExchange := false
 	exchangeCalls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		exchangeCalls++
 		if rejectExchange {
 			http.Error(w, "exchange should not run", http.StatusUnauthorized)
@@ -162,6 +164,7 @@ func TestIdentityImportUsesEngineAdvertiseURLAndKeepsLocalPrimary(t *testing.T) 
 		BootstrapEncryptionLevel:   10,
 		DefaultPeerEncryptionLevel: 4,
 		ReachableAPIURL:            server.URL,
+		APICertificateSHA256:       func() string { sum := sha256.Sum256(server.Certificate().Raw); return hex.EncodeToString(sum[:]) }(),
 	}})
 	if err != nil {
 		t.Fatal(err)

@@ -18,6 +18,7 @@ import (
 
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/nat"
+	"filesyncengine/internal/structuredlog"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
@@ -44,6 +45,7 @@ type meshState struct {
 	identityRelays    []string
 	configMembers     map[string]struct{}
 	connectionMembers map[string]struct{}
+	dialbackPeers     map[string]struct{}
 	portExposed       atomic.Bool
 	autonatPublic     atomic.Bool
 	selfEmit          atomic.Bool
@@ -54,6 +56,7 @@ var mesh = &meshState{helperEnabled: true, natEnabled: true, maxReservations: 32
 func init() {
 	mesh.configMembers = map[string]struct{}{}
 	mesh.connectionMembers = map[string]struct{}{}
+	mesh.dialbackPeers = map[string]struct{}{}
 	applyNATEnv()
 }
 
@@ -162,6 +165,8 @@ func HelperRelayAddrs() []string {
 }
 
 // OrderedRelays returns same-identity helpers, then public relays.
+// An empty public list falls back to the DHT bootstrap multiaddrs. Those
+// nodes are candidates for a reservation, not for bulk transfer.
 func OrderedRelays() []string {
 	mesh.mu.Lock()
 	defer mesh.mu.Unlock()
@@ -170,6 +175,15 @@ func OrderedRelays() []string {
 		public = append([]string(nil), DefaultPublicDHTBootstrapPeers...)
 	}
 	return nat.PreferRelays(mesh.identityRelays, public)
+}
+
+// UnlimitedRelayAddrs returns same-identity helpers and explicitly configured
+// public relays. The default bootstrap list is omitted: public kubo relays are
+// limited circuits and cannot carry file bytes.
+func UnlimitedRelayAddrs() []string {
+	mesh.mu.Lock()
+	defer mesh.mu.Unlock()
+	return nat.PreferRelays(mesh.identityRelays, mesh.publicRelays)
 }
 
 // RefreshIdentityMembers allows reservations from configured peers in an
@@ -182,8 +196,14 @@ func RefreshIdentityMembers(cfg config.Config) {
 		}
 	}
 	var ids []string
+	var dialback []string
 	for _, peer := range cfg.Peers {
-		if peer.DHTPeerID == "" || peer.IdentityGroupID == "" {
+		if peer.DHTPeerID == "" {
+			continue
+		}
+		// A configured peer was stored after its session authenticated.
+		dialback = append(dialback, peer.DHTPeerID)
+		if peer.IdentityGroupID == "" {
 			continue
 		}
 		if _, ok := enabled[peer.IdentityGroupID]; !ok {
@@ -191,7 +211,39 @@ func RefreshIdentityMembers(cfg config.Config) {
 		}
 		ids = append(ids, peer.DHTPeerID)
 	}
+	setDialbackPeers(dialback)
 	SetIdentityMembers(ids)
+}
+
+func setDialbackPeers(ids []string) {
+	mesh.mu.Lock()
+	mesh.dialbackPeers = idSet(ids)
+	mesh.mu.Unlock()
+}
+
+func authenticatedDialbackPeer(id peer.ID) bool {
+	if id == "" {
+		return false
+	}
+	mesh.mu.Lock()
+	defer mesh.mu.Unlock()
+	_, ok := mesh.dialbackPeers[id.String()]
+	return ok
+}
+
+// remoteReachabilitySource reports why a node may become public.
+// A dial this process opens, including one that hairpins to its own public
+// address, is not a source. AutoNAT v2 means another node dialed an
+// advertised address. An authenticated peer's inbound direct connection is
+// the other confirmation. Relay circuits are not that dial.
+func remoteReachabilitySource(autonatReachable int, remote, local peer.ID, inbound, circuit, authenticated bool) string {
+	if autonatReachable > 0 {
+		return "autonat-v2"
+	}
+	if !inbound || circuit || remote == "" || remote == local || !authenticated {
+		return ""
+	}
+	return "authenticated-peer"
 }
 
 func idSet(ids []string) map[string]struct{} {
@@ -251,7 +303,7 @@ func (sameIdentityACL) AllowConnect(src peer.ID, _ ma.Multiaddr, dest peer.ID) b
 	return mesh.allows(src) && mesh.allows(dest)
 }
 
-func helperRelayOptions() []relayv2.Option {
+func helperResources() relayv2.Resources {
 	resources := relayv2.DefaultResources()
 	mesh.mu.Lock()
 	resources.MaxReservations = mesh.maxReservations
@@ -262,21 +314,68 @@ func helperRelayOptions() []relayv2.Option {
 	resources.MaxCircuits = 4
 	resources.MaxReservationsPerIP = 4
 	resources.MaxReservationsPerPeer = 1
-	resources.Limit = &relayv2.RelayLimit{Duration: resources.Limit.Duration, Data: 1 << 20}
-	return []relayv2.Option{relayv2.WithResources(resources), relayv2.WithACL(sameIdentityACL{})}
+	// A nil limit is an unlimited circuit. Public kubo relays stay limited
+	// (about 128 KiB and 2 minutes). This helper is the bulk-transfer fallback
+	// when hole punching cannot open a direct path.
+	resources.Limit = nil
+	return resources
+}
+
+func helperRelayOptions() []relayv2.Option {
+	return []relayv2.Option{relayv2.WithResources(helperResources()), relayv2.WithACL(sameIdentityACL{})}
 }
 
 type holepunchTracer struct{}
 
 func (holepunchTracer) Trace(evt *holepunch.Event) {
-	if evt == nil || evt.Type != holepunch.EndHolePunchEvtT || evt.Remote == "" {
+	if evt == nil || evt.Remote == "" {
 		return
 	}
-	end, ok := evt.Evt.(holepunch.EndHolePunchEvt)
-	if !ok || !end.Success {
+	switch evt.Type {
+	case holepunch.StartHolePunchEvtT:
+		fields := map[string]any{"peer": evt.Remote.String()}
+		structuredlog.Event("info", "libp2p.holepunch.start", "libp2p hole punch started", fields)
+		structuredlog.Event("info", "libp2p.dcutr.start", "DCUtR hole punch started", fields)
+	case holepunch.EndHolePunchEvtT:
+		end, ok := evt.Evt.(holepunch.EndHolePunchEvt)
+		if !ok {
+			return
+		}
+		if end.Success {
+			nat.DefaultPaths.Observe(evt.Remote.String(), "", nat.PathHolePunched)
+			fields := map[string]any{"peer": evt.Remote.String()}
+			structuredlog.Event("info", "libp2p.holepunch.ok", "libp2p hole punch succeeded", fields)
+			structuredlog.Event("info", "libp2p.dcutr.ok", "DCUtR hole punch succeeded", fields)
+			return
+		}
+		fields := map[string]any{"peer": evt.Remote.String(), "error": end.Error}
+		structuredlog.Event("warn", "libp2p.holepunch.failed", "libp2p hole punch failed", fields)
+		structuredlog.Event("warn", "libp2p.dcutr.failed", "DCUtR hole punch failed", fields)
+	}
+}
+
+func watchAutoRelay(h host.Host) {
+	if h == nil {
 		return
 	}
-	nat.DefaultPaths.Observe(evt.Remote.String(), "", nat.PathHolePunched)
+	sub, err := h.EventBus().Subscribe(new(event.EvtAutoRelayAddrsUpdated))
+	if err != nil {
+		return
+	}
+	defer sub.Close()
+	for ev := range sub.Out() {
+		updated, ok := ev.(event.EvtAutoRelayAddrsUpdated)
+		if !ok {
+			continue
+		}
+		addrs := make([]string, 0, len(updated.RelayAddrs))
+		for _, addr := range updated.RelayAddrs {
+			if addr != nil {
+				addrs = append(addrs, addr.String())
+			}
+		}
+		structuredlog.Event("info", "libp2p.relay.reserved", "libp2p reserved a relay", map[string]any{"addresses": addrs})
+	}
 }
 
 func markSelfReachabilityEmit() {
@@ -295,6 +394,35 @@ func noteReachability(public bool) {
 	mesh.autonatPublic.Store(false)
 }
 
+var (
+	routerRegMu  sync.Mutex
+	routerByPeer = map[peer.ID]*Libp2pDHTRouter{}
+)
+
+func registerRouter(r *Libp2pDHTRouter) {
+	if r == nil || r.host == nil {
+		return
+	}
+	routerRegMu.Lock()
+	routerByPeer[r.host.ID()] = r
+	routerRegMu.Unlock()
+}
+
+func unregisterRouter(r *Libp2pDHTRouter) {
+	if r == nil || r.host == nil {
+		return
+	}
+	routerRegMu.Lock()
+	delete(routerByPeer, r.host.ID())
+	routerRegMu.Unlock()
+}
+
+func routerFor(id peer.ID) *Libp2pDHTRouter {
+	routerRegMu.Lock()
+	defer routerRegMu.Unlock()
+	return routerByPeer[id]
+}
+
 func watchConnections(n network.Network) {
 	n.Notify(&network.NotifyBundle{
 		ConnectedF: func(_ network.Network, conn network.Conn) {
@@ -305,7 +433,19 @@ func watchConnections(n network.Network) {
 			if conn.RemoteMultiaddr() != nil {
 				addr = conn.RemoteMultiaddr().String()
 			}
+			stat := conn.Stat()
+			source := remoteReachabilitySource(0, conn.RemotePeer(), conn.LocalPeer(), stat.Direction == network.DirInbound, strings.Contains(addr, "p2p-circuit"), authenticatedDialbackPeer(conn.RemotePeer()))
+			if router := routerFor(conn.LocalPeer()); router != nil {
+				if source != "" {
+					router.notePublicReachability(source)
+				} else if conn.RemotePeer() != conn.LocalPeer() {
+					router.scheduleRemoteDialback()
+				}
+			}
 			path := nat.Classify(addr)
+			if stat.Limited {
+				path = nat.PathLimitedRelay
+			}
 			if current, ok := nat.DefaultPaths.Active(conn.RemotePeer().String()); ok && current.Path == nat.PathHolePunched && path != nat.PathRelay {
 				return
 			}

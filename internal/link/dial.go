@@ -30,26 +30,11 @@ func OrderedEndpoints(peer config.PeerConfig) []config.EndpointConfig {
 	endpoints := make([]config.EndpointConfig, 0, len(peer.Endpoints)+len(peer.Relays))
 	for _, endpoint := range peer.Endpoints {
 		address, ok := discovery.DialableHTTPAddress(endpoint.Address)
-		if !ok {
+		if !ok || !keepDialEndpoint(endpoint, peer.DHTPeerID) {
 			continue
 		}
 		endpoint.Address = address
 		endpoints = append(endpoints, endpoint)
-	}
-	seen := map[string]struct{}{}
-	for _, endpoint := range endpoints {
-		seen[endpoint.Address] = struct{}{}
-	}
-	for _, relay := range peer.Relays {
-		address, ok := discovery.DialableHTTPAddress(relay)
-		if !ok {
-			continue
-		}
-		relay = address
-		if _, ok := seen[relay]; ok {
-			continue
-		}
-		endpoints = append(endpoints, config.EndpointConfig{Kind: "relay", Address: relay, NetworkHint: string(routing.ClassifyEndpointNetwork(relay))})
 	}
 	sort.SliceStable(endpoints, func(i, j int) bool {
 		left, right := endpointRank(endpoints[i]), endpointRank(endpoints[j])
@@ -89,7 +74,18 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 	}
 	stages := endpointStages(peer)
 	var last error
+	var earlier string
+	sawLimited := false
 	tried := 0
+	noteFailure := func(err error) {
+		if err == nil {
+			return
+		}
+		if earlier == "" {
+			earlier = err.Error()
+		}
+		last = err
+	}
 	for i, stage := range stages {
 		if i == libp2pStage {
 			used, err := dialLibp2p(ctx, peer, do)
@@ -101,7 +97,10 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 				return "", answered.err
 			}
 			if !errors.Is(err, errNoStream) && err != nil {
-				last = err
+				if errors.Is(err, discovery.ErrLimitedRelay) {
+					sawLimited = true
+				}
+				noteFailure(err)
 				tried++
 			}
 			continue
@@ -110,6 +109,9 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 			continue
 		}
 		tried += len(stage)
+		// The publisher holds the code for this redeemer until the response is
+		// written. Give that attempt the caller's budget instead of cancelling
+		// it to start another path.
 		used, path, err := dialStage(ctx, peer, stage, do)
 		if err == nil {
 			discovery.NotePeerReachable(peer.ID)
@@ -123,18 +125,28 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 		if errors.As(err, &answered) {
 			return "", answered.err
 		}
-		last = err
+		noteFailure(err)
 	}
 	if tried == 0 {
 		return "", errors.New("peer has no http endpoint")
 	}
 	discovery.NotePeerUnreachable(peer.ID)
-	nat.DefaultPaths.Forget(peer.ID)
-	if peer.DHTPeerID != "" {
-		nat.DefaultPaths.Forget(peer.DHTPeerID)
+	if sawLimited || errors.Is(last, discovery.ErrLimitedRelay) {
+		nat.DefaultPaths.ObserveLimited(peer.ID, "")
+		if peer.DHTPeerID != "" {
+			nat.DefaultPaths.ObserveLimited(peer.DHTPeerID, "")
+		}
+	} else {
+		nat.DefaultPaths.Forget(peer.ID)
+		if peer.DHTPeerID != "" {
+			nat.DefaultPaths.Forget(peer.DHTPeerID)
+		}
 	}
 	if last == nil {
 		last = errors.New("peer has no reachable endpoint")
+	}
+	if earlier != "" && earlier != last.Error() {
+		last = fmt.Errorf("%s; %w", earlier, last)
 	}
 	return "", last
 }
@@ -144,13 +156,6 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 const libp2pStage = 3
 
 func endpointStages(peer config.PeerConfig) [][]config.EndpointConfig {
-	exchanged, local, dht := discovery.AddressesFor(peer.ID)
-	if peer.DHTPeerID != "" && peer.DHTPeerID != peer.ID {
-		moreExchanged, moreLocal, moreDHT := discovery.AddressesFor(peer.DHTPeerID)
-		exchanged = append(exchanged, moreExchanged...)
-		local = append(local, moreLocal...)
-		dht = append(dht, moreDHT...)
-	}
 	var preferred, fallback []config.EndpointConfig
 	for _, endpoint := range OrderedEndpoints(peer) {
 		if endpointRank(endpoint) <= 1 {
@@ -161,30 +166,12 @@ func endpointStages(peer config.PeerConfig) [][]config.EndpointConfig {
 	}
 	return [][]config.EndpointConfig{
 		preferred,
-		httpEndpoints(exchanged, "manual"),
-		httpEndpoints(local, "manual"),
+		nil,
+		nil,
 		nil, // libp2pStage dials relay, hole-punched, and direct streams
 		fallback,
-		httpEndpoints(dht, "relay"),
+		nil, // DHT addresses are one libp2p dial, never an HTTP endpoint
 	}
-}
-
-func httpEndpoints(addresses []string, kind string) []config.EndpointConfig {
-	out := make([]config.EndpointConfig, 0, len(addresses))
-	seen := map[string]struct{}{}
-	for _, address := range addresses {
-		httpAddress, ok := discovery.DialableHTTPAddress(address)
-		if !ok {
-			continue
-		}
-		address = httpAddress
-		if _, ok := seen[address]; ok {
-			continue
-		}
-		seen[address] = struct{}{}
-		out = append(out, config.EndpointConfig{Kind: kind, Address: address, NetworkHint: string(routing.ClassifyEndpointNetwork(address))})
-	}
-	return out
 }
 
 func dialStage(ctx context.Context, peer config.PeerConfig, endpoints []config.EndpointConfig, do func(context.Context, string, *http.Client) error) (string, nat.Path, error) {
@@ -199,13 +186,25 @@ func dialStage(ctx context.Context, peer config.PeerConfig, endpoints []config.E
 		byAddress[endpoint.Address] = endpoint
 	}
 	return nat.Race(ctx, candidates, func(ctx context.Context, address string) error {
-		client, err := verifyPinnedPeerCertificateClient(address, peer.APICertificateSHA256)
-		if err != nil {
+		endpoint := byAddress[address]
+		if !keepDialEndpoint(endpoint, peer.DHTPeerID) {
+			return &url.Error{Op: "dial", URL: address, Err: errors.New("refusing to send application data before the peer is authenticated")}
+		}
+		if err := refuseUnencrypted(address); err != nil {
 			return err
 		}
-		err = do(ctx, strings.TrimRight(address, "/"), client)
+		client, err := verifyPinnedPeerCertificateClient(address, peer.APICertificateSHA256)
+		if err != nil {
+			return &url.Error{Op: "dial", URL: address, Err: err}
+		}
+		base := strings.TrimRight(address, "/")
+		err = do(ctx, base, client)
 		if err == nil {
-			rememberDial(peer.ID, strings.TrimRight(address, "/"), client)
+			// The pin matched and the peer answered, so this is no longer an
+			// unauthenticated DHT observation. A later save may keep it.
+			discovery.MarkAddressAuthenticated(address)
+			discovery.MarkAddressAuthenticated(base)
+			rememberDial(peer.ID, base, client)
 			return nil
 		}
 		if !failoverError(err) {
@@ -236,8 +235,12 @@ func PostSecret(ctx context.Context, peer config.PeerConfig, path string, payloa
 func postJSON(ctx context.Context, peer config.PeerConfig, path string, payload []byte, secret bool) ([]byte, string, error) {
 	var body []byte
 	used, err := Dial(ctx, peer, func(ctx context.Context, base string, client *http.Client) error {
-		if secret && !secretTransportAllowed(base) {
-			return &url.Error{Op: "post", URL: base, Err: errors.New("refusing to send a secret before the peer identity is verified")}
+		if !encryptedAppTransport(base) {
+			message := "refusing to send an unencrypted payload"
+			if secret {
+				message = "refusing to send a secret before the peer identity is verified"
+			}
+			return &url.Error{Op: "post", URL: base, Err: errors.New(message)}
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
 		if err != nil {
@@ -270,7 +273,25 @@ func postJSON(ctx context.Context, peer config.PeerConfig, path string, payload 
 }
 
 func secretTransportAllowed(base string) bool {
-	return base == discovery.StreamBaseURL || strings.HasPrefix(base, "https://")
+	return encryptedAppTransport(base)
+}
+
+// encryptedAppTransport is an HTTPS connection pinned to the paired peer, or a
+// libp2p stream whose handshake already authenticated that peer. Plain HTTP is
+// not a path for application data.
+func encryptedAppTransport(base string) bool {
+	if base == discovery.StreamBaseURL {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(base)), "https://")
+}
+
+// refuseUnencrypted stops a dial before any application bytes are written.
+func refuseUnencrypted(address string) error {
+	if encryptedAppTransport(address) {
+		return nil
+	}
+	return &url.Error{Op: "dial", URL: address, Err: errors.New("refusing to send an unencrypted payload")}
 }
 
 func endpointRank(endpoint config.EndpointConfig) int {
