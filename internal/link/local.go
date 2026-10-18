@@ -172,11 +172,53 @@ func (d *LocalDirectory) Lookup(ctx context.Context, namespace string) ([][]byte
 	}
 	d.broadcast(localPairMessage{Type: localPairType, Op: "query", Namespace: namespace})
 	targets := d.dialTargets()
-	payloads := fetchPairingTargets(ctx, targets, namespace)
-	if len(payloads) > 0 {
-		structuredlog.Event("info", "pairing.lookup.local", "pairing record found on the local network", map[string]any{"namespace": namespace})
+	fetched := make(chan [][]byte, 1)
+	go func() {
+		fetched <- fetchPairingTargets(ctx, targets, namespace)
+	}()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	var tcp [][]byte
+	tcpDone := false
+	for {
+		if payload := d.stored(namespace); len(payload) > 0 {
+			cancel()
+			structuredlog.Event("info", "pairing.lookup.local", "pairing record found on the local network", map[string]any{"namespace": namespace})
+			return [][]byte{payload}, nil
+		}
+		select {
+		case tcp = <-fetched:
+			tcpDone = true
+			if len(tcp) > 0 {
+				structuredlog.Event("info", "pairing.lookup.local", "pairing record found on the local network", map[string]any{"namespace": namespace})
+				return tcp, nil
+			}
+		case <-ticker.C:
+		case <-ctx.Done():
+			if !tcpDone {
+				tcp = <-fetched
+			}
+			if payload := d.stored(namespace); len(payload) > 0 {
+				structuredlog.Event("info", "pairing.lookup.local", "pairing record found on the local network", map[string]any{"namespace": namespace})
+				return [][]byte{payload}, nil
+			}
+			return tcp, nil
+		}
 	}
-	return payloads, nil
+}
+
+func (d *LocalDirectory) rememberDialed(namespace, target string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	payload, err := fetchPairingTCP(ctx, target, namespace)
+	if err != nil || len(payload) == 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, exists := d.payload[namespace]; !exists {
+		d.payload[namespace] = append([]byte(nil), payload...)
+	}
 }
 
 func (d *LocalDirectory) stored(namespace string) []byte {
@@ -239,14 +281,29 @@ func (d *LocalDirectory) readUDP() {
 		switch msg.Op {
 		case "query":
 			payload := d.stored(msg.Namespace)
-			if len(payload) == 0 || len(payload) > 800 {
+			if len(payload) == 0 {
 				continue
 			}
-			reply, err := json.Marshal(localPairMessage{Type: localPairType, Op: "record", Namespace: msg.Namespace, Payload: payload})
+			// A datagram cannot carry a full reconnect profile. The querier
+			// dials this process back on the pairing port.
+			op := "record"
+			if len(payload) > 800 {
+				op = "fetch"
+				payload = nil
+			}
+			reply, err := json.Marshal(localPairMessage{Type: localPairType, Op: op, Namespace: msg.Namespace, Payload: payload})
 			if err != nil {
 				continue
 			}
 			_, _ = d.udp.WriteTo(reply, from)
+		case "fetch":
+			host, ok := from.(*net.UDPAddr)
+			if !ok || host == nil || host.IP == nil {
+				continue
+			}
+			target := net.JoinHostPort(host.IP.String(), fmt.Sprintf("%d", d.port))
+			namespace := msg.Namespace
+			go d.rememberDialed(namespace, target)
 		case "record":
 			if len(msg.Payload) == 0 || len(msg.Payload) > maxLocalPair {
 				continue
@@ -285,23 +342,31 @@ func fetchPairingTargets(ctx context.Context, targets []string, namespace string
 		wg       sync.WaitGroup
 		sem      = make(chan struct{}, 64)
 	)
+launch:
 	for _, target := range targets {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(target string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			payload, err := fetchPairingTCP(ctx, target, namespace)
-			if err != nil || len(payload) == 0 {
-				return
-			}
-			mu.Lock()
-			payloads = append(payloads, payload)
-			if len(payloads) == 1 {
-				cancel()
-			}
-			mu.Unlock()
-		}(target)
+		if ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			break launch
+		case sem <- struct{}{}:
+			wg.Add(1)
+			go func(target string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				payload, err := fetchPairingTCP(ctx, target, namespace)
+				if err != nil || len(payload) == 0 {
+					return
+				}
+				mu.Lock()
+				payloads = append(payloads, payload)
+				if len(payloads) == 1 {
+					cancel()
+				}
+				mu.Unlock()
+			}(target)
+		}
 	}
 	wg.Wait()
 	return payloads

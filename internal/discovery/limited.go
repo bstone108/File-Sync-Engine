@@ -43,7 +43,7 @@ func (limitedRelayError) Temporary() bool { return true }
 // unlimited relay.
 func AllowsLimitedAPI(path string) bool {
 	switch path {
-	case "/v1/sync-journal":
+	case "/v1/sync-journal", "/v1/pair-code/claim", "/v1/pair-code/record", "/v1/link-profile", "/v1/config-sync/merge":
 		return true
 	default:
 		return false

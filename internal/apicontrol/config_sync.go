@@ -200,6 +200,29 @@ func executePendingOnboarding(ctx context.Context, configPath string, replica *c
 	return nil
 }
 
+func mergeOnboarding(current *configsync.Replica, executed []configsync.OnboardingCommand) {
+	if current == nil {
+		return
+	}
+	byID := map[string]configsync.OnboardingCommand{}
+	for _, command := range executed {
+		byID[command.ID] = command
+	}
+	seen := map[string]struct{}{}
+	for i, command := range current.Onboarding {
+		if updated, ok := byID[command.ID]; ok {
+			current.Onboarding[i] = updated
+			seen[command.ID] = struct{}{}
+		}
+	}
+	for _, command := range executed {
+		if _, ok := seen[command.ID]; ok {
+			continue
+		}
+		current.Onboarding = append(current.Onboarding, command)
+	}
+}
+
 func onboardingByID(replica configsync.Replica, id string) (configsync.OnboardingCommand, bool) {
 	for _, command := range replica.Onboarding {
 		if command.ID == id {
@@ -262,8 +285,15 @@ func HandleOnboarding(ctx context.Context, configPath string, raw json.RawMessag
 	}
 	commandID := replica.Onboarding[len(replica.Onboarding)-1].ID
 	if req.TargetInstanceID == replica.InstanceID {
-		replica, err = store.Update(func(replica *configsync.Replica) error {
-			return executePendingOnboarding(ctx, configPath, replica)
+		// Pairing lookup and the claim dial can take the DHT budget. Doing
+		// that work while the config-sync lock is held stalls every GUI poll
+		// and deadlocks if the dial calls back into this store.
+		if err := executePendingOnboarding(ctx, configPath, &replica); err != nil {
+			return OnboardingResponse{}, err
+		}
+		replica, err = store.Update(func(current *configsync.Replica) error {
+			mergeOnboarding(current, replica.Onboarding)
+			return nil
 		})
 		if err != nil {
 			return OnboardingResponse{}, err

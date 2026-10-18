@@ -204,8 +204,11 @@ func TestManualLinkPersistsReconnectProfile(t *testing.T) {
 	for _, address := range gotOffer.LinkProfile.Addresses {
 		offerAddresses[address.Address] = address.NetworkHint
 	}
-	if offerAddresses["http://10.1.1.5:22420"] != "local" || offerAddresses["http://100.64.1.9:22420"] != "vpn_overlay" || offerAddresses["http://203.0.113.20:22420"] != "wan" {
+	if offerAddresses["http://10.1.1.5:22420"] != "local" || offerAddresses["http://100.64.1.9:22420"] != "vpn_overlay" {
 		t.Fatalf("offer profile = %+v", gotOffer.LinkProfile)
+	}
+	if _, ok := offerAddresses["http://203.0.113.20:22420"]; ok {
+		t.Fatalf("unverified public address was offered: %+v", gotOffer.LinkProfile)
 	}
 	if gotOffer.LinkProfile.DHTPeerID != "12D3KooWimporter" || len(gotOffer.LinkProfile.Relays) != 1 {
 		t.Fatalf("offer identity = %+v", gotOffer.LinkProfile)
