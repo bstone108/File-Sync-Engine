@@ -392,6 +392,18 @@ func (r *Replica) upsertEdit(edit Edit) {
 	r.Pending = append(r.Pending, edit)
 }
 
+// AdoptOnboarding keeps the newer clock for each command. A config poll
+// that loaded a replica before a claim finished must not write that older
+// pending copy back over the completion.
+func (r *Replica) AdoptOnboarding(commands []OnboardingCommand) {
+	if r == nil {
+		return
+	}
+	for _, command := range commands {
+		r.upsertOnboarding(command)
+	}
+}
+
 func (r *Replica) upsertOnboarding(command OnboardingCommand) {
 	for i := range r.Onboarding {
 		if r.Onboarding[i].ID != command.ID {

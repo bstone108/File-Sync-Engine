@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
@@ -303,5 +306,115 @@ func TestOnboardingIssuesLocallyAndRelaysToAnotherInstance(t *testing.T) {
 		if command.ID == queued.Command.ID && command.Status != configsync.OnboardingPending {
 			t.Fatalf("relay executed another instance's onboarding: %+v", command)
 		}
+	}
+}
+
+func TestConfigSyncPollDoesNotIssueAgainWhileClaimIsInFlight(t *testing.T) {
+	identity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{
+		"nodeName":"engine-onboard",
+		"listen":[],
+		"api":{"listen":"127.0.0.1:0","key":"api-secret","advertiseURL":"http://engine-onboard:22420"},
+		"identity":{"privateKey":"` + identity.PrivateKey + `","publicKey":"` + identity.PublicKey + `","encryptionLevel":4},
+		"logging":{"level":"info","output":"stderr"},
+		"discovery":{"disabled":true,"dht":false,"local":false},
+		"peers":[],
+		"folders":[]
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	SetLinkService(link.NewService(link.NewMemoryDirectory()))
+	t.Cleanup(func() { SetLinkService(link.NewService(link.UnavailableDirectory{})) })
+	if _, err := HandleConfigSync(path); err != nil {
+		t.Fatal(err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	var calls atomic.Int32
+	previousRelays := claimRelays
+	claimRelays = func() []string {
+		calls.Add(1)
+		once.Do(func() { close(entered) })
+		<-release
+		return nil
+	}
+	t.Cleanup(func() { claimRelays = previousRelays })
+
+	view, err := HandleConfigSync(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRaw, err := json.Marshal(map[string]string{"targetInstanceId": view.LocalInstanceID, "action": "issue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued := make(chan OnboardingResponse, 1)
+	issueErr := make(chan error, 1)
+	go func() {
+		response, err := HandleOnboarding(context.Background(), path, localRaw)
+		if err != nil {
+			issueErr <- err
+			return
+		}
+		issued <- response
+	}()
+	select {
+	case <-entered:
+	case err := <-issueErr:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("pairing issue did not start")
+	}
+	pollErr := make(chan error, 1)
+	go func() {
+		_, err := HandleConfigSync(path)
+		pollErr <- err
+	}()
+	select {
+	case err := <-pollErr:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("config sync poll blocked on the in-flight pairing issue")
+	}
+	close(release)
+	var response OnboardingResponse
+	select {
+	case response = <-issued:
+	case err := <-issueErr:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("pairing issue did not finish")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("pairing issues started = %d, want 1", calls.Load())
+	}
+	if response.Command.Status != configsync.OnboardingDone {
+		t.Fatalf("issue = %+v", response.Command)
+	}
+	again, err := HandleConfigSync(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, command := range again.Onboarding {
+		if command.ID != response.Command.ID {
+			continue
+		}
+		found = true
+		if command.Status != configsync.OnboardingDone || command.Code != response.Command.Code {
+			t.Fatalf("poll changed the finished code: %+v", command)
+		}
+	}
+	if !found {
+		t.Fatalf("finished onboarding missing after poll: %+v", again.Onboarding)
 	}
 }

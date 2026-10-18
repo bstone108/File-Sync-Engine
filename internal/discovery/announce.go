@@ -220,13 +220,16 @@ func SharedPeerID() string {
 }
 
 // SharedListenAddrs are the addresses the process router is advertising.
+// host.Addrs dials public candidates back, so the router lock is not held
+// across that call.
 func SharedListenAddrs() []string {
 	sharedMu.Lock()
-	defer sharedMu.Unlock()
-	if sharedRouter == nil || sharedRouter.host == nil {
+	router := sharedRouter
+	sharedMu.Unlock()
+	if router == nil || router.host == nil {
 		return nil
 	}
-	return multiaddrStrings(sharedRouter.host.Addrs())
+	return multiaddrStrings(router.host.Addrs())
 }
 
 // ResetSharedRouter closes the process router. Tests use it between cases.
