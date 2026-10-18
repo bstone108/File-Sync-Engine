@@ -80,8 +80,10 @@ run_stapler_with_retry() {
 }
 
 # hdiutil create/convert on GitHub macOS runners fails with
-# "hdiutil: create failed - Resource busy" when a previous disk image is
-# still attached. Detach those mounts, sync, and retry. Other failures
+# "hdiutil: create failed - Resource busy" when diskimages-helper still
+# holds a device. Building the compressed image in one shot keeps that lock, so the
+# disk image is built as a read-write image, filled, detached, and converted.
+# Detach leftover mounts, stop the helper, sync, and retry. Other failures
 # are not retried.
 hdiutil_failure_is_transient() {
   grep -E -i -q 'Resource busy|Resource temporarily unavailable|Device busy|temporarily unavailable' "$1"
@@ -100,7 +102,11 @@ hdiutil_volume_name() {
 
 detach_stale_disk_images() {
   local volname="$1"
-  local candidate plist
+  local candidate plist dev
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -9 diskimages-helper >/dev/null 2>&1 || true
+    pkill -9 diskimagesiod >/dev/null 2>&1 || true
+  fi
   if [[ -n "$volname" ]]; then
     for candidate in "/Volumes/${volname}" "/Volumes/${volname} 1" "/Volumes/${volname} 2" "/Volumes/${volname} 3"; do
       if [[ -d "$candidate" ]]; then
@@ -108,6 +114,10 @@ detach_stale_disk_images() {
       fi
     done
   fi
+  while IFS= read -r dev; do
+    [[ -n "$dev" ]] || continue
+    hdiutil detach "$dev" -force >/dev/null 2>&1 || true
+  done < <(hdiutil info 2>/dev/null | awk '/^\/dev\/disk/ { print $1 }')
   plist="$(mktemp "${TMPDIR:-/tmp}/fse-hdiutil-info.XXXXXX")"
   if hdiutil info -plist >"$plist" 2>/dev/null; then
     python3 - "$plist" <<'PY' || true
@@ -174,6 +184,53 @@ run_hdiutil_with_retry() {
   return 1
 }
 
+# create_compressed_dmg does not build the UDZO image straight from a source
+# folder. That one-shot create stays Resource busy on macos-15 arm64.
+# A fixed-size read-write image is attached at a private mount, filled, detached,
+# and converted to UDZO. Each hdiutil step has its own busy retry.
+create_compressed_dmg() {
+  local volname="$1"
+  local srcfolder="$2"
+  local dmg="$3"
+  local rw_base rw mount size_kb size_mb item base copy_status
+  rw_base="$(mktemp "${TMPDIR:-/tmp}/fse-dmg-rw.XXXXXX")"
+  rm -f "$rw_base"
+  rw="${rw_base}.dmg"
+  mount="$(mktemp -d "${TMPDIR:-/tmp}/fse-dmg-mnt.XXXXXX")"
+  size_kb="$(du -sk "$srcfolder" | awk '{ print $1 }')"
+  size_mb=$((size_kb / 1024 + 64))
+  if [[ "$size_mb" -lt 64 ]]; then
+    size_mb=64
+  fi
+  if ! run_hdiutil_with_retry create -size "${size_mb}m" -fs HFS+ -volname "$volname" -ov "$rw"; then
+    rm -rf "$mount" "$rw"
+    return 1
+  fi
+  if ! run_hdiutil_with_retry attach "$rw" -mountpoint "$mount" -nobrowse -noverify -noautoopen; then
+    rm -rf "$mount" "$rw"
+    return 1
+  fi
+  copy_status=0
+  for item in "$srcfolder"/*; do
+    [[ -e "$item" ]] || continue
+    base="$(basename "$item")"
+    ditto "$item" "$mount/$base" || copy_status=$?
+  done
+  hdiutil detach "$mount" -force >/dev/null 2>&1 || true
+  if [[ "$copy_status" -ne 0 ]]; then
+    rm -rf "$mount" "$rw"
+    return "$copy_status"
+  fi
+  if ! run_hdiutil_with_retry convert "$rw" -format UDZO -ov -o "$dmg"; then
+    rm -rf "$mount" "$rw"
+    return 1
+  fi
+  if [[ ! -f "$dmg" && -f "${dmg}.dmg" ]]; then
+    mv "${dmg}.dmg" "$dmg"
+  fi
+  rm -rf "$mount" "$rw"
+}
+
 if [[ "${1:-}" == "--self-test-stapler-retry" ]]; then
   shift
   run_stapler_with_retry "$@"
@@ -183,6 +240,12 @@ fi
 if [[ "${1:-}" == "--self-test-hdiutil-retry" ]]; then
   shift
   run_hdiutil_with_retry "$@"
+  exit $?
+fi
+
+if [[ "${1:-}" == "--self-test-dmg-create" ]]; then
+  shift
+  create_compressed_dmg "$@"
   exit $?
 fi
 
@@ -428,12 +491,7 @@ DMG_PATH="$(dirname "$APP_BUNDLE")/fse-desktop.dmg"
 rm -rf "$DMG_STAGE" "$DMG_PATH"
 mkdir -p "$DMG_STAGE"
 ditto "$APP_BUNDLE" "$DMG_STAGE/fse-desktop.app"
-run_hdiutil_with_retry create \
-  -volname "File Sync Engine Desktop" \
-  -srcfolder "$DMG_STAGE" \
-  -ov \
-  -format UDZO \
-  "$DMG_PATH"
+create_compressed_dmg "File Sync Engine Desktop" "$DMG_STAGE" "$DMG_PATH"
 codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
 codesign --verify --verbose=2 "$DMG_PATH"
 xcrun notarytool submit "$DMG_PATH" \

@@ -841,6 +841,105 @@ exit 0
 	}
 }
 
+func TestCompressedDMGCreateUsesReadWriteImageAndRetriesBusySteps(t *testing.T) {
+	root := filepath.Join("..", "..")
+	bin := t.TempDir()
+	logPath := filepath.Join(bin, "calls.log")
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "payload.txt"), []byte("app"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "ditto"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := `#!/bin/sh
+printf '%s\n' "$*" >> "$HDIUTIL_CALL_LOG"
+if [ "$1" = "info" ]; then
+  cat <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>images</key><array><dict><key>system-entities</key><array><dict>
+<key>mount-point</key><string>/Volumes/File Sync Engine Desktop</string>
+</dict></array></dict></array></dict></plist>
+EOF
+  exit 0
+fi
+if [ "$1" = "detach" ]; then
+  exit 0
+fi
+count=$(grep -c "^${1} " "$HDIUTIL_CALL_LOG" || true)
+if [ "${HDIUTIL_FAKE_MODE}" = "always-transient" ] || [ "$count" -lt 2 ]; then
+  echo "hdiutil: ${1} failed - Resource busy" >&2
+  exit 1
+fi
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(bin, "hdiutil"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(mode string) (string, int) {
+		if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		dmg := filepath.Join(t.TempDir(), "fse-desktop.dmg")
+		cmd := exec.Command("bash", "scripts/sign-and-notarize-macos-desktop.sh", "--self-test-dmg-create", "File Sync Engine Desktop", src, dmg)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"HDIUTIL_CALL_LOG="+logPath,
+			"HDIUTIL_FAKE_MODE="+mode,
+			"FSE_HDIUTIL_RETRY_DELAYS=0 0 0 0",
+		)
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				code = exitErr.ExitCode()
+			} else {
+				t.Fatal(err)
+			}
+		}
+		return string(out), code
+	}
+	out, code := run("transient-then-ok")
+	if code != 0 {
+		t.Fatalf("read-write dmg create should succeed after one busy retry per step, exit %d\n%s", code, out)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(calls)
+	if strings.Contains(text, "-srcfolder") {
+		t.Fatalf("dmg create must not use -srcfolder\n%s", text)
+	}
+	for _, want := range []string{"create -size ", "attach ", "convert "} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dmg create log missing %q\n%s", want, text)
+		}
+	}
+	if got := strings.Count(text, "create -size "); got != 2 {
+		t.Fatalf("create should be retried once, calls=%d\n%s", got, text)
+	}
+	if !strings.Contains(text, "detach /Volumes/File Sync Engine Desktop -force") {
+		t.Fatalf("dmg create should detach the stale volume\n%s", text)
+	}
+	out, code = run("always-transient")
+	if code == 0 {
+		t.Fatalf("repeated resource busy should fail dmg creation:\n%s", out)
+	}
+	calls, err = os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(calls), "create -size "); got != 5 {
+		t.Fatalf("busy create should stop after 5 attempts, calls=%d\n%s", got, calls)
+	}
+	if strings.Contains(string(calls), "convert ") {
+		t.Fatalf("convert should not run when the read-write image never attaches\n%s", calls)
+	}
+}
+
 func TestMacOSSignAndNotarizeScriptRefusesNonDarwinHosts(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("non-Darwin guard is exercised on Linux CI")
@@ -946,6 +1045,10 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 		"run_stapler_with_retry validate",
 		"NSURLErrorDomain",
 		"run_hdiutil_with_retry create",
+		"run_hdiutil_with_retry attach",
+		"run_hdiutil_with_retry convert",
+		"diskimages-helper",
+		"-size",
 		"Resource busy",
 		"hdiutil detach",
 		"sync || true",
@@ -956,7 +1059,7 @@ func TestReleaseWorkflowBuildsMacOSDesktopInstallerArtifactsOnNativeRunners(t *t
 			t.Fatalf("macOS sign/notarize script missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"codesign --force --deep --sign -", "Dockerfile.darwin-osxcross", "osxcross", "FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey", "lipo"} {
+	for _, forbidden := range []string{"codesign --force --deep --sign -", "Dockerfile.darwin-osxcross", "osxcross", "FSE_API_KEY", "FSE_IDENTITY_PRIVATE_KEY", "identity.privateKey", "lipo", "-srcfolder"} {
 		if strings.Contains(workflow, forbidden) || strings.Contains(script, forbidden) || strings.Contains(signScript, forbidden) {
 			t.Fatalf("macOS native artifact path must not depend on forbidden text %q", forbidden)
 		}
