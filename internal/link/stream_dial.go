@@ -130,7 +130,7 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 		}
 		var answered answeredError
 		if errors.As(last, &answered) {
-			return "", answered.err, true
+			return "", answered, true
 		}
 		return used, nil, true
 	}
@@ -160,7 +160,7 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 	}
 	var answered answeredError
 	if errors.As(last, &answered) {
-		return "", answered.err
+		return "", answered
 	}
 	return "", last
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"filesyncengine/internal/advertise"
@@ -20,8 +21,11 @@ import (
 )
 
 var (
-	linkService   = link.NewService(link.UnavailableDirectory{})
-	detectLinkIPs = link.LocalIPs
+	linkService    = link.NewService(link.UnavailableDirectory{})
+	detectLinkIPs  = link.LocalIPs
+	claimTailscale = advertise.TailscaleHosts
+	claimRelays    = discovery.HelperRelayAddrs
+	redeemInflight redeemFlight
 )
 
 // SetLinkService installs the process pairing-code directory. Tests use a
@@ -52,9 +56,9 @@ func gatheredProfile(cfg config.Config, certificate string) link.Profile {
 	extras = append(extras, advertise.ProfileURLs(cfg)...)
 	ips := detectLinkIPs()
 	if !advertise.ExcludeTailscale() {
-		ips = append(ips, advertise.TailscaleHosts(context.Background())...)
+		ips = append(ips, claimTailscale(context.Background())...)
 	}
-	relays := append(append([]string{}, linkService.Relays()...), discovery.HelperRelayAddrs()...)
+	relays := append(append([]string{}, linkService.Relays()...), claimRelays()...)
 	return link.Gather(cfg, link.Extras{
 		IPs:               ips,
 		ExtraURLs:         extras,
@@ -88,9 +92,31 @@ func HandleIssuePairCode(configPath string) (api.PairCodeResponse, error) {
 	return api.PairCodeResponse{Code: code, ExpiresAt: expires}, nil
 }
 
+// claimProfile is the reconnect profile sent with a pairing claim.
+// It uses the configured advertise URL, the DHT peer id, and relays already
+// in memory. Tailscale queries and host.Addrs() dial public addresses back,
+// and that work has to stay off the claim round trip.
+func claimProfile(cfg config.Config, certificate string) link.Profile {
+	return link.Gather(cfg, link.Extras{
+		Relays:            append([]string{}, linkService.Relays()...),
+		DHTPeerID:         linkService.PeerID(),
+		CertificateSHA256: certificate,
+	})
+}
+
 // HandleRedeemPairCode looks a code up on the DHT, rejects hijacked records,
 // and pairs with the authenticated peer, failing over across its addresses.
 func HandleRedeemPairCode(ctx context.Context, configPath string, req api.PairCodeRedeemRequest) (api.PairCodeRedeemResponse, error) {
+	code := link.NormalizeCode(req.Code)
+	if code == "" {
+		code = req.Code
+	}
+	return redeemInflight.do(code, func() (api.PairCodeRedeemResponse, error) {
+		return redeemPairCode(ctx, configPath, req)
+	})
+}
+
+func redeemPairCode(ctx context.Context, configPath string, req api.PairCodeRedeemRequest) (api.PairCodeRedeemResponse, error) {
 	cfg, err := config.LoadFile(configPath)
 	if err != nil {
 		return api.PairCodeRedeemResponse{}, err
@@ -109,7 +135,7 @@ func HandleRedeemPairCode(ctx context.Context, configPath string, req api.PairCo
 		NodeName:          cfg.NodeName,
 		APIKey:            cfg.API.Key,
 		CertificateSHA256: certificate,
-		Profile:           gatheredProfile(cfg, certificate),
+		Profile:           claimProfile(cfg, certificate),
 	})
 	if err != nil {
 		return api.PairCodeRedeemResponse{}, err
@@ -193,7 +219,7 @@ func HandlePairCodeClaim(configPath string, req link.ClaimRequest) (link.ClaimRe
 	}); err != nil {
 		return link.ClaimResponse{}, err
 	}
-	local := gatheredProfile(cfg, certificate)
+	local := claimProfile(cfg, certificate)
 	return link.ClaimResponse{
 		DiscoveryID:       cfg.Identity.PublicKey,
 		NodeName:          cfg.NodeName,
@@ -285,4 +311,41 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// redeemFlight runs one redeem per pairing code. A GUI poll and the accept
+// request can both see the same pending command. The second waits and uses
+// the first result instead of burning the code twice.
+type redeemFlight struct {
+	mu    sync.Mutex
+	calls map[string]*redeemCall
+}
+
+type redeemCall struct {
+	done chan struct{}
+	resp api.PairCodeRedeemResponse
+	err  error
+}
+
+func (f *redeemFlight) do(code string, fn func() (api.PairCodeRedeemResponse, error)) (api.PairCodeRedeemResponse, error) {
+	f.mu.Lock()
+	if f.calls == nil {
+		f.calls = map[string]*redeemCall{}
+	}
+	if call, ok := f.calls[code]; ok {
+		f.mu.Unlock()
+		<-call.done
+		return call.resp, call.err
+	}
+	call := &redeemCall{done: make(chan struct{})}
+	f.calls[code] = call
+	f.mu.Unlock()
+	defer func() {
+		close(call.done)
+		f.mu.Lock()
+		delete(f.calls, code)
+		f.mu.Unlock()
+	}()
+	call.resp, call.err = fn()
+	return call.resp, call.err
 }
