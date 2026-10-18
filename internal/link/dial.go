@@ -74,8 +74,18 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 	}
 	stages := endpointStages(peer)
 	var last error
+	var earlier string
 	sawLimited := false
 	tried := 0
+	noteFailure := func(err error) {
+		if err == nil {
+			return
+		}
+		if earlier == "" {
+			earlier = err.Error()
+		}
+		last = err
+	}
 	for i, stage := range stages {
 		if i == libp2pStage {
 			used, err := dialLibp2p(ctx, peer, do)
@@ -90,7 +100,7 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 				if errors.Is(err, discovery.ErrLimitedRelay) {
 					sawLimited = true
 				}
-				last = err
+				noteFailure(err)
 				tried++
 			}
 			continue
@@ -99,7 +109,9 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 			continue
 		}
 		tried += len(stage)
-		used, path, err := dialStage(ctx, peer, stage, do)
+		stageCtx, cancel := contextForEarlierStage(ctx)
+		used, path, err := dialStage(stageCtx, peer, stage, do)
+		cancel()
 		if err == nil {
 			discovery.NotePeerReachable(peer.ID)
 			nat.DefaultPaths.Observe(peer.ID, used, path)
@@ -112,7 +124,7 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 		if errors.As(err, &answered) {
 			return "", answered.err
 		}
-		last = err
+		noteFailure(err)
 	}
 	if tried == 0 {
 		return "", errors.New("peer has no http endpoint")
@@ -132,7 +144,35 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 	if last == nil {
 		last = errors.New("peer has no reachable endpoint")
 	}
+	if earlier != "" && earlier != last.Error() {
+		last = fmt.Errorf("%s; %w", earlier, last)
+	}
 	return "", last
+}
+
+// contextForEarlierStage keeps a short caller budget from being spent entirely
+// on one HTTPS dial. Claim and redeem use about 15s. A blackholed address has
+// to fail while there is still time to open the direct libp2p stream.
+func contextForEarlierStage(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.Background(), func() {}
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx, func() {}
+	}
+	remaining := time.Until(deadline)
+	if remaining > 20*time.Second || remaining <= 0 {
+		return ctx, func() {}
+	}
+	budget := remaining / 3
+	if budget < time.Second {
+		return ctx, func() {}
+	}
+	if budget > 4*time.Second {
+		budget = 4 * time.Second
+	}
+	return context.WithTimeout(ctx, budget)
 }
 
 // libp2pStage is tried after saved LAN/Tailscale addresses and learned LAN

@@ -11,6 +11,10 @@ TIMEOUT="${SOAK_TIMEOUT:-720}"
 
 cleanup() {
   docker compose -f compose.yaml logs --tail 80 || true
+  for side in soak-a soak-b; do
+    echo "---- $side /config/logs/fse.jsonl ----"
+    docker compose -f compose.yaml exec -T "$side" tail -n 80 /config/logs/fse.jsonl || true
+  done
   docker compose -f compose.yaml down -v || true
 }
 trap cleanup EXIT
@@ -89,7 +93,7 @@ fi
 paired=""
 i=0
 while [ "$i" -lt 8 ]; do
-  paired="$(post 22441 "$KEY_B" /v1/pair-code/redeem "{\"code\":\"$code\"}" || true)"
+  paired="$(curl -ksS -H "X-FSE-API-Key: $KEY_B" -H "Content-Type: application/json" -d "{\"code\":\"$code\"}" "https://127.0.0.1:22441/v1/pair-code/redeem" || true)"
   echo "$paired"
   echo "$paired" | grep -qi 'paired by code' && break
   i=$((i + 1))
