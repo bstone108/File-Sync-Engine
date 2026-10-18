@@ -461,6 +461,33 @@ func finishDialback(key, host string, port int, flight *dialbackFlight, gen uint
 	return ok
 }
 
+// ForcePublicDialback dials host even when an earlier check is cached.
+// Router startup dials before the libp2p socket is listening, and that
+// closed result must not decide reachability after the port is open.
+func ForcePublicDialback(host string, port int) bool {
+	host = hostname(host)
+	if host == "" || !publicNeedsDialback(host) {
+		return host != ""
+	}
+	if port < 1 || port > 65535 {
+		port = 22420
+	}
+	key := net.JoinHostPort(host, strconv.Itoa(port))
+	dialbackMu.Lock()
+	delete(dialbackCache, key)
+	gen := dialbackGen
+	dialbackMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	ok := activeProbe(Observations{})(ctx, host, port) == nil
+	cancel()
+	dialbackMu.Lock()
+	if dialbackGen == gen {
+		dialbackCache[key] = dialbackEntry{ok: ok, until: time.Now().Add(dialbackTTL)}
+	}
+	dialbackMu.Unlock()
+	return ok
+}
+
 func clearDialbackCache() {
 	dialbackMu.Lock()
 	dialbackGen++
