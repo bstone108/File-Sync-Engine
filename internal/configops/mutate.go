@@ -322,7 +322,7 @@ func MergePairedPeerLink(path, peerID string, peer config.PeerConfig) error {
 func authenticatedPeer(peer config.PeerConfig) config.PeerConfig {
 	var endpoints []config.EndpointConfig
 	for _, endpoint := range peer.Endpoints {
-		if link.KeepPairedAddress(endpoint.Address, peer.DHTPeerID) {
+		if link.KeepStoredEndpoint(endpoint, peer.DHTPeerID) {
 			endpoints = append(endpoints, endpoint)
 		}
 	}

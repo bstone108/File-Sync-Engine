@@ -368,6 +368,9 @@ type EndpointConfig struct {
 	Kind        string `json:"kind"`
 	Address     string `json:"address"`
 	NetworkHint string `json:"networkHint,omitempty"`
+	// Authenticated is set when the paired peer presented this address in a
+	// signed profile. A literal public IP without it is purged on load.
+	Authenticated bool `json:"authenticated,omitempty"`
 }
 
 type FolderConfig struct {

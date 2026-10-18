@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -80,6 +81,43 @@ func LoadJournal(configPath, folderID string) ([]Entry, error) {
 		return nil, err
 	}
 	return stored.Entries, nil
+}
+
+// JournalIndex summarizes the journal for the folder API. The metadata store
+// stays at the empty hash when foldershare owns the files, so the GUI would
+// otherwise say the folder was never scanned.
+func JournalIndex(configPath, folderID string) (live, verified, blocks int, bytes int64, hash string, ok bool) {
+	entries, err := LoadJournal(configPath, folderID)
+	if err != nil || len(entries) == 0 {
+		return 0, 0, 0, 0, "", false
+	}
+	paths := make([]string, 0, len(entries))
+	byPath := make(map[string]Entry, len(entries))
+	for _, entry := range entries {
+		if entry.Path == "" || entry.Deleted {
+			continue
+		}
+		paths = append(paths, entry.Path)
+		byPath[entry.Path] = entry
+	}
+	if len(paths) == 0 {
+		return 0, 0, 0, 0, "", false
+	}
+	sort.Strings(paths)
+	sum := sha256.New()
+	for _, path := range paths {
+		entry := byPath[path]
+		live++
+		if entry.Size > 0 {
+			bytes += entry.Size
+		}
+		blocks += len(entry.Blocks)
+		if entry.SHA256 != "" {
+			verified++
+		}
+		fmt.Fprintf(sum, "%s\x00%s\x00%d\x00", path, entry.SHA256, entry.Size)
+	}
+	return live, verified, blocks, bytes, hex.EncodeToString(sum.Sum(nil)), true
 }
 
 // JournalPath is the on-disk journal for folderID next to the daemon config.
@@ -246,6 +284,47 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 	var jobs []transferJob
 	var mu sync.Mutex
 	var applyErr error
+	var passDeletes, passMoves int
+	remoteLive := map[string]Entry{}
+	for _, entry := range remote {
+		if entry.Deleted || entry.SHA256 == "" || !safeRel(entry.Path) {
+			continue
+		}
+		remoteLive[entry.SHA256] = entry
+	}
+	for _, entry := range remote {
+		if !entry.Deleted || !safeRel(entry.Path) {
+			continue
+		}
+		current, ok := byPath[entry.Path]
+		if ok && current.Revision >= entry.Revision {
+			continue
+		}
+		if !ok || current.Deleted || current.SHA256 == "" {
+			continue
+		}
+		dest, found := remoteLive[current.SHA256]
+		if !found || dest.Path == entry.Path {
+			continue
+		}
+		from, fromOK := safeJoin(folder.Path, entry.Path)
+		to, toOK := safeJoin(folder.Path, dest.Path)
+		if !fromOK || !toOK {
+			continue
+		}
+		if _, statErr := os.Stat(from); statErr != nil {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+			continue
+		}
+		if err := os.Rename(from, to); err != nil {
+			continue
+		}
+		passMoves++
+		byPath[entry.Path] = entry
+		byPath[dest.Path] = dest
+	}
 	for _, entry := range remote {
 		if !safeRel(entry.Path) {
 			continue
@@ -259,7 +338,8 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 			continue
 		}
 		if entry.Deleted {
-			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+			err := os.Remove(target)
+			if err != nil && !os.IsNotExist(err) {
 				applyErr = errors.Join(applyErr, err)
 				structuredlog.Event("error", "folder.sync.file_failed", "remote delete was not applied", map[string]any{
 					"folder": folder.ID,
@@ -272,6 +352,9 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 			mu.Lock()
 			byPath[entry.Path] = entry
 			mu.Unlock()
+			if err == nil {
+				passDeletes++
+			}
 			continue
 		}
 		jobs = append(jobs, transferJob{entry: entry, target: target})
@@ -351,7 +434,7 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 	}
 	wg.Wait()
 	transferprogress.Note(peer.ID, 0, 0)
-	reportPass(folder.ID, peer, passWrites, passFetched, passReused)
+	reportPass(folder.ID, peer, PassStats{Writes: passWrites, Fetched: passFetched, Reused: passReused, Deletes: passDeletes, Moves: passMoves})
 	return applyErr
 }
 

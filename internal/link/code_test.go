@@ -159,8 +159,10 @@ func TestManualProfileKeepsLANTailscalePublicRelayAndPin(t *testing.T) {
 	if byHint["vpn_overlay/vpn"] != "https://100.64.1.9:22420" {
 		t.Fatalf("tailscale = %+v", profile.Addresses)
 	}
-	if byHint["wan/manual"] != "https://203.0.113.20:22420" {
-		t.Fatalf("public = %+v", profile.Addresses)
+	for _, address := range profile.Addresses {
+		if strings.Contains(address.Address, "203.0.113.20") {
+			t.Fatalf("unverified public address became an endpoint: %+v", profile.Addresses)
+		}
 	}
 	if _, ok := byHint["container_bridge/manual"]; ok {
 		t.Fatalf("bridge address was advertised: %+v", profile.Addresses)
@@ -173,9 +175,14 @@ func TestManualProfileKeepsLANTailscalePublicRelayAndPin(t *testing.T) {
 	if len(profile.Relays) != 1 || profile.Relays[0] != "https://relay.example:22420" {
 		t.Fatalf("relays = %+v", profile.Relays)
 	}
-	endpoints := profile.Endpoints("https://203.0.113.20:22420")
-	if len(endpoints) != 4 {
+	endpoints := profile.Endpoints("https://10.1.1.5:22420")
+	if len(endpoints) != 3 {
 		t.Fatalf("endpoints = %+v", endpoints)
+	}
+	for _, endpoint := range endpoints {
+		if !endpoint.Authenticated {
+			t.Fatalf("endpoint was not authenticated: %+v", endpoint)
+		}
 	}
 	withHostPort := Gather(cfg, Extras{ExtraURLs: []string{"https://192.168.1.20:22420", "https://172.17.0.4:22420"}})
 	foundHostPort := false

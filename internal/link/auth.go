@@ -1,8 +1,12 @@
 package link
 
 import (
+	"net"
 	"net/url"
 	"strings"
+
+	"filesyncengine/internal/advertise"
+	"filesyncengine/internal/config"
 )
 
 // KeepPairedAddress reports whether address is safe to store or dial for the
@@ -28,6 +32,31 @@ func KeepPairedAddress(address, dhtPeerID string) bool {
 	target := multiaddrTarget(address)
 	dhtPeerID = strings.TrimSpace(dhtPeerID)
 	return target != "" && dhtPeerID != "" && target == dhtPeerID
+}
+
+// KeepStoredEndpoint keeps an address the paired peer authenticated.
+// A literal public IP is kept only when that flag is set, so a relay or
+// observed address cannot become an API endpoint.
+func KeepStoredEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
+	if !KeepPairedAddress(endpoint.Address, dhtPeerID) {
+		return false
+	}
+	if endpoint.Authenticated || !literalPublicHTTP(endpoint.Address) {
+		return true
+	}
+	return false
+}
+
+func literalPublicHTTP(address string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(address))
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || advertise.IsTailscaleHost(parsed.Hostname()) {
+		return false
+	}
+	return ip.IsGlobalUnicast()
 }
 
 // CircuitForPeer appends the paired peer id to a relay reservation that names

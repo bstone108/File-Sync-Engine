@@ -148,6 +148,41 @@ func TestResolveWithHostUsesAdvertiseURLListAndPublishedPort(t *testing.T) {
 	}
 }
 
+func TestGatewayURLIsReplacedByTheInterfaceAddress(t *testing.T) {
+	previous := readRouteTable
+	readRouteTable = func() ([]byte, error) {
+		return []byte("Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\neth0 00000000 6501A8C0 0003 0 0 0 00000000 0 0 0\n"), nil
+	}
+	t.Cleanup(func() { readRouteTable = previous })
+	if got := SelectDetected([]string{"192.168.1.101", "192.168.1.206"}); got != "192.168.1.206" {
+		t.Fatalf("detected = %q", got)
+	}
+	if savedAdvertiseOK("https://192.168.1.101:22420") {
+		t.Fatal("default gateway was kept as the advertise URL")
+	}
+	cfg := config.Config{
+		API: config.APIConfig{Listen: "0.0.0.0:22420", AdvertiseURL: "https://192.168.1.101:22420"},
+		Discovery: config.DiscoveryConfig{NetworkHints: config.NetworkHintsConfig{PublishedPortMappings: []config.PublishedPortMappingConfig{{
+			HostIP: "192.168.1.206", HostPort: 22420, ContainerPort: 22420,
+		}}}},
+	}
+	got, err := ResolveWithHost(cfg, "", "192.168.1.101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://192.168.1.206:22420" {
+		t.Fatalf("published host = %q", got)
+	}
+	cfg.Discovery.NetworkHints.PublishedPortMappings = nil
+	got, err = ResolveWithHost(cfg, "", "192.168.1.206")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "https://192.168.1.206:22420" {
+		t.Fatalf("interface host = %q", got)
+	}
+}
+
 func TestEnsureClearsStoredBridgeURL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	body := []byte(`{"nodeName":"node-a","api":{"listen":"0.0.0.0:22420","key":"secret","advertiseURL":"https://172.17.0.4:22420"},"peers":[],"folders":[]}`)

@@ -189,6 +189,26 @@ func TestPortMappingRejectsPortsOutsideUint16(t *testing.T) {
 	}
 }
 
+func TestClosedPublicPortAndGatewayAreNotAnnounced(t *testing.T) {
+	previous := readRouteTable
+	readRouteTable = func() ([]byte, error) {
+		return []byte("Iface Destination Gateway Flags RefCnt Use Metric Mask MTU Window IRTT\neth0 00000000 6501A8C0 0003 0 0 0 00000000 0 0 0\n"), nil
+	}
+	t.Cleanup(func() { readRouteTable = previous })
+	SetReachabilityProbe(func(context.Context, string, int) error { return errors.New("i/o timeout") })
+	t.Cleanup(func() { SetReachabilityProbe(nil) })
+	if MayAnnounceLibp2p("203.0.113.9", 22421) {
+		t.Fatal("closed public libp2p port was announced")
+	}
+	if MayAnnounceLibp2p("192.168.1.101", 22421) {
+		t.Fatal("default gateway was announced")
+	}
+	SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	if !MayAnnounceLibp2p("203.0.113.9", 22421) {
+		t.Fatal("open public libp2p port was omitted")
+	}
+}
+
 func TestGatewayFromProcNetRoute(t *testing.T) {
 	table := "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\neth0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
 	got := gatewayFromRouteTable(table)

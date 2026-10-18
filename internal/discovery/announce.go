@@ -123,10 +123,11 @@ func SetAnnounceAPIURL(raw string) {
 	promoteSharedRouterIfReachable()
 }
 
-// promoteSharedRouterIfReachable starts DHT server behavior when a reachable
-// address shows up after startup. A client can look records up either way.
+// promoteSharedRouterIfReachable starts DHT server behavior only after a
+// dial-back of the libp2p port succeeds. A published port or a LAN address
+// is not that proof: marking the node public skips relay reservation.
 func promoteSharedRouterIfReachable() {
-	if !publishedLibp2pPortConfigured() && len(announceHosts()) == 0 {
+	if !verifiedPublicLibp2p() {
 		return
 	}
 	sharedMu.Lock()
@@ -196,6 +197,18 @@ func ProductionRouter(ctx context.Context, nodeID string) (*Libp2pDHTRouter, err
 	return router, nil
 }
 
+// LookupPeerAddrs asks the process DHT for a paired peer's addresses.
+// An empty result means there is no router or the peer was not found.
+func LookupPeerAddrs(ctx context.Context, peerID string) []string {
+	sharedMu.Lock()
+	router := sharedRouter
+	sharedMu.Unlock()
+	if router == nil {
+		return nil
+	}
+	return router.LookupPeerAddrs(ctx, peerID)
+}
+
 // SharedPeerID is the libp2p peer id of the process router, when it is up.
 func SharedPeerID() string {
 	sharedMu.Lock()
@@ -246,7 +259,18 @@ func announcedAddrs(existing []ma.Multiaddr) []ma.Multiaddr {
 	return append(announced, circuits...)
 }
 
+func verifiedPublicLibp2p() bool {
+	port := PublishedLibp2pPort(Libp2pListenPort())
+	for _, host := range announceHosts() {
+		if advertise.NeedsPublicDialback(host) {
+			return advertise.PublicDialbackOK(host, port)
+		}
+	}
+	return false
+}
+
 func announceHosts() []string {
+	port := PublishedLibp2pPort(Libp2pListenPort())
 	seen := map[string]struct{}{}
 	var hosts []string
 	add := func(raw string) {
@@ -257,7 +281,7 @@ func announceHosts() []string {
 		if advertise.ExcludeTailscale() && advertise.IsTailscaleHost(host) {
 			return
 		}
-		if !advertise.HostReachable(host) {
+		if !advertise.MayAnnounceLibp2p(host, port) {
 			return
 		}
 		if _, ok := seen[host]; ok {

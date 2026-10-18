@@ -30,7 +30,7 @@ func OrderedEndpoints(peer config.PeerConfig) []config.EndpointConfig {
 	endpoints := make([]config.EndpointConfig, 0, len(peer.Endpoints)+len(peer.Relays))
 	for _, endpoint := range peer.Endpoints {
 		address, ok := discovery.DialableHTTPAddress(endpoint.Address)
-		if !ok {
+		if !ok || !KeepStoredEndpoint(endpoint, peer.DHTPeerID) {
 			continue
 		}
 		endpoint.Address = address
@@ -159,14 +159,28 @@ func endpointStages(peer config.PeerConfig) [][]config.EndpointConfig {
 			fallback = append(fallback, endpoint)
 		}
 	}
+	exchangedEarly, exchangedLate := splitRank(httpEndpoints(exchanged, "manual"))
+	localEarly, localLate := splitRank(httpEndpoints(local, "manual"))
+	fallback = append(append(fallback, exchangedLate...), localLate...)
 	return [][]config.EndpointConfig{
 		preferred,
-		httpEndpoints(exchanged, "manual"),
-		httpEndpoints(local, "manual"),
+		exchangedEarly,
+		localEarly,
 		nil, // libp2pStage dials relay, hole-punched, and direct streams
 		fallback,
 		httpEndpoints(dht, "relay"),
 	}
+}
+
+func splitRank(endpoints []config.EndpointConfig) (early, late []config.EndpointConfig) {
+	for _, endpoint := range endpoints {
+		if endpointRank(endpoint) <= 1 {
+			early = append(early, endpoint)
+		} else {
+			late = append(late, endpoint)
+		}
+	}
+	return early, late
 }
 
 func httpEndpoints(addresses []string, kind string) []config.EndpointConfig {

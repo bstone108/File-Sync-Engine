@@ -67,6 +67,11 @@ func RunFromEnvironment(configPath string) error {
 	if err != nil {
 		return err
 	}
+	if updated, purgeErr := config.PersistUnverifiedEndpointPurge(configPath, cfg); purgeErr != nil {
+		fmt.Fprintf(os.Stderr, "unverified peer endpoints were not purged: %v\n", purgeErr)
+	} else {
+		cfg = updated
+	}
 	if updated, dhtErr := config.PersistShippedDefaultDHT(configPath, cfg); dhtErr != nil {
 		fmt.Fprintf(os.Stderr, "public DHT discovery was not enabled: %v\n", dhtErr)
 	} else if updated.Discovery.DHT && !cfg.Discovery.DHT {

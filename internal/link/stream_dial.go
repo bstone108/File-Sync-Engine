@@ -10,6 +10,7 @@ import (
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/nat"
+	"filesyncengine/internal/structuredlog"
 )
 
 type dialCacheEntry struct {
@@ -59,9 +60,24 @@ func resetDialCache() {
 
 func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Context, string, *http.Client) error) (string, error) {
 	targets := libp2pTargets(peer)
+	if len(targets) == 0 && strings.TrimSpace(peer.DHTPeerID) != "" {
+		if addrs := discovery.LookupPeerAddrs(ctx, peer.DHTPeerID); len(addrs) > 0 {
+			targets = []libp2pTarget{{id: peer.DHTPeerID, addrs: addrs}}
+		}
+	}
 	if len(targets) == 0 {
+		structuredlog.Event("info", "libp2p.stream.skip", "libp2p stream was not dialed", map[string]any{
+			"peer":      peer.ID,
+			"dhtPeerId": peer.DHTPeerID,
+			"reason":    "peer has no libp2p address",
+		})
 		return "", errNoStream
 	}
+	structuredlog.Event("info", "libp2p.stream.dial", "dialing peer over a libp2p stream", map[string]any{
+		"peer":      peer.ID,
+		"dhtPeerId": peer.DHTPeerID,
+		"addresses": targets[0].addrs,
+	})
 	var last error
 	for _, target := range targets {
 		session, err := discovery.DialStream(ctx, target.id, target.addrs)

@@ -25,13 +25,13 @@ func TestAcceptedBootstrapRequiresAConnectedPeer(t *testing.T) {
 	}
 }
 
-func TestSelectLibp2pDHTModeUsesThePublishedPortByDefault(t *testing.T) {
+func TestSelectLibp2pDHTModeStaysAutoBehindNAT(t *testing.T) {
 	mode, reason, err := selectLibp2pDHTMode("", true, false)
-	if err != nil || mode != dht.ModeServer || reason != "published-port" {
+	if err != nil || mode != dht.ModeAuto || reason != "auto" {
 		t.Fatalf("published port: mode %v reason %s err %v", mode, reason, err)
 	}
 	mode, reason, err = selectLibp2pDHTMode("", false, true)
-	if err != nil || mode != dht.ModeServer || reason != "advertise-address" {
+	if err != nil || mode != dht.ModeAuto || reason != "auto" {
 		t.Fatalf("advertise address: mode %v reason %s err %v", mode, reason, err)
 	}
 	mode, reason, err = selectLibp2pDHTMode("", false, false)
@@ -44,7 +44,7 @@ func TestSelectLibp2pDHTModeUsesThePublishedPortByDefault(t *testing.T) {
 	}
 }
 
-func TestPublishedPortBecomesAServerWithoutAModeOverride(t *testing.T) {
+func TestPublishedPortStaysAutoAndCanBootstrap(t *testing.T) {
 	t.Setenv("FSE_LIBP2P_DHT_MODE", "")
 	t.Setenv(EnvPublishedLibp2pPort, "22421")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -54,12 +54,12 @@ func TestPublishedPortBecomesAServerWithoutAModeOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = left.Close() })
-	right, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "right"})
+	right, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "right", DHTMode: "server"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = right.Close() })
-	if left.modeReason != "published-port" || left.dht.Mode() != dht.ModeServer {
+	if left.modeReason != "auto" || left.dht.Mode() == dht.ModeServer {
 		t.Fatalf("left mode %v reason %s", left.dht.Mode(), left.modeReason)
 	}
 	dial := loopbackDial(right)

@@ -55,6 +55,11 @@ func (r *Libp2pDHTRouter) PublishPairing(ctx context.Context, namespace string, 
 	if err := r.storePairing(ctx, namespace, payload); err != nil {
 		return err
 	}
+	// Register before the walk so a relay reservation that lands during
+	// bootstrap refreshes this namespace with the circuit address.
+	r.mu.Lock()
+	r.advertise[namespace] = struct{}{}
+	r.mu.Unlock()
 	if err := r.ensureBootstrapped(ctx); err != nil {
 		structuredlog.Event("error", "pairing.publish.failed", "pairing DHT bootstrap failed", map[string]any{"namespace": namespace, "error": err.Error()})
 		return err
@@ -63,9 +68,6 @@ func (r *Libp2pDHTRouter) PublishPairing(ctx context.Context, namespace string, 
 		structuredlog.Event("error", "pairing.publish.failed", "pairing code was not advertised on the DHT", map[string]any{"namespace": namespace, "error": err.Error()})
 		return err
 	}
-	r.mu.Lock()
-	r.advertise[namespace] = struct{}{}
-	r.mu.Unlock()
 	structuredlog.Event("info", "pairing.publish.ok", "pairing code advertised on the DHT", map[string]any{"namespace": namespace, "routingPeers": r.routingTableSize()})
 	return nil
 }
