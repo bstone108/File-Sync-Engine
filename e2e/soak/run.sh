@@ -159,7 +159,10 @@ if [ "$elapsed" -le 8 ]; then
   exit 1
 fi
 for side in soak-a soak-b; do
-  if docker compose -f compose.yaml exec -T "$side" sh -c 'grep -q "context deadline exceeded" /config/logs/fse.jsonl'; then
+  # A public bootstrap dial gives up after its own short timeout. That is not
+  # a stalled file transfer, and it is expected when the lab cannot reach
+  # bootstrap.libp2p.io.
+  if docker compose -f compose.yaml exec -T "$side" sh -c 'grep "context deadline exceeded" /config/logs/fse.jsonl | grep -v libp2p.bootstrap.dial | grep -q .'; then
     echo "$side log contains context deadline exceeded" >&2
     exit 1
   fi

@@ -155,7 +155,20 @@ func (r *Libp2pDHTRouter) LookupPairing(ctx context.Context, namespace string) (
 	}
 	payloads := [][]byte{}
 	var lastFetch error
-	for info := range peerCh {
+	for {
+		if lookupCtx.Err() != nil {
+			break
+		}
+		var info peer.AddrInfo
+		var open bool
+		select {
+		case <-lookupCtx.Done():
+			open = false
+		case info, open = <-peerCh:
+		}
+		if !open {
+			break
+		}
 		if info.ID == "" || info.ID == r.host.ID() {
 			continue
 		}

@@ -119,7 +119,11 @@ func HandleRedeemPairCode(ctx context.Context, configPath string, req api.PairCo
 		return api.PairCodeRedeemResponse{}, err
 	}
 	remoteProfile := record.Profile()
-	body, _, err := link.PostSecret(ctx, config.PeerConfig{
+	// The claim itself is control traffic. A missed hole punch must not keep
+	// the GUI on "Linking" while public relays are dialed for file bytes.
+	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer dialCancel()
+	body, _, err := link.PostSecret(dialCtx, config.PeerConfig{
 		APICertificateSHA256: record.CertificateSHA256,
 		DHTPeerID:            remoteProfile.DHTPeerID,
 		Relays:               record.Relays,

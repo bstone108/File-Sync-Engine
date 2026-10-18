@@ -523,6 +523,10 @@ func (r *Libp2pDHTRouter) connectBootstrap(ctx context.Context, infos []peer.Add
 	var lastErr error
 	var lastAddr string
 	for _, info := range attempts[:limit] {
+		if ctx.Err() != nil {
+			lastErr = ctx.Err()
+			break
+		}
 		r.host.Peerstore().AddAddrs(info.ID, info.Addrs, peerstore.PermanentAddrTTL)
 		connectCtx, cancel := context.WithTimeout(ctx, bootstrapDialTimeout)
 		err := r.host.Connect(connectCtx, info)

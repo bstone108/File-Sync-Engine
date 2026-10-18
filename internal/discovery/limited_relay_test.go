@@ -22,8 +22,10 @@ import (
 )
 
 func TestLimitedAPIAndPairingOptIn(t *testing.T) {
-	if !AllowsLimitedAPI("/v1/sync-journal") {
-		t.Fatal("sync-journal must be allowed on a limited relay")
+	for _, path := range []string{"/v1/sync-journal", "/v1/pair-code/claim", "/v1/pair-code/record", "/v1/link-profile", "/v1/config-sync/merge"} {
+		if !AllowsLimitedAPI(path) {
+			t.Fatalf("%s must be allowed on a limited relay", path)
+		}
 	}
 	for _, path := range []string{"/v1/folder-block", "/v1/folder-block-subhashes", "/v1/folder-batch", "/v1/folder-file", "/v1/status"} {
 		if AllowsLimitedAPI(path) {
