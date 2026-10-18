@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/pairing"
 	"filesyncengine/internal/state"
+	"filesyncengine/internal/transferprogress"
 )
 
 func TestStatusRequiresAPIKeyAndReturnsRuntimeSnapshot(t *testing.T) {
@@ -1280,5 +1282,38 @@ func TestFoldersAndPeersExposeRuntimeState(t *testing.T) {
 				t.Fatalf("folder warning state missing from body: %s", body)
 			}
 		}
+	}
+}
+
+func TestPeersEndpointReportsLivePathAndReceiveProgress(t *testing.T) {
+	nat.DefaultPaths.Reset()
+	t.Cleanup(nat.DefaultPaths.Reset)
+	nat.DefaultPaths.Observe("live-path-peer", "https://10.0.0.2:22420", nat.PathLAN)
+	transferprogress.Note("live-path-peer", 4096, 50)
+	server := NewServer(State{
+		PeersState: []PeerState{
+			{ID: "live-path-peer", Status: "configured", Endpoint: "manual:https://10.0.0.2:22420"},
+			{ID: "neighbor", Status: "discovered", Endpoint: "discovered:https://172.30.28.3:22420"},
+		},
+	}, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/v1/peers", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	w := httptest.NewRecorder()
+	server.Router().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d body=%s", w.Code, w.Body.String())
+	}
+	var peers []PeerState
+	if err := json.Unmarshal(w.Body.Bytes(), &peers); err != nil {
+		t.Fatalf("decode peers: %v body=%s", err, w.Body.String())
+	}
+	if len(peers) != 2 {
+		t.Fatalf("peers = %+v", peers)
+	}
+	if peers[0].ConnectionPath != "lan" || peers[0].ReceiveRemainingBytes != 50 {
+		t.Fatalf("live path/progress missing: %+v", peers[0])
+	}
+	if peers[1].ConnectionPath != "" || peers[1].ReceiveRemainingBytes != 0 {
+		t.Fatalf("discovered peer should stay unconnected: %+v", peers[1])
 	}
 }

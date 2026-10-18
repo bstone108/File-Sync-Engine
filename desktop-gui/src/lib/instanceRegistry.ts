@@ -354,12 +354,21 @@ type LocalPeerSnapshot = {
   id?: string;
   endpoint?: string;
   endpoints?: string[];
+  status?: string;
   connectionPath?: string;
   receiveRemainingBytes?: number;
   sendRemainingBytes?: number;
   averageReceiveBytesPerSecond?: number;
   averageSendBytesPerSecond?: number;
 };
+
+function isDiscoveredPeer(peer: LocalPeerSnapshot): boolean {
+  if (peer.status === 'discovered') {
+    return true;
+  }
+  const endpoint = peer.endpoint?.trim() ?? '';
+  return endpoint === 'discovered' || endpoint.startsWith('discovered:');
+}
 
 function peerPathLabel(path: string): string {
   switch (path) {
@@ -385,26 +394,31 @@ function peerEndpointText(peer: LocalPeerSnapshot): string {
   return peer.endpoint?.trim() || 'no saved endpoint';
 }
 
-// summarizeLocalPeerLink describes the configured peers, not the local API socket.
-// A live local API with an unreachable peer is "Peer unreachable", with zero rates.
+// summarizeLocalPeerLink describes configured peers, not the local API socket
+// and not LAN/DHT neighbors that have not been paired. A live local API with
+// an unreachable configured peer is "Peer unreachable", with zero rates.
 export function summarizeLocalPeerLink(peers: LocalPeerSnapshot[]): LocalPeerLinkSummary {
-  const sum = (pick: (peer: LocalPeerSnapshot) => number | undefined) => peers.reduce((total, peer) => total + (pick(peer) ?? 0), 0);
-  if (peers.length === 0) {
+  const configured = peers.filter((peer) => !isDiscoveredPeer(peer));
+  const sum = (pick: (peer: LocalPeerSnapshot) => number | undefined) => configured.reduce((total, peer) => total + (pick(peer) ?? 0), 0);
+  if (configured.length === 0) {
+    const discovered = peers.length - configured.length;
     return {
       connectionState: 'online',
       label: 'Online',
       pairingState: 'discovered',
-      pairingDetail: 'No peers configured',
+      pairingDetail: discovered > 0 ? `${discovered} discovered, not paired` : 'No peers configured',
       receiveRemainingBytes: 0,
       sendRemainingBytes: 0,
       averageReceiveBytesPerSecond: 0,
       averageSendBytesPerSecond: 0,
-      statusSummary: 'Local engine API is up. No peers are configured.'
+      statusSummary: discovered > 0
+        ? `Local engine API is up. ${discovered} discovered peer${discovered === 1 ? ' is' : 's are'} not paired.`
+        : 'Local engine API is up. No peers are configured.'
     };
   }
-  const connected = peers.filter((peer) => Boolean(peer.connectionPath));
+  const connected = configured.filter((peer) => Boolean(peer.connectionPath));
   if (connected.length === 0) {
-    const saved = peers.map((peer) => `${peer.id ?? 'peer'}: ${peerEndpointText(peer)}`).join('; ');
+    const saved = configured.map((peer) => `${peer.id ?? 'peer'}: ${peerEndpointText(peer)}`).join('; ');
     return {
       connectionState: 'failed',
       label: 'Peer unreachable',

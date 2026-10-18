@@ -3,6 +3,13 @@ const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
 const composeFile = path.resolve(__dirname, 'compose.yaml');
+const connectedLabel = /^(LAN|Hole-punched|Direct|Tailscale|Relay|\d+ peers connected)$/;
+
+async function expectConnectedEngine(page) {
+  const button = page.locator('button.quick-switch').filter({ has: page.getByTestId('local-engine-connection') });
+  await expect(button.getByTestId('local-engine-connection')).toHaveText(connectedLabel);
+  await expect(button.locator('.host-status-metrics')).not.toContainText('unknown');
+}
 
 async function pairFrom(page) {
   await page.getByTestId('nav-peers').click();
@@ -218,10 +225,8 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
     }
   }, { timeout: 45000 }).toBe('gone');
 
-  await expect(a.locator('aside strong.connection-state').first()).toHaveText('Online');
-  await expect(b.locator('aside strong.connection-state').first()).toHaveText('Online');
-  await expect(a.getByTestId('local-engine-connection')).toHaveText('Online');
-  await expect(b.getByTestId('local-engine-connection')).toHaveText('Online');
+  await expectConnectedEngine(a);
+  await expectConnectedEngine(b);
   await expect(a.getByTestId('instance-switcher')).toBeVisible();
   await a.getByTestId('nav-overview').click();
   await a.setViewportSize({ width: 1280, height: 800 });

@@ -18,10 +18,12 @@ import (
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/foldershare"
 	"filesyncengine/internal/link"
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/pairing"
 	"filesyncengine/internal/scanner"
 	"filesyncengine/internal/schemaversion"
 	"filesyncengine/internal/state"
+	"filesyncengine/internal/transferprogress"
 )
 
 type State struct {
@@ -1151,7 +1153,29 @@ func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	state := s.snapshotState()
-	writeJSON(w, state.PeersState)
+	writeJSON(w, livePeerStates(state.PeersState))
+}
+
+// livePeerStates overlays the path and receive progress recorded by the last
+// successful dial. The status snapshot is rebuilt on config reload, which is
+// too late for a transfer that is already moving.
+func livePeerStates(peers []PeerState) []PeerState {
+	if len(peers) == 0 {
+		return peers
+	}
+	out := append([]PeerState(nil), peers...)
+	for i := range out {
+		if out[i].Status == "discovered" || strings.HasPrefix(out[i].Endpoint, "discovered") {
+			continue
+		}
+		if obs, ok := nat.DefaultPaths.Active(out[i].ID); ok {
+			out[i].ConnectionPath = string(obs.Path)
+		}
+		progress := transferprogress.Get(out[i].ID)
+		out[i].ReceiveRemainingBytes = progress.RemainingBytes
+		out[i].AverageReceiveBytesPerSecond = progress.BytesPerSecond
+	}
+	return out
 }
 
 func (s *Server) handleMaintenanceScrub(w http.ResponseWriter, r *http.Request) {
