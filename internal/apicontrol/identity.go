@@ -162,7 +162,7 @@ func exchangeAndPersistPeer(ctx context.Context, configPath string, cfg config.C
 		ReachableAPIURL:      strings.TrimSpace(req.LocalReachableAPIURL),
 		APICertificateSHA256: fingerprint,
 		APIKey:               cfg.API.Key,
-		LinkProfile:          gatheredProfile(cfg, fingerprint),
+		LinkProfile:          claimProfile(cfg, fingerprint),
 	})
 	if err != nil {
 		return err
@@ -202,7 +202,7 @@ func HandlePairExchange(configPath string, req api.PairExchangeRequest) (api.Pai
 			NodeName:             cfg.NodeName,
 			APIKey:               cfg.API.Key,
 			APICertificateSHA256: fingerprint,
-			LinkProfile:          gatheredProfile(cfg, fingerprint),
+			LinkProfile:          claimProfile(cfg, fingerprint),
 		}, nil
 	}
 	token, ok := pairing.GroupToken(cfg, req.GroupID)
@@ -234,7 +234,7 @@ func HandlePairExchange(configPath string, req api.PairExchangeRequest) (api.Pai
 		NodeName:             cfg.NodeName,
 		APIKey:               cfg.API.Key,
 		APICertificateSHA256: fingerprint,
-		LinkProfile:          gatheredProfile(cfg, fingerprint),
+		LinkProfile:          claimProfile(cfg, fingerprint),
 	}, nil
 }
 
