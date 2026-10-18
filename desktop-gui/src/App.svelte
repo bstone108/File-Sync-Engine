@@ -2874,6 +2874,11 @@
     border: 1px solid #405177;
     border-radius: 1rem;
     background: #172033;
+    color: #f4f7f2;
+  }
+  .host-scope-banner .eyebrow,
+  .update-banner .eyebrow {
+    color: #b7c4b8;
   }
   .update-banner {
     width: min(44rem, 100%);
@@ -2883,6 +2888,7 @@
     border: 1px solid #6de08c;
     border-radius: 1rem;
     background: #13251c;
+    color: #f4f7f2;
   }
   .update-banner[data-phase='error'] {
     border-color: #ff8a8a;
@@ -2908,6 +2914,7 @@
     padding: 0.5rem;
     border-radius: 0.5rem;
     background: var(--surface-2);
+    color: var(--text);
   }
   .host-scope-details dt {
     color: var(--muted);

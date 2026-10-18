@@ -4,97 +4,63 @@ import (
 	"context"
 	"time"
 
-	libp2p "github.com/libp2p/go-libp2p"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/event"
-	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-// WatchObservedAddresses bootstraps a client DHT and reports the IP addresses
-// remote peers observe for this node. The callback may run more than once.
+// WatchObservedAddresses reports the IP addresses remote peers observe for
+// this node, using the process libp2p host. It does not open a second DHT.
 // Bridge and other unusable addresses are filtered by the advertise package.
-func WatchObservedAddresses(ctx context.Context, peers []string, note func(string)) {
+func WatchObservedAddresses(ctx context.Context, _ []string, note func(string)) {
 	if note == nil {
 		return
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	backoff := time.Second
+	// Use the process libp2p host. A second DHT client here dials the public
+	// bootstrap continuously even when this engine is not looking a peer up.
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	var sub event.Subscription
+	defer func() {
+		if sub != nil {
+			_ = sub.Close()
+		}
+	}()
 	for ctx.Err() == nil {
-		err := watchObservedOnce(ctx, peers, note)
-		if ctx.Err() != nil || err == nil {
-			return
+		if sub == nil {
+			if h := sharedHost(); h != nil {
+				opened, err := h.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
+				if err == nil {
+					sub = opened
+				}
+			}
 		}
-		timer := time.NewTimer(backoff)
+		if sub != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-sub.Out():
+				if !ok {
+					return
+				}
+				completed, ok := ev.(event.EvtPeerIdentificationCompleted)
+				if !ok {
+					continue
+				}
+				if ip := observedIP(completed.ObservedAddr); ip != "" {
+					note(ip)
+				}
+			case <-ticker.C:
+			}
+			continue
+		}
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return
-		case <-timer.C:
+		case <-ticker.C:
 		}
-		if backoff < 30*time.Second {
-			backoff *= 2
-		}
-	}
-}
-
-func watchObservedOnce(ctx context.Context, peers []string, note func(string)) error {
-	h, err := libp2p.New()
-	if err != nil {
-		return err
-	}
-	defer h.Close()
-	sub, err := h.EventBus().Subscribe(new(event.EvtPeerIdentificationCompleted))
-	if err != nil {
-		return err
-	}
-	defer sub.Close()
-	kad, err := dht.New(ctx, h, dht.Mode(dht.ModeClient))
-	if err != nil {
-		return err
-	}
-	defer kad.Close()
-	bootstrapPeers := append([]string(nil), peers...)
-	if len(bootstrapPeers) == 0 {
-		bootstrapPeers = append([]string(nil), DefaultPublicDHTBootstrapPeers...)
-	}
-	infos, err := parsePeerAddrInfos(ctx, bootstrapPeers)
-	if err != nil {
-		return err
-	}
-	dialObservedBootstrap(ctx, h, preferDialableTransports(infos))
-	_ = kad.Bootstrap(ctx)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case ev, ok := <-sub.Out():
-			if !ok {
-				return nil
-			}
-			completed, ok := ev.(event.EvtPeerIdentificationCompleted)
-			if !ok {
-				continue
-			}
-			if ip := observedIP(completed.ObservedAddr); ip != "" {
-				note(ip)
-			}
-		}
-	}
-}
-
-func dialObservedBootstrap(ctx context.Context, h host.Host, infos []peer.AddrInfo) {
-	limit := len(infos)
-	if limit > maxBootstrapDials {
-		limit = maxBootstrapDials
-	}
-	for _, info := range infos[:limit] {
-		connectCtx, cancel := context.WithTimeout(ctx, bootstrapDialTimeout)
-		_ = h.Connect(connectCtx, info)
-		cancel()
 	}
 }
 

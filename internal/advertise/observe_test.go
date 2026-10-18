@@ -60,9 +60,23 @@ func TestResolveSkipsUnverifiedGUIHost(t *testing.T) {
 	}
 }
 
+func TestUnverifiedPublicIPDoesNotReplaceStoredURL(t *testing.T) {
+	t.Setenv(EnvExcludeTailscale, "1")
+	cfg := config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420", AdvertiseURL: "https://100.64.1.8:22420"}}
+	obs := Observations{
+		ObservedIPs:  []string{"203.0.113.9"},
+		ExternalIP:   "198.51.100.8",
+		ExternalPort: 22420,
+		Probe:        func(context.Context, string, int) error { return errors.New("i/o timeout") },
+	}
+	if got, err := ResolveWithObservations(cfg, "", "172.17.0.4", obs); err == nil {
+		t.Fatalf("unverified public address replaced the stored URL with %s", got)
+	}
+}
+
 func TestResolveUsesObservedAddressAndNATMapping(t *testing.T) {
 	cfg := config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}}
-	obs := Observations{ObservedIPs: []string{"172.17.0.4", "203.0.113.9"}}
+	obs := Observations{ObservedIPs: []string{"172.17.0.4", "203.0.113.9"}, Probe: func(context.Context, string, int) error { return nil }}
 	got, err := ResolveWithObservations(cfg, "", "172.17.0.4", obs)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +84,7 @@ func TestResolveUsesObservedAddressAndNATMapping(t *testing.T) {
 	if got != "https://203.0.113.9:22420" {
 		t.Fatalf("observed = %q", got)
 	}
-	obs = Observations{ExternalIP: "198.51.100.8", ExternalPort: 22420}
+	obs = Observations{ExternalIP: "198.51.100.8", ExternalPort: 22420, Probe: func(context.Context, string, int) error { return nil }}
 	got, err = ResolveWithObservations(cfg, "", "", obs)
 	if err != nil {
 		t.Fatal(err)
@@ -196,6 +210,7 @@ func TestStartAutoDetectStoresMappedAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvVar, "")
+	SetReachabilityProbe(func(context.Context, string, int) error { return nil })
 	BindConfigPath(path)
 	changed := make(chan string, 1)
 	SetOnChange(func(url string) {

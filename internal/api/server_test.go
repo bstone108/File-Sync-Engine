@@ -1358,13 +1358,10 @@ func TestPeersEndpointReportsLivePathAndReceiveProgress(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &peers); err != nil {
 		t.Fatalf("decode peers: %v body=%s", err, w.Body.String())
 	}
-	if len(peers) != 2 {
+	if len(peers) != 1 || peers[0].ID != "live-path-peer" {
 		t.Fatalf("peers = %+v", peers)
 	}
 	if peers[0].ConnectionPath != "lan" || peers[0].ReceiveRemainingBytes != 50 {
 		t.Fatalf("live path/progress missing: %+v", peers[0])
-	}
-	if peers[1].ConnectionPath != "" || peers[1].ReceiveRemainingBytes != 0 {
-		t.Fatalf("discovered peer should stay unconnected: %+v", peers[1])
 	}
 }

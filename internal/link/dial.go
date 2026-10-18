@@ -61,9 +61,10 @@ func OrderedEndpoints(peer config.PeerConfig) []config.EndpointConfig {
 	return endpoints
 }
 
-// HasAPIEndpoint reports whether the peer has at least one HTTP API address.
+// HasAPIEndpoint reports whether the peer has an HTTP API address or a
+// libp2p stream path. Relay-only peers are dialable.
 func HasAPIEndpoint(peer config.PeerConfig) bool {
-	return len(OrderedEndpoints(peer)) > 0
+	return len(OrderedEndpoints(peer)) > 0 || len(libp2pTargets(peer)) > 0
 }
 
 // Dial tries saved addresses first, then peer-exchange and same-identity
@@ -71,10 +72,36 @@ func HasAPIEndpoint(peer config.PeerConfig) bool {
 // races its addresses and keeps a relay only until a direct path wins.
 // An HTTP response stops the search because that address is alive.
 func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, string, *http.Client) error) (string, error) {
+	if base, client, ok := cachedDial(peer.ID); ok {
+		err := do(ctx, base, client)
+		if err == nil {
+			discovery.NotePeerReachable(peer.ID)
+			return base, nil
+		}
+		forgetDial(peer.ID)
+		if !failoverError(err) {
+			return "", err
+		}
+	}
 	stages := endpointStages(peer)
 	var last error
 	tried := 0
-	for _, stage := range stages {
+	for i, stage := range stages {
+		if i == libp2pStage {
+			used, err := dialLibp2p(ctx, peer, do)
+			if err == nil {
+				return used, nil
+			}
+			var answered answeredError
+			if errors.As(err, &answered) {
+				return "", answered.err
+			}
+			if !errors.Is(err, errNoStream) && err != nil {
+				last = err
+				tried++
+			}
+			continue
+		}
 		if len(stage) == 0 {
 			continue
 		}
@@ -98,11 +125,19 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 		return "", errors.New("peer has no http endpoint")
 	}
 	discovery.NotePeerUnreachable(peer.ID)
+	nat.DefaultPaths.Forget(peer.ID)
+	if peer.DHTPeerID != "" {
+		nat.DefaultPaths.Forget(peer.DHTPeerID)
+	}
 	if last == nil {
 		last = errors.New("peer has no reachable endpoint")
 	}
 	return "", last
 }
+
+// libp2pStage is tried after saved LAN/Tailscale addresses and learned LAN
+// addresses, and before an unverified public API URL.
+const libp2pStage = 3
 
 func endpointStages(peer config.PeerConfig) [][]config.EndpointConfig {
 	exchanged, local, dht := discovery.AddressesFor(peer.ID)
@@ -112,10 +147,20 @@ func endpointStages(peer config.PeerConfig) [][]config.EndpointConfig {
 		local = append(local, moreLocal...)
 		dht = append(dht, moreDHT...)
 	}
+	var preferred, fallback []config.EndpointConfig
+	for _, endpoint := range OrderedEndpoints(peer) {
+		if endpointRank(endpoint) <= 1 {
+			preferred = append(preferred, endpoint)
+		} else {
+			fallback = append(fallback, endpoint)
+		}
+	}
 	return [][]config.EndpointConfig{
-		OrderedEndpoints(peer),
+		preferred,
 		httpEndpoints(exchanged, "manual"),
 		httpEndpoints(local, "manual"),
+		nil, // libp2pStage dials relay, hole-punched, and direct streams
+		fallback,
 		httpEndpoints(dht, "relay"),
 	}
 }
@@ -156,6 +201,7 @@ func dialStage(ctx context.Context, peer config.PeerConfig, endpoints []config.E
 		}
 		err = do(ctx, strings.TrimRight(address, "/"), client)
 		if err == nil {
+			rememberDial(peer.ID, strings.TrimRight(address, "/"), client)
 			return nil
 		}
 		if !failoverError(err) {
@@ -173,8 +219,22 @@ func (e answeredError) Unwrap() error { return nat.ErrAnswered }
 
 // PostJSON dials the peer and posts JSON, failing over when an earlier address dies.
 func PostJSON(ctx context.Context, peer config.PeerConfig, path string, payload []byte) ([]byte, string, error) {
+	return postJSON(ctx, peer, path, payload, false)
+}
+
+// PostSecret posts a body that contains an API key or pairing claim.
+// Plain HTTP is skipped. HTTPS checks the certificate pin during the handshake,
+// and a libp2p stream is opened only after the peer id is authenticated.
+func PostSecret(ctx context.Context, peer config.PeerConfig, path string, payload []byte) ([]byte, string, error) {
+	return postJSON(ctx, peer, path, payload, true)
+}
+
+func postJSON(ctx context.Context, peer config.PeerConfig, path string, payload []byte, secret bool) ([]byte, string, error) {
 	var body []byte
 	used, err := Dial(ctx, peer, func(ctx context.Context, base string, client *http.Client) error {
+		if secret && !secretTransportAllowed(base) {
+			return &url.Error{Op: "post", URL: base, Err: errors.New("refusing to send a secret before the peer identity is verified")}
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
 		if err != nil {
 			return err
@@ -203,6 +263,10 @@ func PostJSON(ctx context.Context, peer config.PeerConfig, path string, payload 
 		return nil
 	})
 	return body, used, err
+}
+
+func secretTransportAllowed(base string) bool {
+	return base == discovery.StreamBaseURL || strings.HasPrefix(base, "https://")
 }
 
 func endpointRank(endpoint config.EndpointConfig) int {

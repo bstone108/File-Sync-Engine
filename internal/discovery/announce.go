@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,22 +38,81 @@ var (
 	announceAPIURL string
 )
 
-// configuredLibp2pIdentity loads FSE_LIBP2P_PRIVATE_KEY when a deployment or
-// test needs a stable peer id. Empty means libp2p generates one at start.
+var (
+	keyMu         sync.Mutex
+	libp2pKeyFile string
+)
+
+// SetLibp2pKeyPath is the appdata file that keeps this process's libp2p peer
+// id across restarts. An explicit FSE_LIBP2P_PRIVATE_KEY still wins.
+func SetLibp2pKeyPath(path string) {
+	keyMu.Lock()
+	libp2pKeyFile = strings.TrimSpace(path)
+	keyMu.Unlock()
+}
+
+func libp2pKeyPath() string {
+	keyMu.Lock()
+	defer keyMu.Unlock()
+	return libp2pKeyFile
+}
+
+// configuredLibp2pIdentity loads FSE_LIBP2P_PRIVATE_KEY, then the appdata key
+// file. A missing file is created. With neither, libp2p generates a new id.
 func configuredLibp2pIdentity() (libp2p.Option, error) {
-	raw := strings.TrimSpace(os.Getenv("FSE_LIBP2P_PRIVATE_KEY"))
-	if raw == "" {
+	if raw := strings.TrimSpace(os.Getenv("FSE_LIBP2P_PRIVATE_KEY")); raw != "" {
+		key, err := privateKeyFromBase64(raw)
+		if err != nil {
+			return nil, fmt.Errorf("FSE_LIBP2P_PRIVATE_KEY is not a libp2p private key")
+		}
+		return libp2p.Identity(key), nil
+	}
+	path := libp2pKeyPath()
+	if path == "" {
 		return nil, nil
 	}
-	decoded, err := base64.StdEncoding.DecodeString(raw)
+	key, err := loadOrCreateLibp2pKey(path)
 	if err != nil {
-		return nil, fmt.Errorf("FSE_LIBP2P_PRIVATE_KEY is not base64")
-	}
-	key, err := crypto.UnmarshalPrivateKey(decoded)
-	if err != nil {
-		return nil, fmt.Errorf("FSE_LIBP2P_PRIVATE_KEY is not a libp2p private key")
+		return nil, err
 	}
 	return libp2p.Identity(key), nil
+}
+
+func privateKeyFromBase64(raw string) (crypto.PrivKey, error) {
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		return nil, err
+	}
+	return crypto.UnmarshalPrivateKey(decoded)
+}
+
+func loadOrCreateLibp2pKey(path string) (crypto.PrivKey, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		key, keyErr := privateKeyFromBase64(string(data))
+		if keyErr != nil {
+			return nil, fmt.Errorf("libp2p key %s is not usable", path)
+		}
+		return key, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, err
+	}
+	key, _, err := crypto.GenerateEd25519Key(nil)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := crypto.MarshalPrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(encoded)), 0o600); err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 // SetAnnounceAPIURL is the reachable API URL included in DHT provider records.
@@ -172,15 +232,18 @@ func announcedAddrs(existing []ma.Multiaddr) []ma.Multiaddr {
 		apiURL = ""
 	}
 	announced := announcedMultiaddrs(announceHosts(), apiURL, PublishedLibp2pPort(Libp2pListenPort()))
-	if len(announced) == 0 {
-		return existing
-	}
+	var circuits []ma.Multiaddr
 	for _, addr := range existing {
 		if addr != nil && strings.Contains(addr.String(), "p2p-circuit") {
-			announced = append(announced, addr)
+			circuits = append(circuits, addr)
 		}
 	}
-	return announced
+	// Loopback and container bridge listen addresses are not paths another
+	// LAN can dial. When nothing reachable is known, advertise only circuits.
+	if len(announced) == 0 {
+		return circuits
+	}
+	return append(announced, circuits...)
 }
 
 func announceHosts() []string {
@@ -207,10 +270,16 @@ func announceHosts() []string {
 		add(ip)
 	}
 	obs := advertise.CurrentObservations()
-	add(obs.GUIHost)
-	add(obs.ExternalIP)
+	if advertise.PublicDialbackOK(obs.GUIHost, 0) {
+		add(obs.GUIHost)
+	}
+	if advertise.PublicDialbackOK(obs.ExternalIP, obs.ExternalPort) {
+		add(obs.ExternalIP)
+	}
 	for _, ip := range obs.ObservedIPs {
-		add(ip)
+		if advertise.PublicDialbackOK(ip, 0) {
+			add(ip)
+		}
 	}
 	add(currentAnnounceAPIURL())
 	add(os.Getenv(advertise.EnvVar))

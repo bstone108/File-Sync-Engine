@@ -103,6 +103,32 @@ func TestAnnounceHostsKeepEveryPath(t *testing.T) {
 	}
 }
 
+func TestAnnouncedAddrsOmitLoopbackWhenNothingIsVerified(t *testing.T) {
+	t.Setenv(advertise.EnvVar, "")
+	t.Setenv(advertise.EnvVarList, "")
+	SetAnnounceAPIURL("")
+	t.Cleanup(func() { SetAnnounceAPIURL("") })
+	loop, err := ma.NewMultiaddr("/ip4/127.0.0.1/tcp/22421")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := ma.NewMultiaddr("/ip4/172.17.0.8/tcp/22421")
+	if err != nil {
+		t.Fatal(err)
+	}
+	circuit, err := ma.NewMultiaddr("/ip4/10.200.0.1/tcp/4001/p2p/12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU/p2p-circuit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(multiaddrStrings(announcedAddrs([]ma.Multiaddr{loop, bridge, circuit})), " ")
+	if strings.Contains(joined, "127.0.0.1") || strings.Contains(joined, "172.17.0.8") {
+		t.Fatalf("unreachable listen address advertised: %s", joined)
+	}
+	if !strings.Contains(joined, "p2p-circuit") {
+		t.Fatalf("circuit missing: %s", joined)
+	}
+}
+
 func TestAnnouncedAddrsReplaceBridgeListenAddrs(t *testing.T) {
 	t.Setenv(EnvPublishedLibp2pPort, "22423")
 	SetAnnounceAPIURL("https://192.0.2.20:22430")

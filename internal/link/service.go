@@ -22,15 +22,16 @@ type issuedCode struct {
 
 // Service issues and redeems short-lived single-use pairing codes.
 type Service struct {
-	dir      Directory
-	newDir   func() (Directory, string, error)
-	mu       sync.Mutex
-	createMu sync.Mutex
-	codes    map[string]*issuedCode
-	ttl      time.Duration
-	now      func() time.Time
-	peerID   string
-	relays   []string
+	dir       Directory
+	newDir    func() (Directory, string, error)
+	mu        sync.Mutex
+	createMu  sync.Mutex
+	codes     map[string]*issuedCode
+	ttl       time.Duration
+	now       func() time.Time
+	peerID    string
+	relays    []string
+	storePath string
 }
 
 func NewService(dir Directory) *Service {
@@ -118,8 +119,10 @@ func (s *Service) Issue(ctx context.Context, identity peeridentity.Identity, pro
 		s.mu.Lock()
 		delete(s.codes, normalized)
 		s.mu.Unlock()
+		s.saveCodes()
 		return "", time.Time{}, err
 	}
+	s.saveCodes()
 	return code, expires, nil
 }
 
@@ -186,6 +189,7 @@ func (s *Service) Claim(ctx context.Context, claim ClaimRequest) (Record, error)
 	issued.used = true
 	record := issued.record
 	s.mu.Unlock()
+	s.saveCodes()
 	s.unpublishCode(ctx, normalized)
 	return record, nil
 }

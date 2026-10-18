@@ -2,6 +2,8 @@ package apicontrol
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -49,7 +51,7 @@ func TestPairingCodeLookupSkipsHijackAndFailsOver(t *testing.T) {
 	t.Cleanup(func() { SetLinkService(link.NewService(link.UnavailableDirectory{})) })
 
 	var claimServer *httptest.Server
-	claimServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	claimServer = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/pair-code/claim" {
 			http.NotFound(w, r)
 			return
@@ -68,10 +70,13 @@ func TestPairingCodeLookupSkipsHijackAndFailsOver(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer claimServer.Close()
+	sum := sha256.Sum256(claimServer.Certificate().Raw)
+	pin := hex.EncodeToString(sum[:])
 
 	code, _, err := service.Issue(context.Background(), publisherKey, link.Profile{
-		DiscoveryID: publisherKey.PublicKey,
-		NodeName:    "publisher",
+		DiscoveryID:       publisherKey.PublicKey,
+		NodeName:          "publisher",
+		CertificateSHA256: pin,
 		Addresses: []link.Address{
 			{Kind: "manual", Address: "http://127.0.0.1:1", NetworkHint: "local"},
 			{Kind: "vpn", Address: "http://127.0.0.1:2", NetworkHint: "vpn_overlay"},

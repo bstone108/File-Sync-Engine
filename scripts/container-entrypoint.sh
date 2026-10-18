@@ -36,13 +36,14 @@ fi
 # The shell stays PID 1 for `start` so a child os.Exit is printed even when the
 # process itself wrote nothing. TERM and INT are forwarded to that child.
 supervise_fse() {
+  stopping=0
   if [ "$(id -u)" = "0" ] && [ "${FSE_RUN_AS_ROOT:-false}" != "true" ]; then
     su-exec "$uid:$gid" "$@" &
   else
     "$@" &
   fi
   child=$!
-  trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT
+  trap 'stopping=1; kill -TERM "$child" 2>/dev/null || true' TERM INT
   set +e
   wait "$child"
   code=$?
@@ -50,6 +51,11 @@ supervise_fse() {
   trap - TERM INT
   printf 'fse exited with status %s\n' "$code"
   printf 'fse exited with status %s\n' "$code" >&2
+  # docker stop delivers TERM. A child that exits 143, or 2 from a library
+  # log flush, is still a requested stop.
+  if [ "$stopping" = "1" ]; then
+    exit 0
+  fi
   exit "$code"
 }
 

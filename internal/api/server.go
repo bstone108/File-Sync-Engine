@@ -1228,6 +1228,11 @@ func foldersVisibleToGUI(state State) []FolderState {
 		current.Enabled = folder.SharingEnabled()
 		current.SharedWith = append([]string(nil), folder.SharedWith...)
 		current.Ignore = append([]string(nil), folder.Ignore...)
+		if current.Index.TotalFiles == 0 {
+			if n := foldershare.CountLiveFiles(state.ConfigPath, folder.ID); n > 0 {
+				current.Index.TotalFiles = n
+			}
+		}
 		if !current.Enabled {
 			current.Status = "paused"
 			current.ProgressLabel = "Paused"
@@ -1245,7 +1250,61 @@ func foldersVisibleToGUI(state State) []FolderState {
 
 func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	state := s.snapshotState()
-	writeJSON(w, livePeerStates(state.PeersState))
+	writeJSON(w, peersVisibleToGUI(state))
+}
+
+// peersVisibleToGUI lists configured peers only. DHT discoveries, this node's
+// own id, and peers removed from config stay out of the GUI list. A path is
+// shown only while the last dial is still the active one.
+func peersVisibleToGUI(state State) []PeerState {
+	live := map[string]PeerState{}
+	for _, peer := range livePeerStates(state.PeersState) {
+		live[peer.ID] = peer
+	}
+	self := map[string]struct{}{}
+	if id := strings.TrimSpace(state.IdentityPublicKey); id != "" {
+		self[id] = struct{}{}
+	}
+	if id := strings.TrimSpace(state.NodeName); id != "" {
+		self[id] = struct{}{}
+	}
+	if path := strings.TrimSpace(state.ConfigPath); path != "" {
+		if cfg, err := config.LoadFile(path); err == nil {
+			out := make([]PeerState, 0, len(cfg.Peers))
+			for _, peer := range cfg.Peers {
+				if _, ok := self[peer.ID]; ok {
+					continue
+				}
+				current := live[peer.ID]
+				current.ID = peer.ID
+				if current.Status == "" || current.Status == "discovered" {
+					current.Status = "configured"
+				}
+				current.ConnectionPath = activeConnectionPath(peer.ID)
+				out = append(out, current)
+			}
+			return out
+		}
+	}
+	out := make([]PeerState, 0, len(live))
+	for _, peer := range livePeerStates(state.PeersState) {
+		if peer.Status == "discovered" || strings.HasPrefix(peer.Endpoint, "discovered") {
+			continue
+		}
+		if _, ok := self[peer.ID]; ok {
+			continue
+		}
+		peer.ConnectionPath = activeConnectionPath(peer.ID)
+		out = append(out, peer)
+	}
+	return out
+}
+
+func activeConnectionPath(peerID string) string {
+	if obs, ok := nat.DefaultPaths.Active(peerID); ok {
+		return string(obs.Path)
+	}
+	return ""
 }
 
 // livePeerStates overlays the path and receive progress recorded by the last
@@ -1760,7 +1819,8 @@ func (s *Server) handleSyncJournal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := s.snapshotState()
-	entries, err := foldershare.LoadJournal(state.ConfigPath, folderID)
+	after, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("afterCursor")), 10, 64)
+	entries, cursor, delta, err := foldershare.JournalDelta(state.ConfigPath, folderID, after)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1768,7 +1828,7 @@ func (s *Server) handleSyncJournal(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []foldershare.Entry{}
 	}
-	writeJSON(w, map[string]any{"folder": folderID, "entries": entries})
+	writeJSON(w, map[string]any{"folder": folderID, "entries": entries, "cursor": cursor, "delta": delta})
 }
 
 func (s *Server) handlePairExchange(w http.ResponseWriter, r *http.Request) {

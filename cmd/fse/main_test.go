@@ -2261,8 +2261,8 @@ func TestProcessDiscoveryPollUpdatesAPIStateAndPublishesEvents(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &peers); err != nil {
 		t.Fatal(err)
 	}
-	if len(peers) != 2 || peers[0].ID != "manual-peer" || peers[1].ID != "dht-peer" || peers[1].Status != "discovered" {
-		t.Fatalf("api peers not updated with discovered peer: %+v", peers)
+	if len(peers) != 1 || peers[0].ID != "manual-peer" {
+		t.Fatalf("configured peers = %+v", peers)
 	}
 
 	eventsRecorder := httptest.NewRecorder()

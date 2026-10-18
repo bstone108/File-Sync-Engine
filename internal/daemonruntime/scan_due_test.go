@@ -142,6 +142,18 @@ func TestProcessScanDueRunsLocalSyncAndPeerPullsWithTransferGates(t *testing.T) 
 	assertEvent(t, publisher.events, "transfer.paused", "docs", "peer-paused", "peer transfer is paused")
 }
 
+func TestNilPeerPullerDoesNotClaimADirectTransfer(t *testing.T) {
+	publisher := &fakePublisher{}
+	runner := &fakeSyncRunner{result: foldersync.Result{Targets: 1}}
+	pulls := []peerpullplan.Pull{{PeerID: "neko", FolderID: "docs", Path: routing.DirectPath, Network: routing.LocalNetwork, RouteReason: routing.ReasonDirectPreferred}}
+	ProcessScanDue(ScanDueOptions{FolderID: "docs", Publisher: publisher, SyncRunner: runner, PeerPulls: pulls})
+	for _, event := range publisher.events {
+		if event.Type == "peer.sync.finished" || event.Type == "peer.sync.error" {
+			t.Fatalf("empty puller published %s %s", event.Type, event.Message)
+		}
+	}
+}
+
 func TestProcessScanDueHonorsFolderWidePauseBeforeLocalSync(t *testing.T) {
 	publisher := &fakePublisher{}
 	gate := &fakeTransferGate{paused: map[string]bool{"docs/": true}}

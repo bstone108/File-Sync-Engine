@@ -42,6 +42,7 @@ type Libp2pDHTRouter struct {
 	advertise      map[string]struct{}
 	payloads       map[string][]byte
 	bootstrapped   bool
+	bootstrapAt    time.Time
 	bootstrapWait  chan struct{}
 	bootstrapErr   error
 	bootstrapPeers []string
@@ -123,6 +124,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	}
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
 	h.SetStreamHandler(protocol.ID(ObserveProtocol), router.handleObserve)
+	noteRouterHost(h)
 	watchConnections(h.Network())
 	go watchReachability(h)
 	if opts.Announce {
@@ -142,6 +144,16 @@ func (r *Libp2pDHTRouter) Bootstrap(ctx context.Context, peers []string) error {
 	if r == nil || r.host == nil || r.dht == nil {
 		return fmt.Errorf("libp2p DHT router is not initialized")
 	}
+	// A node that already has routing peers does not repeat the public walk
+	// on every discovery poll. Lookup still queries when a peer is missing.
+	if r.routingTableSize() > 0 {
+		r.mu.Lock()
+		recent := !r.bootstrapAt.IsZero() && time.Since(r.bootstrapAt) < 10*time.Minute
+		r.mu.Unlock()
+		if recent {
+			return nil
+		}
+	}
 	infos, err := parsePeerAddrInfosWith(ctx, peers, r.activeResolver())
 	if err != nil {
 		return err
@@ -150,7 +162,13 @@ func (r *Libp2pDHTRouter) Bootstrap(ctx context.Context, peers []string) error {
 	if r.connectBootstrap(ctx, preferDialableTransports(infos)) > 0 {
 		r.waitForRoutingTable(ctx)
 	}
-	return r.dht.Bootstrap(ctx)
+	err = r.dht.Bootstrap(ctx)
+	if err == nil && r.routingTableSize() > 0 {
+		r.mu.Lock()
+		r.bootstrapAt = time.Now()
+		r.mu.Unlock()
+	}
+	return err
 }
 
 // extraBootstrapInfos adds the libp2p TCP bootstrap peer when the daemon is

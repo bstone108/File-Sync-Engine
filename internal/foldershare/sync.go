@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,9 +38,13 @@ type Entry struct {
 	Revision int64       `json:"revision"`
 	Origin   string      `json:"origin,omitempty"`
 	Blocks   []FileBlock `json:"blocks,omitempty"`
+	// Cursor is the folder journal cursor at the moment this entry changed.
+	// A peer that already has an older cursor asks only for newer entries.
+	Cursor int64 `json:"cursor,omitempty"`
 }
 
 type journalFile struct {
+	Cursor  int64   `json:"cursor,omitempty"`
 	Entries []Entry `json:"entries"`
 }
 
@@ -67,15 +72,11 @@ func Reconcile(cfg config.Config, configPath string, paused func(folderID string
 
 // LoadJournal returns the persisted journal for a folder. A missing journal is empty.
 func LoadJournal(configPath, folderID string) ([]Entry, error) {
-	data, err := os.ReadFile(JournalPath(configPath, folderID))
+	stored, err := loadJournalFile(configPath, folderID)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
-	}
-	var stored journalFile
-	if err := json.Unmarshal(data, &stored); err != nil {
 		return nil, err
 	}
 	return stored.Entries, nil
@@ -96,7 +97,7 @@ func reconcileFolder(cfg config.Config, configPath string, folder config.FolderC
 	if origin == "" {
 		origin = cfg.NodeName
 	}
-	if folder.Mode != config.ModeReceiveOnly {
+	if folder.Mode != config.ModeReceiveOnly && localScanDue(configPath, folder.ID) {
 		if err := absorbLocal(folder.Path, origin, byPath); err != nil {
 			return err
 		}
@@ -107,8 +108,9 @@ func reconcileFolder(cfg config.Config, configPath string, folder config.FolderC
 	if folder.Mode == config.ModeSendOnly {
 		return nil
 	}
-	for _, peer := range peersFor(cfg, folder) {
-		remote, err := fetchRemoteJournal(peer, folder.ID)
+	peers := peersFor(cfg, folder)
+	for _, peer := range peers {
+		remote, remoteCursor, err := fetchRemoteJournal(configPath, peer, folder.ID)
 		if err != nil {
 			structuredlog.Event("error", "folder.sync.journal_failed", "remote journal was not read", map[string]any{
 				"folder": folder.ID,
@@ -124,6 +126,11 @@ func reconcileFolder(cfg config.Config, configPath string, folder config.FolderC
 				"error":  err.Error(),
 			})
 			continue
+		}
+		// Advance only after every entry in this delta applied. A failed file
+		// stays above the saved cursor and is requested again.
+		if remoteCursor > 0 {
+			rememberPeerCursor(configPath, folder.ID, peer.ID, remoteCursor)
 		}
 	}
 	return saveJournal(configPath, folder.ID, byPath)
@@ -168,7 +175,7 @@ func absorbLocal(root, origin string, byPath map[string]Entry) error {
 }
 
 const (
-	transferWorkers = 4
+	transferWorkers = 8
 )
 
 // fileRetryBackoff is the capped wait between attempts in one reconcile pass.
@@ -223,6 +230,7 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 	transferprogress.Note(peer.ID, 0, remaining)
 	locals := indexLocalBlocks(folder.Path, byPath)
 	var wg sync.WaitGroup
+	var passWrites, passFetched, passReused int
 	slots := make(chan struct{}, transferWorkers)
 	var remainMu sync.Mutex
 	note := func(delta, left int64) {
@@ -235,7 +243,7 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 			defer wg.Done()
 			defer func() { <-slots }()
 			var got int64
-			err := downloadFile(peer, folder, job.entry, job.target, locals, func(network, completed int64) {
+			fetched, reused, err := downloadFile(peer, folder, job.entry, job.target, locals, func(network, completed int64) {
 				delta := completed - got
 				if delta < 0 {
 					delta = 0
@@ -274,11 +282,15 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 				note(0, left)
 				return
 			}
+			passFetched += fetched
+			passReused += reused
+			passWrites++
 			byPath[job.entry.Path] = job.entry
 		}(job)
 	}
 	wg.Wait()
 	transferprogress.Note(peer.ID, 0, 0)
+	reportPass(folder.ID, peer, passWrites, passFetched, passReused)
 	return applyErr
 }
 
@@ -358,10 +370,12 @@ func finishDownload(tmp, target string, entry Entry) error {
 	return os.Rename(tmp, target)
 }
 
-func fetchRemoteJournal(peer config.PeerConfig, folderID string) ([]Entry, error) {
+func fetchRemoteJournal(configPath string, peer config.PeerConfig, folderID string) ([]Entry, int64, error) {
 	var entries []Entry
+	after := peerCursor(configPath, folderID, peer.ID)
+	var remoteCursor int64
 	used, err := link.Dial(context.Background(), peer, func(ctx context.Context, base string, client *http.Client) error {
-		endpoint := base + "/v1/sync-journal?folder=" + url.QueryEscape(folderID)
+		endpoint := base + "/v1/sync-journal?folder=" + url.QueryEscape(folderID) + "&afterCursor=" + strconv.FormatInt(after, 10)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return err
@@ -377,18 +391,20 @@ func fetchRemoteJournal(peer config.PeerConfig, folderID string) ([]Entry, error
 		}
 		var body struct {
 			Entries []Entry `json:"entries"`
+			Cursor  int64   `json:"cursor"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			return err
 		}
 		entries = body.Entries
+		remoteCursor = body.Cursor
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	noteLinkDial(peer, used)
-	return entries, nil
+	return entries, remoteCursor, nil
 }
 
 var (
@@ -458,25 +474,61 @@ func indexEntries(entries []Entry) map[string]Entry {
 }
 
 func saveJournal(configPath, folderID string, byPath map[string]Entry) error {
+	previous, _ := loadJournalFile(configPath, folderID)
+	prevByPath := indexEntries(previous.Entries)
 	entries := make([]Entry, 0, len(byPath))
+	cursor := previous.Cursor
 	for _, entry := range byPath {
+		old, ok := prevByPath[entry.Path]
+		changed := !ok || old.Revision != entry.Revision || old.SHA256 != entry.SHA256 || old.Deleted != entry.Deleted || old.Size != entry.Size
+		if changed || old.Cursor == 0 {
+			cursor++
+			entry.Cursor = cursor
+		} else {
+			entry.Cursor = old.Cursor
+		}
 		entries = append(entries, entry)
 	}
 	// Stable order keeps the file quiet when nothing changed.
 	sortEntries(entries)
-	data, err := json.MarshalIndent(journalFile{Entries: entries}, "", "  ")
+	stored := journalFile{Cursor: cursor, Entries: entries}
+	data, err := json.MarshalIndent(stored, "", "  ")
 	if err != nil {
 		return err
 	}
+	data = append(data, '\n')
 	path := JournalPath(configPath, folderID)
+	if previous, ok := cachedJournalBytes(path); ok && bytesEqual(previous, data) {
+		return nil
+	}
+	if previousBytes, readErr := os.ReadFile(path); readErr == nil && bytesEqual(previousBytes, data) {
+		storeJournalCache(path, stored)
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	storeJournalCache(path, stored)
+	return nil
+}
+
+func bytesEqual(left, right []byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func sortEntries(entries []Entry) {
