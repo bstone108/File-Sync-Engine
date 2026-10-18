@@ -35,15 +35,19 @@ fi
 
 # The shell stays PID 1 for `start` so a child os.Exit is printed even when the
 # process itself wrote nothing. TERM and INT are forwarded to that child.
+# docker stop must exit 0. Busybox ash can drop a variable set inside the trap
+# once wait returns, so the stop is also recorded in a file.
 supervise_fse() {
   stopping=0
+  stop_flag="${CONFIG_DIR}/.fse-stopping"
+  rm -f "$stop_flag"
   if [ "$(id -u)" = "0" ] && [ "${FSE_RUN_AS_ROOT:-false}" != "true" ]; then
     su-exec "$uid:$gid" "$@" &
   else
     "$@" &
   fi
   child=$!
-  trap 'stopping=1; kill -TERM "$child" 2>/dev/null || true' TERM INT
+  trap 'stopping=1; : > "$stop_flag"; kill -TERM "$child" 2>/dev/null || true' TERM INT
   set +e
   wait "$child"
   code=$?
@@ -51,11 +55,15 @@ supervise_fse() {
   trap - TERM INT
   printf 'fse exited with status %s\n' "$code"
   printf 'fse exited with status %s\n' "$code" >&2
-  # docker stop delivers TERM. A child that exits 143, or 2 from a library
-  # log flush, is still a requested stop.
-  if [ "$stopping" = "1" ]; then
+  # A requested stop is exit 0 even when the child reports 2 (library log
+  # flush or the Go runtime's PID 1 fallback) or 143/130 from the signal.
+  if [ "$stopping" = "1" ] || [ -f "$stop_flag" ]; then
+    rm -f "$stop_flag"
     exit 0
   fi
+  case "$code" in
+    130|143) exit 0 ;;
+  esac
   exit "$code"
 }
 

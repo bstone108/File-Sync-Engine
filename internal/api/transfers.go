@@ -6,13 +6,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"filesyncengine/internal/transferprogress"
 )
 
 const defaultTransferHistoryLimit = 50
 
 // TransferReadModel is a bounded, in-memory view of transfer-pass lifecycle
-// events. Byte progress and rates remain explicitly unavailable until the
-// transfer runtime publishes those measurements.
+// events plus live byte progress. Rates stay unavailable until a transfer is
+// actually moving; an empty pass does not invent them.
 type TransferReadModel struct {
 	Active                []TransferReadModelItem `json:"active"`
 	History               []TransferReadModelItem `json:"history"`
@@ -21,17 +23,20 @@ type TransferReadModel struct {
 }
 
 type TransferReadModelItem struct {
-	FolderID      string    `json:"folderId"`
-	PeerID        string    `json:"peerId,omitempty"`
-	Status        string    `json:"status"`
-	StartedAt     time.Time `json:"startedAt,omitempty"`
-	FinishedAt    time.Time `json:"finishedAt,omitempty"`
-	EventType     string    `json:"eventType"`
-	Message       string    `json:"message,omitempty"`
-	Writes        int       `json:"writes,omitempty"`
-	BlocksFetched int       `json:"blocksFetched,omitempty"`
-	BlocksReused  int       `json:"blocksReused,omitempty"`
-	RoutePath     string    `json:"routePath,omitempty"`
+	FolderID       string    `json:"folderId"`
+	PeerID         string    `json:"peerId,omitempty"`
+	Status         string    `json:"status"`
+	StartedAt      time.Time `json:"startedAt,omitempty"`
+	FinishedAt     time.Time `json:"finishedAt,omitempty"`
+	EventType      string    `json:"eventType"`
+	Message        string    `json:"message,omitempty"`
+	Writes         int       `json:"writes,omitempty"`
+	BlocksFetched  int       `json:"blocksFetched,omitempty"`
+	BlocksReused   int       `json:"blocksReused,omitempty"`
+	RoutePath      string    `json:"routePath,omitempty"`
+	ReceivedBytes  int64     `json:"receivedBytes,omitempty"`
+	RemainingBytes int64     `json:"remainingBytes,omitempty"`
+	BytesPerSecond int64     `json:"bytesPerSecond,omitempty"`
 }
 
 func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +56,54 @@ func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	events := append([]Event(nil), s.events...)
 	s.mu.RUnlock()
-	writeJSON(w, buildTransferReadModel(events, limit))
+	model := buildTransferReadModel(events, limit)
+	applyLiveTransferProgress(&model)
+	writeJSON(w, model)
+}
+
+func applyLiveTransferProgress(model *TransferReadModel) {
+	snaps := transferprogress.ActiveSnapshots()
+	if len(snaps) == 0 || model == nil {
+		return
+	}
+	model.ByteProgressAvailable = true
+	seen := map[string]struct{}{}
+	for i := range model.Active {
+		snap, ok := snaps[model.Active[i].PeerID]
+		if !ok {
+			continue
+		}
+		fillTransferProgress(&model.Active[i], snap)
+		seen[model.Active[i].PeerID] = struct{}{}
+		if snap.BytesPerSecond > 0 {
+			model.LiveRatesAvailable = true
+		}
+	}
+	for id, snap := range snaps {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		item := TransferReadModelItem{
+			PeerID: id, Status: "active", EventType: "transfer.progress", StartedAt: snap.Updated,
+		}
+		fillTransferProgress(&item, snap)
+		model.Active = append(model.Active, item)
+		if snap.BytesPerSecond > 0 {
+			model.LiveRatesAvailable = true
+		}
+	}
+	sort.Slice(model.Active, func(i, j int) bool {
+		if model.Active[i].StartedAt.Equal(model.Active[j].StartedAt) {
+			return model.Active[i].PeerID < model.Active[j].PeerID
+		}
+		return model.Active[i].StartedAt.Before(model.Active[j].StartedAt)
+	})
+}
+
+func fillTransferProgress(item *TransferReadModelItem, snap transferprogress.Snapshot) {
+	item.ReceivedBytes = snap.ReceivedBytes
+	item.RemainingBytes = snap.RemainingBytes
+	item.BytesPerSecond = snap.BytesPerSecond
 }
 
 func buildTransferReadModel(events []Event, limit int) TransferReadModel {

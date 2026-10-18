@@ -1,12 +1,21 @@
 package nat
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
+
+// pathFreshFor is how long a successful dial keeps the GUI path. A later
+// success refreshes it. A path that nobody has confirmed again is not shown
+// as a live connection.
+const pathFreshFor = 2 * time.Minute
 
 // Observation is the path currently used for one peer.
 type Observation struct {
 	PeerID  string
 	Path    Path
 	Address string
+	At      time.Time
 }
 
 // Registry remembers the best live path for each peer.
@@ -32,10 +41,26 @@ func (r *Registry) Observe(peerID, address string, path Path) {
 	if !Better(current.Path, path) && current.Path != "" {
 		return
 	}
-	r.peers[peerID] = Observation{PeerID: peerID, Path: path, Address: address}
+	r.peers[peerID] = Observation{PeerID: peerID, Path: path, Address: address, At: time.Now()}
 }
 
-// Active returns the best path recorded for peerID.
+// Touch keeps an existing path fresh after another successful request on the
+// cached connection. It does not invent a path that was never dialed.
+func (r *Registry) Touch(peerID string) {
+	if r == nil || peerID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, ok := r.peers[peerID]
+	if !ok || current.Path == "" {
+		return
+	}
+	current.At = time.Now()
+	r.peers[peerID] = current
+}
+
+// Active returns the best path recorded for peerID while it is still fresh.
 func (r *Registry) Active(peerID string) (Observation, bool) {
 	if r == nil || peerID == "" {
 		return Observation{}, false
@@ -43,7 +68,10 @@ func (r *Registry) Active(peerID string) (Observation, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	obs, ok := r.peers[peerID]
-	return obs, ok && obs.Path != ""
+	if !ok || obs.Path == "" || time.Since(obs.At) > pathFreshFor {
+		return Observation{}, false
+	}
+	return obs, true
 }
 
 // Forget drops a peer's path. A failed dial calls it so the API does not

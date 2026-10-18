@@ -485,6 +485,7 @@ func TestEventsStreamsSnapshotJSONEventsWithAPIKey(t *testing.T) {
 }
 
 func TestTransfersReturnsCurrentScopesAndBoundedHistory(t *testing.T) {
+	transferprogress.Reset()
 	server := NewServer(State{NodeName: "node-a"}, "secret")
 	server.Publish(Event{Type: "peer.sync.started", FolderID: "docs", PeerID: "peer-a", Message: "peer transfer pass started"})
 	server.Publish(Event{Type: "sync.finished", FolderID: "photos", Message: "targets=1 writes=2 deletes=0 moves=0 reusedBlocks=3"})

@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"filesyncengine/internal/config"
@@ -16,14 +15,14 @@ import (
 const localScanInterval = 30 * time.Second
 
 var (
-	journalMu      sync.Mutex
-	journalCache   = map[string]cachedJournal{}
-	peerCursors    = map[string]int64{}
-	lastLocalScan  = map[string]time.Time{}
-	scannedAtGen   = map[string]int64{}
-	scanGeneration atomic.Int64
-	wakeCh         = make(chan struct{}, 1)
-	passReporter   func(folderID string, peer config.PeerConfig, writes, fetched, reused int)
+	journalMu     sync.Mutex
+	journalCache  = map[string]cachedJournal{}
+	peerCursors   = map[string]int64{}
+	lastLocalScan = map[string]time.Time{}
+	forceScan     = map[string]struct{}{}
+	changedPaths  = map[string]map[string]struct{}{}
+	wakeCh        = make(chan struct{}, 1)
+	passReporter  func(folderID string, peer config.PeerConfig, writes, fetched, reused int)
 )
 
 type cachedJournal struct {
@@ -34,13 +33,43 @@ type cachedJournal struct {
 }
 
 // Wake asks the daemon to reconcile promptly. A file-monitor event uses it
-// so a change does not wait for the next quiet poll.
+// so a change does not wait for the next quiet poll. Wake does not by itself
+// rehash the folder; NoteChanged names the path, and RequestFullScan asks
+// for a full pass.
 func Wake() {
-	scanGeneration.Add(1)
 	select {
 	case wakeCh <- struct{}{}:
 	default:
 	}
+}
+
+// NoteChanged records one filesystem path so the next reconcile hashes that
+// path instead of the whole folder.
+func NoteChanged(folderID, path string) {
+	if folderID == "" || path == "" {
+		return
+	}
+	journalMu.Lock()
+	set := changedPaths[folderID]
+	if set == nil {
+		set = map[string]struct{}{}
+		changedPaths[folderID] = set
+	}
+	set[path] = struct{}{}
+	journalMu.Unlock()
+	Wake()
+}
+
+// RequestFullScan makes the next reconcile hash the folder. The monitor's
+// fallback scan uses it. A single file event uses NoteChanged instead.
+func RequestFullScan(folderID string) {
+	if folderID == "" {
+		return
+	}
+	journalMu.Lock()
+	forceScan[folderID] = struct{}{}
+	journalMu.Unlock()
+	Wake()
 }
 
 // WakeChannel is signaled by Wake. The daemon selects on it.
@@ -69,16 +98,36 @@ func reportPass(folderID string, peer config.PeerConfig, writes, fetched, reused
 
 func localScanDue(configPath, folderID string) bool {
 	key := configPath + "\x00" + folderID
-	gen := scanGeneration.Load()
 	journalMu.Lock()
 	defer journalMu.Unlock()
-	last := lastLocalScan[key]
-	if last.IsZero() || scannedAtGen[key] != gen || time.Since(last) >= localScanInterval {
+	if _, ok := forceScan[folderID]; ok {
+		delete(forceScan, folderID)
+		delete(changedPaths, folderID)
 		lastLocalScan[key] = time.Now()
-		scannedAtGen[key] = gen
+		return true
+	}
+	last := lastLocalScan[key]
+	if last.IsZero() || time.Since(last) >= localScanInterval {
+		delete(changedPaths, folderID)
+		lastLocalScan[key] = time.Now()
 		return true
 	}
 	return false
+}
+
+func takeChangedPaths(folderID string) []string {
+	journalMu.Lock()
+	defer journalMu.Unlock()
+	set := changedPaths[folderID]
+	delete(changedPaths, folderID)
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for path := range set {
+		out = append(out, path)
+	}
+	return out
 }
 
 func loadJournalFile(configPath, folderID string) (journalFile, error) {

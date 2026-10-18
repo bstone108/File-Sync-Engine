@@ -97,8 +97,12 @@ func reconcileFolder(cfg config.Config, configPath string, folder config.FolderC
 	if origin == "" {
 		origin = cfg.NodeName
 	}
-	if folder.Mode != config.ModeReceiveOnly && localScanDue(configPath, folder.ID) {
-		if err := absorbLocal(folder.Path, origin, byPath); err != nil {
+	if folder.Mode != config.ModeReceiveOnly {
+		if localScanDue(configPath, folder.ID) {
+			if err := absorbLocal(folder.Path, origin, byPath); err != nil {
+				return err
+			}
+		} else if err := absorbPaths(folder.Path, origin, byPath, takeChangedPaths(folder.ID)); err != nil {
 			return err
 		}
 		if err := saveJournal(configPath, folder.ID, byPath); err != nil {
@@ -142,19 +146,7 @@ func absorbLocal(root, origin string, byPath map[string]Entry) error {
 		return err
 	}
 	for path, file := range seen {
-		current, ok := byPath[path]
-		if ok && !current.Deleted && current.SHA256 == file.sha {
-			if len(current.Blocks) == 0 && len(file.blocks) > 0 {
-				current.Blocks = file.blocks
-				byPath[path] = current
-			}
-			continue
-		}
-		revision := int64(1)
-		if ok && current.Revision >= revision {
-			revision = current.Revision + 1
-		}
-		byPath[path] = Entry{Path: path, SHA256: file.sha, Size: file.size, Blocks: file.blocks, Revision: revision, Origin: origin}
+		noteLocalFile(byPath, path, origin, file.sha, file.size, file.blocks)
 	}
 	for path, current := range byPath {
 		if current.Deleted {
@@ -163,19 +155,81 @@ func absorbLocal(root, origin string, byPath map[string]Entry) error {
 		if _, ok := seen[path]; ok {
 			continue
 		}
-		current.Deleted = true
-		current.SHA256 = ""
-		current.Size = 0
-		current.Blocks = nil
-		current.Revision++
-		current.Origin = origin
-		byPath[path] = current
+		markDeleted(byPath, path, origin)
 	}
 	return nil
 }
 
+// absorbPaths hashes only the paths a filesystem event named. Other journal
+// entries stay as they are, including files this pass did not look at.
+func absorbPaths(root, origin string, byPath map[string]Entry, paths []string) error {
+	for _, path := range paths {
+		rel := filepath.ToSlash(path)
+		if filepath.IsAbs(path) {
+			next, err := filepath.Rel(root, path)
+			if err != nil {
+				continue
+			}
+			rel = filepath.ToSlash(next)
+		}
+		if !safeRel(rel) {
+			continue
+		}
+		target, ok := safeJoin(root, rel)
+		if !ok {
+			continue
+		}
+		info, err := os.Stat(target)
+		if err != nil {
+			if os.IsNotExist(err) {
+				markDeleted(byPath, rel, origin)
+			}
+			continue
+		}
+		if info.IsDir() {
+			continue
+		}
+		hash, size, blocks, err := InspectFile(target)
+		if err != nil {
+			return err
+		}
+		noteLocalFile(byPath, rel, origin, hash, size, blocks)
+	}
+	return nil
+}
+
+func noteLocalFile(byPath map[string]Entry, rel, origin, hash string, size int64, blocks []FileBlock) {
+	current, ok := byPath[rel]
+	if ok && !current.Deleted && current.SHA256 == hash {
+		if len(current.Blocks) == 0 && len(blocks) > 0 {
+			current.Blocks = blocks
+			byPath[rel] = current
+		}
+		return
+	}
+	revision := int64(1)
+	if ok && current.Revision >= revision {
+		revision = current.Revision + 1
+	}
+	byPath[rel] = Entry{Path: rel, SHA256: hash, Size: size, Blocks: blocks, Revision: revision, Origin: origin}
+}
+
+func markDeleted(byPath map[string]Entry, rel, origin string) {
+	current, ok := byPath[rel]
+	if !ok || current.Deleted {
+		return
+	}
+	current.Deleted = true
+	current.SHA256 = ""
+	current.Size = 0
+	current.Blocks = nil
+	current.Revision++
+	current.Origin = origin
+	byPath[rel] = current
+}
+
 const (
-	transferWorkers = 8
+	transferWorkers = 16
 )
 
 // fileRetryBackoff is the capped wait between attempts in one reconcile pass.
@@ -183,11 +237,12 @@ const (
 // not advanced, and the next pass (or the next peer) fetches only those blocks.
 var fileRetryBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
+type transferJob struct {
+	entry  Entry
+	target string
+}
+
 func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[string]Entry, remote []Entry) error {
-	type transferJob struct {
-		entry  Entry
-		target string
-	}
 	var jobs []transferJob
 	var mu sync.Mutex
 	var applyErr error
@@ -236,6 +291,12 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 	note := func(delta, left int64) {
 		transferprogress.Note(peer.ID, delta, left)
 	}
+	outcome, jobs, batchErr := applySmallBatches(peer, folder, jobs, byPath, &mu, &remainMu, &remaining, note)
+	if batchErr != nil {
+		applyErr = errors.Join(applyErr, batchErr)
+	}
+	passWrites += outcome.writes
+	passFetched += outcome.fetched
 	for _, job := range jobs {
 		wg.Add(1)
 		slots <- struct{}{}

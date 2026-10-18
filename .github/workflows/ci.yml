@@ -275,6 +275,27 @@ jobs:
           docker compose -f e2e/gui-sync/compose.yaml logs || true
           docker compose -f e2e/gui-sync/compose.published.yaml logs || true
 
+  pairing-restart:
+    name: Pairing code survives container restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build engine image
+        run: |
+          set -euo pipefail
+          mkdir -p docker-artifacts
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o docker-artifacts/fse-linux-amd64 ./cmd/fse
+          docker build -t file-sync-engine:e2e .
+      - name: Restart a container and redeem the same code
+        run: sh scripts/docker-pairing-restart.sh
+
   nat-namespace-sync:
     name: NAT namespace sync
     runs-on: ubuntu-latest

@@ -73,7 +73,7 @@ func TestDesktopGUIExposesDaemonTransferReadModel(t *testing.T) {
 	daemonAPI := readRequiredFile(t, filepath.Join(root, "desktop-gui", "src", "lib", "daemonApi.ts"))
 	nativeProxy := readRequiredFile(t, filepath.Join(root, "desktop-gui", "app_control.go"))
 	sources := appSvelte + daemonAPI + nativeProxy
-	for _, want := range []string{"fetchDaemonTransfers", `"/v1/transfers"`, "Active transfer passes", "Recent transfer history", "Live byte progress and rate telemetry are not available"} {
+	for _, want := range []string{"fetchDaemonTransfers", `"/v1/transfers"`, "Active transfer passes", "Recent transfer history", "Live byte progress and rates come from the daemon while a transfer is moving"} {
 		if !strings.Contains(sources, want) {
 			t.Fatalf("desktop GUI transfer read-model vertical slice missing %q", want)
 		}

@@ -1,0 +1,40 @@
+name: fse-pair-restart
+services:
+  publisher:
+    image: file-sync-engine:e2e
+    hostname: publisher
+    environment:
+      FSE_NODE_NAME: publisher
+      FSE_ADVERTISE_URL: https://publisher:22420
+      FSE_DISCOVERY_DHT: "true"
+      FSE_DISCOVERY_LOCAL: "true"
+    ports:
+      - "22451:22420"
+    volumes:
+      - publisher-config:/config
+    networks:
+      pairnet:
+        ipv4_address: 172.30.50.10
+  redeemer:
+    image: file-sync-engine:e2e
+    hostname: redeemer
+    environment:
+      FSE_NODE_NAME: redeemer
+      FSE_ADVERTISE_URL: https://redeemer:22420
+      FSE_DISCOVERY_DHT: "true"
+      FSE_DISCOVERY_LOCAL: "true"
+    ports:
+      - "22452:22420"
+    volumes:
+      - redeemer-config:/config
+    networks:
+      pairnet:
+        ipv4_address: 172.30.50.11
+volumes:
+  publisher-config:
+  redeemer-config:
+networks:
+  pairnet:
+    ipam:
+      config:
+        - subnet: 172.30.50.0/24

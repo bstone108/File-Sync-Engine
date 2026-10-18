@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/nat"
+	"filesyncengine/internal/transferprogress"
 )
 
 func TestPeersRouteOmitsSelfStaleAndRemoved(t *testing.T) {
@@ -96,6 +98,33 @@ func TestFolderTotalFilesComesFromTheJournal(t *testing.T) {
 	}
 	if len(folders) != 1 || folders[0].Index.TotalFiles != 1 {
 		t.Fatalf("folders = %+v", folders)
+	}
+}
+
+func TestTransfersReportLiveBytesWithoutInventingARoute(t *testing.T) {
+	transferprogress.Reset()
+	t.Cleanup(transferprogress.Reset)
+	transferprogress.Note("neko", 1000, 5000)
+	time.Sleep(20 * time.Millisecond)
+	transferprogress.Note("neko", 1000, 4000)
+	server := NewServer(State{NodeName: "kiki"}, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/v1/transfers", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	w := httptest.NewRecorder()
+	server.Router().ServeHTTP(w, req)
+	var response TransferReadModel
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.ByteProgressAvailable || !response.LiveRatesAvailable {
+		t.Fatalf("live progress flags = %+v", response)
+	}
+	if len(response.Active) != 1 || response.Active[0].PeerID != "neko" {
+		t.Fatalf("active = %+v", response.Active)
+	}
+	item := response.Active[0]
+	if item.ReceivedBytes != 2000 || item.RemainingBytes != 4000 || item.BytesPerSecond <= 0 || item.RoutePath != "" {
+		t.Fatalf("item = %+v", item)
 	}
 }
 

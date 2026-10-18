@@ -157,9 +157,17 @@ func main() {
 }
 
 func run(configPath string) {
+	stopRequested := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			if stopRequested {
+				fatalexit.Report(0, fmt.Sprintf("stop interrupted by panic: %v", recovered))
+				os.Exit(0)
+			}
 			fatalexit.Exit(2, fmt.Sprintf("daemon panic: %v\n%s", recovered, debug.Stack()))
+		}
+		if stopRequested {
+			os.Exit(0)
 		}
 	}()
 	discovery.SetLibp2pKeyPath(filepath.Join(filepath.Dir(configPath), "libp2p.key"))
@@ -256,13 +264,30 @@ func run(configPath string) {
 	})
 	apicontrol.SetLinkService(pairService)
 	go func() {
-		warmCtx, warmCancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer warmCancel()
-		if warmErr := pairService.Warmup(warmCtx); warmErr != nil {
-			structuredlog.Event("warn", "pairing.dht.warmup", "pairing lookup did not finish starting", map[string]any{"error": warmErr.Error()})
-		} else {
-			structuredlog.Event("info", "pairing.dht.warmup", "pairing lookup is ready", nil)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				structuredlog.Event("warn", "pairing.dht.warmup", "pairing lookup stopped", map[string]any{"error": fmt.Sprint(recovered)})
+			}
+		}()
+		var warmErr error
+		for attempt := 0; attempt < 6; attempt++ {
+			warmCtx, warmCancel := context.WithTimeout(context.Background(), 50*time.Second)
+			warmErr = pairService.Warmup(warmCtx)
+			warmCancel()
+			if warmErr == nil {
+				break
+			}
+			select {
+			case <-stopSignal.Done():
+				return
+			case <-time.After(10 * time.Second):
+			}
 		}
+		if warmErr != nil {
+			structuredlog.Event("warn", "pairing.dht.warmup", "pairing lookup did not finish starting", map[string]any{"error": warmErr.Error()})
+			return
+		}
+		structuredlog.Event("info", "pairing.dht.warmup", "pairing lookup is ready", nil)
 	}()
 	apiServer.SetPairCodeHandler(func(ctx context.Context) (api.PairCodeResponse, error) {
 		return apicontrol.HandleIssuePairCode(configPath)
@@ -322,6 +347,11 @@ func run(configPath string) {
 		})
 	}
 	emitMonitorEvent := func(event monitor.Event) {
+		if event.Type == "watch.event" {
+			foldershare.NoteChanged(event.FolderID, event.Path)
+		} else {
+			foldershare.RequestFullScan(event.FolderID)
+		}
 		foldershare.Wake()
 		peerPulls := peerPullsWithEndpointObservations(cfg, event.FolderID, liveEndpointObservations)
 		daemonruntime.HandleMonitorEvent(daemonruntime.MonitorEventOptions{
@@ -399,6 +429,7 @@ func run(configPath string) {
 	fatalexit.Go(func() {
 		select {
 		case <-sigCh:
+			fatalexit.DetachStderrWriteErrors()
 			_ = stopSignal.Handler(context.Background())
 		case <-detectCtx.Done():
 		}
@@ -417,6 +448,8 @@ func run(configPath string) {
 	for {
 		select {
 		case <-stopSignal.Done():
+			stopRequested = true
+			fatalexit.DetachStderrWriteErrors()
 			stopProjection := daemonlifecycle.ApplyStopRequest(apiServer.CurrentState())
 			apiServer.UpdateState(stopProjection.State)
 			apiServer.Publish(stopProjection.Event)

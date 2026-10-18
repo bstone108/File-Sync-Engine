@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -846,6 +847,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/folder-file", s.requireKey(s.handleFolderFile))
 	mux.HandleFunc("/v1/folder-manifest", s.requireKey(s.handleFolderManifest))
 	mux.HandleFunc("/v1/folder-block", s.requireKey(s.handleFolderBlock))
+	mux.HandleFunc("/v1/folder-batch", s.requireKey(s.handleFolderBatch))
 	mux.HandleFunc("/v1/folder-block-subhashes", s.requireKey(s.handleFolderBlockSubhashes))
 	return mux
 }
@@ -2457,6 +2459,72 @@ func (s *Server) handleFolderBlock(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if _, err := io.CopyBuffer(w, io.LimitReader(file, length), make([]byte, 32<<10)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) handleFolderBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	folder, ok := s.findFolder(r.URL.Query().Get("folder"))
+	if !ok {
+		http.Error(w, "unknown folder", http.StatusNotFound)
+		return
+	}
+	var req struct {
+		Files []struct {
+			Path  string `json:"path"`
+			Index int    `json:"index"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "invalid batch", http.StatusBadRequest)
+		return
+	}
+	if len(req.Files) == 0 || len(req.Files) > foldershare.SmallFileBatchCount {
+		http.Error(w, "invalid batch", http.StatusBadRequest)
+		return
+	}
+	files := make([]foldershare.BatchFile, 0, len(req.Files))
+	for _, item := range req.Files {
+		file, ok, err := openSafeFolderFile(folder.Path, item.Path)
+		if !ok || err != nil || item.Index < 0 {
+			http.Error(w, "invalid batch file", http.StatusBadRequest)
+			if file != nil {
+				file.Close()
+			}
+			return
+		}
+		info, err := file.Stat()
+		if err != nil || info.IsDir() || info.Size() > foldershare.SmallFileBatchBytes {
+			file.Close()
+			http.Error(w, "invalid batch file", http.StatusBadRequest)
+			return
+		}
+		offset, length, status, err := blockSpan(info.Size(), item.Index, foldershare.TransferBlockSize, -1, 0)
+		if err != nil {
+			file.Close()
+			http.Error(w, err.Error(), status)
+			return
+		}
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			file.Close()
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var body bytes.Buffer
+		if _, err := io.CopyBuffer(&body, io.LimitReader(file, length), make([]byte, 32<<10)); err != nil {
+			file.Close()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		file.Close()
+		files = append(files, foldershare.BatchFile{Path: item.Path, Data: append([]byte(nil), body.Bytes()...)})
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if err := foldershare.WriteFileBatch(w, files); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

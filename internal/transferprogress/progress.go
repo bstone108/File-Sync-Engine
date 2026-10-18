@@ -56,6 +56,27 @@ func Note(peerID string, delta, remaining int64) {
 	states[peerID] = current
 }
 
+// ActiveSnapshots returns peers that are still receiving bytes.
+func ActiveSnapshots() map[string]Snapshot {
+	mu.Lock()
+	defer mu.Unlock()
+	out := map[string]Snapshot{}
+	for id, current := range states {
+		snap := snapshotOf(current)
+		if snap.Active {
+			out[id] = snap
+		}
+	}
+	return out
+}
+
+// Reset clears recorded progress. Tests use it between cases.
+func Reset() {
+	mu.Lock()
+	states = map[string]state{}
+	mu.Unlock()
+}
+
 // Get returns the latest snapshot. An idle peer reports zeros.
 func Get(peerID string) Snapshot {
 	mu.Lock()
@@ -64,6 +85,10 @@ func Get(peerID string) Snapshot {
 	if !ok {
 		return Snapshot{}
 	}
+	return snapshotOf(current)
+}
+
+func snapshotOf(current state) Snapshot {
 	active := current.remaining > 0 && time.Since(current.updated) < 15*time.Second
 	rate := current.rate
 	if !active {

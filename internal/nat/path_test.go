@@ -8,6 +8,27 @@ import (
 	"time"
 )
 
+func TestStalePathIsNotALiveConnection(t *testing.T) {
+	reg := &Registry{}
+	reg.Observe("neko", "https://203.0.113.9:22420", PathDirect)
+	if _, ok := reg.Active("neko"); !ok {
+		t.Fatal("fresh path missing")
+	}
+	reg.mu.Lock()
+	obs := reg.peers["neko"]
+	obs.At = time.Now().Add(-pathFreshFor - time.Second)
+	reg.peers["neko"] = obs
+	reg.mu.Unlock()
+	if _, ok := reg.Active("neko"); ok {
+		t.Fatal("stale path still reported as connected")
+	}
+	reg.Touch("neko")
+	obs, ok := reg.Active("neko")
+	if !ok || obs.Path != PathDirect {
+		t.Fatalf("successful request did not refresh the path: %+v ok=%v", obs, ok)
+	}
+}
+
 func TestClassifyPaths(t *testing.T) {
 	cases := []struct {
 		addr string

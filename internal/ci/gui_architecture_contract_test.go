@@ -3351,6 +3351,8 @@ func TestDesktopGUISelectedHostScopesWholeInterfaceExceptTopMenu(t *testing.T) {
 		"type SelectedHostContext",
 		"selectedHostContext",
 		"host-scope-banner",
+		"background: #101820",
+		"color: #f4f7f2",
 		"selectedManagedInstance.label",
 		"selectedManagedInstance.apiBaseURL",
 		"selectedManagedInstance.kind",

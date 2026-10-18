@@ -108,7 +108,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		return nil, err
 	}
 	hostBox.Store(h)
-	kad, err := dht.New(ctx, h, dht.Mode(mode))
+	kad, err := dht.New(ctx, h, dht.Mode(mode), dht.DisableAutoRefresh())
 	if err != nil {
 		_ = h.Close()
 		return nil, err
