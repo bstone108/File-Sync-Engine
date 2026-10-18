@@ -159,6 +159,8 @@ NAT traversal is on unless `discovery.nat.disabled` is true. The stack is AutoNA
 
 `apiKey` is optional, but required for the current prototype HTTP peer pull path. It is redacted by `fse config show`. `identityPublicKey` and `encryptionLevel` are used by the prototype stream identity-authentication path when stream callers supply expected peer keys. Peer `sendBytesPerSecond` and `receiveBytesPerSecond` are optional per-peer transfer cap overrides; `0` means no per-peer cap for that direction.
 
+An endpoint is dialed only when `authenticated` is true and the address is HTTPS with the paired peer's certificate pin, or the dial is a libp2p stream whose peer ID matches `dhtPeerId` before any request bytes are written. Addresses learned from the DHT, from a relay, or from an observation are not written into `endpoints` first. Startup deletes endpoints that are missing `authenticated` and relays that do not target `dhtPeerId`.
+
 For the prototype peer path, a manual endpoint may point at another node's control API, for example:
 
 ```jsonc

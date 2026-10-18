@@ -30,26 +30,11 @@ func OrderedEndpoints(peer config.PeerConfig) []config.EndpointConfig {
 	endpoints := make([]config.EndpointConfig, 0, len(peer.Endpoints)+len(peer.Relays))
 	for _, endpoint := range peer.Endpoints {
 		address, ok := discovery.DialableHTTPAddress(endpoint.Address)
-		if !ok || !KeepStoredEndpoint(endpoint, peer.DHTPeerID) {
+		if !ok || !keepDialEndpoint(endpoint, peer.DHTPeerID) {
 			continue
 		}
 		endpoint.Address = address
 		endpoints = append(endpoints, endpoint)
-	}
-	seen := map[string]struct{}{}
-	for _, endpoint := range endpoints {
-		seen[endpoint.Address] = struct{}{}
-	}
-	for _, relay := range peer.Relays {
-		address, ok := discovery.DialableHTTPAddress(relay)
-		if !ok {
-			continue
-		}
-		relay = address
-		if _, ok := seen[relay]; ok {
-			continue
-		}
-		endpoints = append(endpoints, config.EndpointConfig{Kind: "relay", Address: relay, NetworkHint: string(routing.ClassifyEndpointNetwork(relay))})
 	}
 	sort.SliceStable(endpoints, func(i, j int) bool {
 		left, right := endpointRank(endpoints[i]), endpointRank(endpoints[j])
@@ -155,13 +140,6 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 const libp2pStage = 3
 
 func endpointStages(peer config.PeerConfig) [][]config.EndpointConfig {
-	exchanged, local, dht := discovery.AddressesFor(peer.ID)
-	if peer.DHTPeerID != "" && peer.DHTPeerID != peer.ID {
-		moreExchanged, moreLocal, moreDHT := discovery.AddressesFor(peer.DHTPeerID)
-		exchanged = append(exchanged, moreExchanged...)
-		local = append(local, moreLocal...)
-		dht = append(dht, moreDHT...)
-	}
 	var preferred, fallback []config.EndpointConfig
 	for _, endpoint := range OrderedEndpoints(peer) {
 		if endpointRank(endpoint) <= 1 {
@@ -170,46 +148,14 @@ func endpointStages(peer config.PeerConfig) [][]config.EndpointConfig {
 			fallback = append(fallback, endpoint)
 		}
 	}
-	exchangedEarly, exchangedLate := splitRank(httpEndpoints(exchanged, "manual"))
-	localEarly, localLate := splitRank(httpEndpoints(local, "manual"))
-	fallback = append(append(fallback, exchangedLate...), localLate...)
 	return [][]config.EndpointConfig{
 		preferred,
-		exchangedEarly,
-		localEarly,
+		nil,
+		nil,
 		nil, // libp2pStage dials relay, hole-punched, and direct streams
 		fallback,
-		httpEndpoints(dht, "relay"),
+		nil, // DHT addresses are one libp2p dial, never an HTTP endpoint
 	}
-}
-
-func splitRank(endpoints []config.EndpointConfig) (early, late []config.EndpointConfig) {
-	for _, endpoint := range endpoints {
-		if endpointRank(endpoint) <= 1 {
-			early = append(early, endpoint)
-		} else {
-			late = append(late, endpoint)
-		}
-	}
-	return early, late
-}
-
-func httpEndpoints(addresses []string, kind string) []config.EndpointConfig {
-	out := make([]config.EndpointConfig, 0, len(addresses))
-	seen := map[string]struct{}{}
-	for _, address := range addresses {
-		httpAddress, ok := discovery.DialableHTTPAddress(address)
-		if !ok {
-			continue
-		}
-		address = httpAddress
-		if _, ok := seen[address]; ok {
-			continue
-		}
-		seen[address] = struct{}{}
-		out = append(out, config.EndpointConfig{Kind: kind, Address: address, NetworkHint: string(routing.ClassifyEndpointNetwork(address))})
-	}
-	return out
 }
 
 func dialStage(ctx context.Context, peer config.PeerConfig, endpoints []config.EndpointConfig, do func(context.Context, string, *http.Client) error) (string, nat.Path, error) {
@@ -224,6 +170,10 @@ func dialStage(ctx context.Context, peer config.PeerConfig, endpoints []config.E
 		byAddress[endpoint.Address] = endpoint
 	}
 	return nat.Race(ctx, candidates, func(ctx context.Context, address string) error {
+		endpoint := byAddress[address]
+		if !keepDialEndpoint(endpoint, peer.DHTPeerID) {
+			return &url.Error{Op: "dial", URL: address, Err: errors.New("refusing to send application data before the peer is authenticated")}
+		}
 		client, err := verifyPinnedPeerCertificateClient(address, peer.APICertificateSHA256)
 		if err != nil {
 			return err

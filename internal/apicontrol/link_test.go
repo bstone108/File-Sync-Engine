@@ -155,7 +155,7 @@ func TestManualLinkPersistsReconnectProfile(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(configPath, []byte(`{
 		"nodeName":"node-b",
-		"api":{"listen":"127.0.0.1:22420","key":"local-api","advertiseURL":"http://10.1.1.5:22420"},
+		"api":{"listen":"127.0.0.1:22420","key":"local-api","advertiseURL":"http://127.0.0.1:22420"},
 		"identity":{"privateKey":"local-private","publicKey":"local-public","encryptionLevel":4},
 		"peers":[],
 		"folders":[]
@@ -224,10 +224,13 @@ func TestManualLinkPersistsReconnectProfile(t *testing.T) {
 	for _, endpoint := range saved.Peers[0].Endpoints {
 		savedAddresses[endpoint.Address] = struct{}{}
 	}
-	for _, want := range []string{server.URL, "http://10.9.9.9:22420", "http://100.64.9.9:22420", "http://203.0.113.50:22420", "http://remote-relay.example:22420"} {
+	for _, want := range []string{server.URL, "http://10.9.9.9:22420", "http://100.64.9.9:22420", "http://203.0.113.50:22420"} {
 		if _, ok := savedAddresses[want]; !ok {
 			t.Fatalf("missing %s in %+v", want, saved.Peers[0].Endpoints)
 		}
+	}
+	if len(saved.Peers[0].Relays) != 1 || saved.Peers[0].Relays[0] != "http://remote-relay.example:22420" {
+		t.Fatalf("relay was stored as an endpoint: endpoints=%+v relays=%v", saved.Peers[0].Endpoints, saved.Peers[0].Relays)
 	}
 }
 

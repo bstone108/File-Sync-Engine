@@ -61,9 +61,16 @@ func resetDialCache() {
 
 func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Context, string, *http.Client) error) (string, error) {
 	targets := libp2pTargets(peer)
+	if id := strings.TrimSpace(peer.DHTPeerID); id != "" {
+		targets = appendEphemeralTargets(targets, id, discovery.TakeDHTAddresses(id))
+		if peer.ID != "" && peer.ID != id {
+			targets = appendEphemeralTargets(targets, id, discovery.TakeDHTAddresses(peer.ID))
+		}
+	}
 	if len(targets) == 0 && strings.TrimSpace(peer.DHTPeerID) != "" {
 		if addrs := discovery.LookupPeerAddrs(ctx, peer.DHTPeerID); len(addrs) > 0 {
-			targets = []libp2pTarget{{id: peer.DHTPeerID, addrs: addrs}}
+			discovery.NoteDHTPeers([]discovery.Peer{{ID: peer.DHTPeerID, Addresses: addrs}})
+			targets = appendEphemeralTargets(nil, peer.DHTPeerID, discovery.TakeDHTAddresses(peer.DHTPeerID))
 		}
 	}
 	if len(targets) == 0 {
@@ -91,6 +98,9 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 			path := session.CurrentPath()
 			if path == "" {
 				path = nat.PathRelay
+			}
+			if remote := session.CurrentRemote(); remote != "" {
+				discovery.MarkAddressAuthenticated(remote)
 			}
 			rememberDial(peer.ID, discovery.StreamBaseURL, session.Client)
 			nat.DefaultPaths.Observe(peer.ID, session.CurrentRemote(), path)
@@ -134,15 +144,13 @@ func libp2pTargets(peer config.PeerConfig) []libp2pTarget {
 	for _, endpoint := range peer.Endpoints {
 		raw = append(raw, endpoint.Address)
 	}
-	exchanged, local, dht := discovery.AddressesFor(peer.ID)
+	exchanged, local, _ := discovery.AddressesFor(peer.ID)
 	raw = append(raw, exchanged...)
 	raw = append(raw, local...)
-	raw = append(raw, dht...)
 	if peer.DHTPeerID != "" && peer.DHTPeerID != peer.ID {
-		moreExchanged, moreLocal, moreDHT := discovery.AddressesFor(peer.DHTPeerID)
+		moreExchanged, moreLocal, _ := discovery.AddressesFor(peer.DHTPeerID)
 		raw = append(raw, moreExchanged...)
 		raw = append(raw, moreLocal...)
-		raw = append(raw, moreDHT...)
 	}
 	seen := map[string]struct{}{}
 	var addrs []string
@@ -165,4 +173,40 @@ func libp2pTargets(peer config.PeerConfig) []libp2pTarget {
 		return nil
 	}
 	return []libp2pTarget{{id: peer.DHTPeerID, addrs: addrs}}
+}
+
+// appendEphemeralTargets adds DHT or lookup addresses for this dial only.
+// HTTP URLs and any address that names a different peer are left out, so a
+// stranger in the DHT is never dialed and never sent application data.
+func appendEphemeralTargets(targets []libp2pTarget, id string, addrs []string) []libp2pTarget {
+	var kept []string
+	seen := map[string]struct{}{}
+	for _, target := range targets {
+		for _, address := range target.addrs {
+			seen[address] = struct{}{}
+		}
+	}
+	for _, address := range addrs {
+		address = strings.TrimSpace(address)
+		if address == "" || strings.HasPrefix(address, "http://") || strings.HasPrefix(address, "https://") {
+			continue
+		}
+		address = CircuitForPeer(address, id)
+		if !KeepPairedAddress(address, id) {
+			continue
+		}
+		if _, ok := seen[address]; ok {
+			continue
+		}
+		seen[address] = struct{}{}
+		kept = append(kept, address)
+	}
+	if len(kept) == 0 {
+		return targets
+	}
+	if len(targets) == 0 {
+		return []libp2pTarget{{id: id, addrs: kept}}
+	}
+	targets[0].addrs = append(targets[0].addrs, kept...)
+	return targets
 }

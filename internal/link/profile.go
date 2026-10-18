@@ -170,10 +170,10 @@ func (p Profile) Endpoints(primary string) []config.EndpointConfig {
 	}
 	add("manual", primary, "")
 	for _, address := range p.Addresses {
+		if address.Kind == "relay" {
+			continue
+		}
 		add(address.Kind, address.Address, address.NetworkHint)
-	}
-	for _, relay := range p.Relays {
-		add("relay", relay, "")
 	}
 	return out
 }
