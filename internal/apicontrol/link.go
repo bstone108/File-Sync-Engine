@@ -98,6 +98,7 @@ func HandleIssuePairCode(configPath string) (api.PairCodeResponse, error) {
 // and that work has to stay off the claim round trip.
 func claimProfile(cfg config.Config, certificate string) link.Profile {
 	return link.Gather(cfg, link.Extras{
+		IPs:               detectLinkIPs(),
 		Relays:            append([]string{}, linkService.Relays()...),
 		DHTPeerID:         linkService.PeerID(),
 		CertificateSHA256: certificate,
