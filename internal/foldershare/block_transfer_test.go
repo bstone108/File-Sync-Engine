@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +44,7 @@ func TestLocalBlockReuseSkipsNetwork(t *testing.T) {
 	payload := []byte("shared-block-body")
 	journal := journalFor(t, "shared", "b.txt", payload)
 	var blockHits int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, pin := pinnedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sync-journal" {
 			http.ServeFile(w, r, journal)
 			return
@@ -53,13 +52,12 @@ func TestLocalBlockReuseSkipsNetwork(t *testing.T) {
 		blockHits++
 		http.Error(w, "block was requested", http.StatusInternalServerError)
 	}))
-	defer server.Close()
 
 	localRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(localRoot, "a.txt"), payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	Reconcile(localConfig(localRoot, server.URL), filepath.Join(t.TempDir(), "local.json"), nil)
+	Reconcile(localConfig(localRoot, server.URL, pin), filepath.Join(t.TempDir(), "local.json"), nil)
 	got, err := os.ReadFile(filepath.Join(localRoot, "b.txt"))
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +77,7 @@ func TestShortBlockIsNotCommitted(t *testing.T) {
 
 	payload := bytes.Repeat([]byte{'Z'}, 32)
 	journal := journalFor(t, "shared", "short.bin", payload)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, pin := pinnedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sync-journal" {
 			http.ServeFile(w, r, journal)
 			return
@@ -87,10 +85,9 @@ func TestShortBlockIsNotCommitted(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("nope"))
 	}))
-	defer server.Close()
 
 	localRoot := t.TempDir()
-	Reconcile(localConfig(localRoot, server.URL), filepath.Join(t.TempDir(), "local.json"), nil)
+	Reconcile(localConfig(localRoot, server.URL, pin), filepath.Join(t.TempDir(), "local.json"), nil)
 	if _, err := os.Stat(filepath.Join(localRoot, "short.bin")); !os.IsNotExist(err) {
 		t.Fatalf("short block was committed: %v", err)
 	}
@@ -109,7 +106,7 @@ func TestRestartFetchesOnlyMissingBlocks(t *testing.T) {
 	journal := journalForEntries(t, "shared", []Entry{entry})
 	var phase int
 	var second []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, pin := pinnedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sync-journal" {
 			http.ServeFile(w, r, journal)
 			return
@@ -124,11 +121,10 @@ func TestRestartFetchesOnlyMissingBlocks(t *testing.T) {
 		}
 		serveBlockPayload(w, r, payload)
 	}))
-	defer server.Close()
 
 	localRoot := t.TempDir()
 	configPath := filepath.Join(t.TempDir(), "local.json")
-	Reconcile(localConfig(localRoot, server.URL), configPath, nil)
+	Reconcile(localConfig(localRoot, server.URL, pin), configPath, nil)
 	if _, err := os.Stat(filepath.Join(localRoot, "wide.bin")); !os.IsNotExist(err) {
 		t.Fatalf("incomplete file was published: %v", err)
 	}
@@ -148,7 +144,7 @@ func TestRestartFetchesOnlyMissingBlocks(t *testing.T) {
 	}
 
 	phase = 1
-	Reconcile(localConfig(localRoot, server.URL), configPath, nil)
+	Reconcile(localConfig(localRoot, server.URL, pin), configPath, nil)
 	got, err := os.ReadFile(filepath.Join(localRoot, "wide.bin"))
 	if err != nil {
 		t.Fatal(err)
@@ -188,17 +184,12 @@ func TestMissingBlockComesFromNextPeer(t *testing.T) {
 		})
 	}
 	var first, second []string
-	serverA := httptest.NewServer(serve(true, &first))
-	defer serverA.Close()
-	serverB := httptest.NewServer(serve(false, &second))
-	defer serverB.Close()
+	serverA, pinA := pinnedServer(t, serve(true, &first))
+	serverB, pinB := pinnedServer(t, serve(false, &second))
 
 	localRoot := t.TempDir()
-	cfg := localConfig(localRoot, serverA.URL)
-	cfg.Peers = append(cfg.Peers, config.PeerConfig{
-		ID: "other", APIKey: "secret",
-		Endpoints: []config.EndpointConfig{{Kind: "manual", Address: serverB.URL}},
-	})
+	cfg := localConfig(localRoot, serverA.URL, pinA)
+	cfg.Peers = append(cfg.Peers, pinnedPeer("other", "secret", serverB.URL, pinB))
 	Reconcile(cfg, filepath.Join(t.TempDir(), "local.json"), nil)
 	got, err := os.ReadFile(filepath.Join(localRoot, "split.bin"))
 	if err != nil {
@@ -289,7 +280,7 @@ func measureEdit(t *testing.T, name string, oldBody, newBody []byte) transferMet
 	journal := journalForEntries(t, "shared", []Entry{entry})
 	var mu sync.Mutex
 	var meter transferMeter
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, pin := pinnedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/sync-journal" {
 			http.ServeFile(w, r, journal)
 			return
@@ -309,13 +300,12 @@ func measureEdit(t *testing.T, name string, oldBody, newBody []byte) transferMet
 		}
 		meter.wireBytes += rec.n
 	}))
-	defer server.Close()
 
 	localRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(localRoot, name), oldBody, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	Reconcile(localConfig(localRoot, server.URL), filepath.Join(t.TempDir(), "local.json"), nil)
+	Reconcile(localConfig(localRoot, server.URL, pin), filepath.Join(t.TempDir(), "local.json"), nil)
 	got, err := os.ReadFile(filepath.Join(localRoot, name))
 	if err != nil {
 		t.Fatal(err)
@@ -326,6 +316,7 @@ func measureEdit(t *testing.T, name string, oldBody, newBody []byte) transferMet
 	if _, err := os.Stat(filepath.Join(localRoot, name+".fse-sync-state")); !os.IsNotExist(err) {
 		t.Fatalf("%s left partial state behind: %v", name, err)
 	}
+	server.Close()
 	return meter
 }
 

@@ -2,7 +2,6 @@ package foldershare
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,7 +26,7 @@ func TestReconcileCopiesNewerRemoteRevision(t *testing.T) {
 	}
 	Reconcile(remoteCfg, remoteConfig, nil)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server, pin := pinnedServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/sync-journal":
 			http.ServeFile(w, r, JournalPath(remoteConfig, "shared"))
@@ -42,7 +41,6 @@ func TestReconcileCopiesNewerRemoteRevision(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer server.Close()
 
 	localRoot := t.TempDir()
 	localConfig := filepath.Join(t.TempDir(), "local.json")
@@ -51,13 +49,7 @@ func TestReconcileCopiesNewerRemoteRevision(t *testing.T) {
 		Folders: []config.FolderConfig{{
 			ID: "shared", Path: localRoot, Enabled: true, Mode: config.ModeSendReceive,
 		}},
-		Peers: []config.PeerConfig{{
-			ID:     "remote",
-			APIKey: "secret",
-			Endpoints: []config.EndpointConfig{{
-				Kind: "manual", Address: server.URL,
-			}},
-		}},
+		Peers: []config.PeerConfig{pinnedPeer("remote", "secret", server.URL, pin)},
 	}
 	Reconcile(localCfg, localConfig, nil)
 	got, err := os.ReadFile(filepath.Join(localRoot, "note.txt"))

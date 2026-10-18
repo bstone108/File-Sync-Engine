@@ -163,7 +163,7 @@ func TestManualLinkPersistsReconnectProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gotOffer pairing.PairOffer
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&gotOffer); err != nil {
 			t.Errorf("decode offer: %v", err)
 		}
@@ -197,6 +197,7 @@ func TestManualLinkPersistsReconnectProfile(t *testing.T) {
 		BootstrapEncryptionLevel:   10,
 		DefaultPeerEncryptionLevel: 4,
 		ReachableAPIURL:            server.URL,
+		APICertificateSHA256:       certPin(server.Certificate().Raw),
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +262,7 @@ func TestLinkRefreshMergesReplacementAddress(t *testing.T) {
 	detectLinkIPs = func() []string { return []string{"10.0.0.4", "100.70.0.4"} }
 	t.Cleanup(func() { detectLinkIPs = previousIPs })
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var push link.LinkPush
 		if err := json.NewDecoder(r.Body).Decode(&push); err != nil {
 			t.Errorf("decode push: %v", err)
@@ -281,9 +282,10 @@ func TestLinkRefreshMergesReplacementAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg.Peers[0].APICertificateSHA256 = certPin(server.Certificate().Raw)
 	cfg.Peers[0].Endpoints = []config.EndpointConfig{
-		{Kind: "manual", Address: "http://127.0.0.1:1", NetworkHint: "local"},
-		{Kind: "manual", Address: server.URL, NetworkHint: "wan"},
+		{Kind: "manual", Address: "https://127.0.0.1:1", NetworkHint: "local", Authenticated: true},
+		{Kind: "manual", Address: server.URL, NetworkHint: "wan", Authenticated: true},
 	}
 	if err := saveTestConfig(redeemerPath, cfg); err != nil {
 		t.Fatal(err)
@@ -341,4 +343,9 @@ func mustPeerConfig(self peeridentity.Identity, name, apiKey, peerKey, peerAPI, 
 	}
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	return string(data)
+}
+
+func certPin(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }

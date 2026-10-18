@@ -62,15 +62,18 @@ func resetDialCache() {
 func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Context, string, *http.Client) error) (string, error) {
 	targets := libp2pTargets(peer)
 	if id := strings.TrimSpace(peer.DHTPeerID); id != "" {
-		targets = appendEphemeralTargets(targets, id, discovery.TakeDHTAddresses(id))
+		_, _, dht := discovery.AddressesFor(id)
+		targets = appendEphemeralTargets(targets, id, dht)
 		if peer.ID != "" && peer.ID != id {
-			targets = appendEphemeralTargets(targets, id, discovery.TakeDHTAddresses(peer.ID))
+			_, _, more := discovery.AddressesFor(peer.ID)
+			targets = appendEphemeralTargets(targets, id, more)
 		}
 	}
 	if len(targets) == 0 && strings.TrimSpace(peer.DHTPeerID) != "" {
 		if addrs := discovery.LookupPeerAddrs(ctx, peer.DHTPeerID); len(addrs) > 0 {
 			discovery.NoteDHTPeers([]discovery.Peer{{ID: peer.DHTPeerID, Addresses: addrs}})
-			targets = appendEphemeralTargets(nil, peer.DHTPeerID, discovery.TakeDHTAddresses(peer.DHTPeerID))
+			_, _, dht := discovery.AddressesFor(peer.DHTPeerID)
+			targets = appendEphemeralTargets(nil, peer.DHTPeerID, dht)
 		}
 	}
 	if len(targets) == 0 {
