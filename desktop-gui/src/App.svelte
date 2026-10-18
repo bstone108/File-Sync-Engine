@@ -1841,7 +1841,7 @@
                 {instance.label}
               {/if}
             </span>
-            <strong class="connection-state" data-state={instance.online ? 'online' : 'offline'} data-testid={instance.local ? 'local-engine-connection' : undefined}>{instance.online ? 'Online' : 'Offline'}</strong>
+            <strong class="connection-state" data-state={instance.local ? localEngineConnectionState : (instance.online ? 'online' : 'offline')} data-testid={instance.local ? 'local-engine-connection' : undefined}>{instance.local ? localEngineConnectionLabel : (instance.online ? 'Online' : 'Offline')}</strong>
           </span>
           <small class="peer-stats"><span data-testid="instance-average-rate">{formatPeerRate(instance.averageBytesPerSecond)}</span> · <span data-testid="instance-pending-bytes">{formatPeerPending(instance.pendingBytes)}</span></small>
         </button>

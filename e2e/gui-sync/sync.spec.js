@@ -6,9 +6,9 @@ const composeFile = path.resolve(__dirname, 'compose.yaml');
 const connectedLabel = /^(LAN|Hole-punched|Direct|Tailscale|Relay|\d+ peers connected)$/;
 
 async function expectConnectedEngine(page) {
-  const button = page.locator('button.quick-switch').filter({ has: page.getByTestId('local-engine-connection') });
+  const button = page.locator('button.peer-row').filter({ has: page.getByTestId('local-engine-connection') });
   await expect(button.getByTestId('local-engine-connection')).toHaveText(connectedLabel);
-  await expect(button.locator('.host-status-metrics')).not.toContainText('unknown');
+  await expect(button.locator('.peer-stats')).not.toContainText('unknown');
 }
 
 async function clickClearOfSidebar(locator) {
