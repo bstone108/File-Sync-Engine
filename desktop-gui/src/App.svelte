@@ -2906,7 +2906,7 @@
   }
   .host-scope-banner .eyebrow,
   .update-banner .eyebrow {
-    color: #b7c4b8;
+    color: #d7e4d8;
   }
   .update-banner {
     width: min(44rem, 100%);
@@ -2923,11 +2923,17 @@
     background: #2a1518;
   }
   .update-banner h2,
-  .update-banner p {
+  .update-banner p,
+  .update-banner button,
+  .update-banner a {
     margin: 0;
+    color: #f4f7f2;
   }
   .host-scope-banner h2,
-  .host-scope-banner p,
+  .host-scope-banner p {
+    margin: 0;
+    color: #f4f7f2;
+  }
   .host-scope-details {
     margin: 0;
   }
@@ -2941,13 +2947,16 @@
     gap: 0.15rem;
     padding: 0.5rem;
     border-radius: 0.5rem;
-    background: var(--surface-2);
-    color: var(--text);
+    background: #101820;
+    color: #f4f7f2;
   }
   .host-scope-details dt {
-    color: var(--muted);
+    color: #d7e4d8;
     font-size: 0.72rem;
     text-transform: uppercase;
+  }
+  .host-scope-details dd {
+    color: #f4f7f2;
   }
   .host-scope-details dd {
     margin: 0;
@@ -3286,8 +3295,12 @@
     padding: 0.25rem 0 0.75rem;
     background: var(--bg);
   }
-  .node-options-bar h2 {
+  .node-options-bar h2,
+  .node-options-bar .eyebrow,
+  .connection-card > h2,
+  .connection-card > .eyebrow {
     margin: 0;
+    color: var(--text);
   }
   .node-options-nav {
     display: grid;

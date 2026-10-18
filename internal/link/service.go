@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"filesyncengine/internal/peeridentity"
+	"filesyncengine/internal/structuredlog"
 )
 
 type issuedCode struct {
@@ -256,10 +257,65 @@ func (s *Service) ServedPayload(namespace string) ([]byte, bool) {
 	return nil, false
 }
 
-// Warmup builds the pairing directory before the first code is issued.
+// Warmup builds the pairing directory and republishes unused codes loaded
+// from appdata. A container restart otherwise keeps the file and still
+// answers redeem with "not found", because the local listener and the DHT
+// provider record only live in memory.
 func (s *Service) Warmup(ctx context.Context) error {
-	_, err := s.directory(ctx)
-	return err
+	if _, err := s.directory(ctx); err != nil {
+		return err
+	}
+	return s.Republish(ctx)
+}
+
+// Republish stores every unused, unexpired code again. A directory that is
+// not ready yet does not delete the on-disk code; the next attempt retries.
+func (s *Service) Republish(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	dir, err := s.directory(ctx)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	now := s.now()
+	type pendingCode struct {
+		code    string
+		payload []byte
+	}
+	pending := make([]pendingCode, 0, len(s.codes))
+	for _, issued := range s.codes {
+		if issued == nil || issued.used || issued.unpublished || len(issued.payload) == 0 || !now.Before(issued.expires) {
+			continue
+		}
+		pending = append(pending, pendingCode{code: issued.code, payload: append([]byte(nil), issued.payload...)})
+	}
+	s.mu.Unlock()
+	var errs []error
+	for _, item := range pending {
+		if ctx != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		publishErr := publishRestored(ctx, dir, Namespace(item.code), item.payload)
+		var partial partialPublishError
+		if publishErr == nil || errors.As(publishErr, &partial) {
+			structuredlog.Event("info", "pairing.republish", "pairing code republished after restart", nil)
+		}
+		if publishErr != nil {
+			errs = append(errs, publishErr)
+			structuredlog.Event("warn", "pairing.republish.failed", "stored pairing code was not republished", map[string]any{"error": publishErr.Error()})
+			continue
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func publishRestored(ctx context.Context, dir Directory, namespace string, payload []byte) error {
+	if all, ok := dir.(*MultiDirectory); ok {
+		return all.PublishAll(ctx, namespace, payload)
+	}
+	return dir.Publish(ctx, namespace, payload)
 }
 
 func (s *Service) directory(ctx context.Context) (Directory, error) {

@@ -2,6 +2,7 @@ package link
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +33,20 @@ func (d *blockingDirectory) Lookup(context.Context, string) ([][]byte, error) {
 
 func (d *blockingDirectory) Unpublish(context.Context, string) error {
 	return nil
+}
+
+func TestLookupOnlyDirectoryIsNotReportedAsPublishFailure(t *testing.T) {
+	dir := NewMultiDirectory(PeerAPIDirectory{})
+	err := dir.Publish(context.Background(), "pair-namespace", []byte("sealed-pairing-record"))
+	if err == nil {
+		t.Fatal("lookup-only publish succeeded")
+	}
+	if strings.Contains(err.Error(), "do not publish") || strings.Contains(err.Error(), "do not store") || strings.Contains(err.Error(), "connected peers") {
+		t.Fatalf("publish error blames connected peers: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not stored") {
+		t.Fatalf("publish error = %v", err)
+	}
 }
 
 func TestPublishReturnsWhenOneDirectoryAccepts(t *testing.T) {

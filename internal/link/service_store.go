@@ -17,7 +17,11 @@ type storedCode struct {
 }
 
 // SetStorePath loads pairing codes from appdata and saves them until they are
-// used or expired. A restart keeps an unused code redeemable.
+// used or expired. The daemon passes the file next to the config, which in
+// Docker is /config/pairing-codes.json on the appdata volume, not /tmp.
+// Loading the file is not enough for another engine to redeem the code: the
+// local listener and the DHT provider record are memory-only and are
+// republished by Warmup.
 func (s *Service) SetStorePath(path string) {
 	if s == nil {
 		return
