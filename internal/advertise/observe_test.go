@@ -395,6 +395,46 @@ func TestPublicDialbackIsSharedUntilTheProbeChanges(t *testing.T) {
 	}
 }
 
+func TestDialbackToALocalInterfaceIsNotRemoteProof(t *testing.T) {
+	if DialbackProvesRemoteReachability("127.0.0.1") || DialbackProvesRemoteReachability("localhost") {
+		t.Fatal("loopback dial-back counted as remote reachability")
+	}
+	if !DialbackProvesRemoteReachability("203.0.113.50") {
+		t.Fatal("public address was treated as a local interface")
+	}
+	if !DialbackProvesRemoteReachability("fse-dialback-no-such.invalid") {
+		t.Fatal("unresolved hostname was treated as a local interface")
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err != nil || ip == nil || ip.IsLoopback() {
+				continue
+			}
+			local = ip.String()
+			break
+		}
+		if local != "" {
+			break
+		}
+	}
+	if local != "" && DialbackProvesRemoteReachability(local) {
+		t.Fatalf("local interface %s counted as remote reachability", local)
+	}
+}
+
 func TestForcePublicDialbackIgnoresACachedFailure(t *testing.T) {
 	t.Cleanup(resetObservations)
 	var calls atomic.Int32

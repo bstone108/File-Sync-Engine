@@ -401,6 +401,30 @@ var (
 	dialbackInflight = map[string]*dialbackFlight{}
 )
 
+// DialbackProvesRemoteReachability reports whether a TCP dial to host can show
+// that another network reached this process. A hostname that only resolves to
+// an address on a local interface just proves the process is listening.
+func DialbackProvesRemoteReachability(host string) bool {
+	host = hostname(host)
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback() && !hostOnInterface(ip)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return true
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || hostOnInterface(ip) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // PublicDialbackOK reports whether a learned public host may be announced.
 // LAN, Tailscale, and empty hosts are left to the caller's other checks.
 // The first lookup dials. Later lookups reuse that result, and an expired

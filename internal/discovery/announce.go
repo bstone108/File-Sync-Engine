@@ -357,12 +357,21 @@ func verifiedPublicLibp2p() bool {
 	return open
 }
 
-// freshLibp2pDialbackCached reports the advertise host when it needs a public
-// dial-back. The boolean is a cached result and may be the pre-listen failure.
-func freshLibp2pDialbackCached() (string, int, bool) {
+func libp2pDialbackTarget() (string, int, bool) {
 	port := PublishedLibp2pPort(Libp2pListenPort())
 	host := advertiseHost(currentAnnounceAPIURL())
-	if host == "" || !advertise.NeedsPublicDialback(host) {
+	if host == "" || !advertise.NeedsPublicDialback(host) || !advertise.DialbackProvesRemoteReachability(host) {
+		return "", port, false
+	}
+	return host, port, true
+}
+
+// freshLibp2pDialbackCached reports the advertise host when a dial-back can
+// prove another network reached this process. The boolean is a cached result
+// and may be the pre-listen failure.
+func freshLibp2pDialbackCached() (string, int, bool) {
+	host, port, ok := libp2pDialbackTarget()
+	if !ok {
 		return "", port, false
 	}
 	return host, port, advertise.PublicDialbackOK(host, port)
@@ -370,11 +379,10 @@ func freshLibp2pDialbackCached() (string, int, bool) {
 
 // freshLibp2pDialback dials the advertise host again. Router construction
 // checks reachability before the socket exists, and that closed result must
-// not stick.
+// not stick. A hostname that only resolves to this machine is not proof.
 func freshLibp2pDialback() (string, int, bool) {
-	port := PublishedLibp2pPort(Libp2pListenPort())
-	host := advertiseHost(currentAnnounceAPIURL())
-	if host == "" || !advertise.NeedsPublicDialback(host) {
+	host, port, ok := libp2pDialbackTarget()
+	if !ok {
 		return "", port, false
 	}
 	return host, port, advertise.ForcePublicDialback(host, port)
