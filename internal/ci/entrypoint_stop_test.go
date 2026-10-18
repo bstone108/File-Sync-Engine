@@ -18,7 +18,7 @@ func TestEntrypointSIGTERMExitsZero(t *testing.T) {
 	if _, err := exec.LookPath("sudo"); err != nil {
 		t.Skip("sudo is not installed")
 	}
-	cmd := startEntrypoint(t, `#!/bin/sh
+	script := `#!/bin/sh
 case "$1" in
 start)
   trap 'exit 2' TERM
@@ -28,18 +28,28 @@ start)
   exit 0
   ;;
 esac
-`)
-	time.Sleep(400 * time.Millisecond)
-	// sudo dies from SIGTERM before the shell trap can exit 0. Signal the
-	// entrypoint shell, which is the process Docker stops.
-	if err := signalEntrypoint(cmd.Process.Pid); err != nil {
-		_ = cmd.Process.Kill()
-		t.Fatal(err)
+`
+	var waitErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmd := startEntrypoint(t, script)
+		time.Sleep(400 * time.Millisecond)
+		// sudo dies from SIGTERM before the shell trap can exit 0. Signal the
+		// entrypoint shell, which is the process Docker stops. A signal that
+		// lands before that trap is installed kills sudo with the signal;
+		// retry instead of treating that race as a failed stop.
+		if err := signalEntrypoint(cmd.Process.Pid); err != nil {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+			waitErr = err
+			continue
+		}
+		waitErr = waitFor(t, cmd, 5*time.Second)
+		if waitErr == nil {
+			return
+		}
+		t.Logf("SIGTERM attempt %d: %v", attempt, waitErr)
 	}
-	waitErr := waitFor(t, cmd, 5*time.Second)
-	if waitErr != nil {
-		t.Fatalf("SIGTERM entrypoint exit = %v", waitErr)
-	}
+	t.Fatalf("SIGTERM entrypoint exit = %v", waitErr)
 }
 
 func TestEntrypointCrashStillExitsNonZero(t *testing.T) {

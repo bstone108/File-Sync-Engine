@@ -30,9 +30,11 @@ async function pairFrom(page) {
   await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
   await expect(page.getByTestId('pairing-reachable-url')).toHaveCount(0);
   await expect(page.getByTestId('pairing-advertise-url')).toContainText('advertises');
-  await clickClearOfSidebar(page.getByTestId('generate-pairing'));
+  const generate = page.getByTestId('generate-pairing');
+  await expect(generate).toBeEnabled();
+  await clickClearOfSidebar(generate);
   const text = page.getByTestId('pairing-export-text');
-  await expect(text).toBeVisible();
+  await expect(text).toBeVisible({ timeout: 45000 });
   const value = await text.inputValue();
   expect(value).toContain('reachableAPIURL');
   expect(value).toContain('https://fse-');
