@@ -110,8 +110,9 @@ test('pairing works when only published ports connect the containers', async ({ 
   await expect(b.getByTestId('device-node-name')).toHaveText('published-b');
 
   let paired = '';
+  let code = '';
   for (let attempt = 0; attempt < 2 && !/paired by code/i.test(paired); attempt += 1) {
-    const code = await showCode(a);
+    code = await showCode(a);
     expect(code).toMatch(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/);
     await expect.poll(() => {
       const raw = engineLog('published-a');
