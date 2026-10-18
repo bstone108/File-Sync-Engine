@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -20,11 +21,29 @@ type tailscaleStatus struct {
 // TailscaleHosts returns this node's Tailscale addresses from the local API.
 // The HTTP endpoint is used when the interface is hidden from the container,
 // and the tailscaled socket is used when the host socket is mounted.
+var (
+	tailscaleCacheMu sync.Mutex
+	tailscaleCached  []string
+	tailscaleCacheAt time.Time
+)
+
 func TailscaleHosts(ctx context.Context) []string {
-	if ips := queryTailscaleLocalAPI(ctx); len(ips) > 0 {
-		return ips
+	tailscaleCacheMu.Lock()
+	if !tailscaleCacheAt.IsZero() && time.Since(tailscaleCacheAt) < time.Minute {
+		out := append([]string(nil), tailscaleCached...)
+		tailscaleCacheMu.Unlock()
+		return out
 	}
-	return queryTailscaleSocket(ctx)
+	tailscaleCacheMu.Unlock()
+	ips := queryTailscaleLocalAPI(ctx)
+	if len(ips) == 0 {
+		ips = queryTailscaleSocket(ctx)
+	}
+	tailscaleCacheMu.Lock()
+	tailscaleCached = append([]string(nil), ips...)
+	tailscaleCacheAt = time.Now()
+	tailscaleCacheMu.Unlock()
+	return append([]string(nil), ips...)
 }
 
 func queryTailscaleSocket(ctx context.Context) []string {

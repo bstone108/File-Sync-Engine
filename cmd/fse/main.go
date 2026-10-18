@@ -512,6 +512,9 @@ func peerPullsWithEndpointObservations(cfg config.Config, folderID string, sidec
 
 func startLocalDiscovery(cfg config.Config) {
 	addresses := []string{}
+	for _, apiURL := range advertise.ProfileURLs(cfg) {
+		addresses = append(addresses, apiURL)
+	}
 	if cfg.API.AdvertiseURL != "" {
 		addresses = append(addresses, cfg.API.AdvertiseURL)
 	}

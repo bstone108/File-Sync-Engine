@@ -13,6 +13,7 @@ import (
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/configops"
+	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/link"
 	"filesyncengine/internal/peeridentity"
 	"filesyncengine/internal/structuredlog"
@@ -48,10 +49,16 @@ func ServedPairingPayload(namespace string) ([]byte, error) {
 
 func gatheredProfile(cfg config.Config, certificate string) link.Profile {
 	extras := append(advertise.ListFromEnv(os.Getenv(advertise.EnvVarList)), advertise.PublishedAPIURLs(cfg)...)
+	extras = append(extras, advertise.ProfileURLs(cfg)...)
+	ips := detectLinkIPs()
+	if !advertise.ExcludeTailscale() {
+		ips = append(ips, advertise.TailscaleHosts(context.Background())...)
+	}
+	relays := append(append([]string{}, linkService.Relays()...), discovery.HelperRelayAddrs()...)
 	return link.Gather(cfg, link.Extras{
-		IPs:               detectLinkIPs(),
+		IPs:               ips,
 		ExtraURLs:         extras,
-		Relays:            linkService.Relays(),
+		Relays:            relays,
 		DHTPeerID:         linkService.PeerID(),
 		CertificateSHA256: certificate,
 	})

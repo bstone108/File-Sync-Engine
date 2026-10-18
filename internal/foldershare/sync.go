@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,8 @@ import (
 
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/link"
+	"filesyncengine/internal/structuredlog"
+	"filesyncengine/internal/transferprogress"
 )
 
 // Entry is one path in a folder's sync journal.
@@ -51,7 +54,10 @@ func Reconcile(cfg config.Config, configPath string, paused func(folderID string
 			continue
 		}
 		if err := reconcileFolder(cfg, configPath, folder); err != nil {
-			fmt.Fprintf(os.Stderr, "folder sync %s: %v\n", folder.ID, err)
+			structuredlog.Event("error", "folder.sync.failed", "folder sync failed", map[string]any{
+				"folder": folder.ID,
+				"error":  err.Error(),
+			})
 		}
 	}
 }
@@ -101,11 +107,19 @@ func reconcileFolder(cfg config.Config, configPath string, folder config.FolderC
 	for _, peer := range peersFor(cfg, folder) {
 		remote, err := fetchRemoteJournal(peer, folder.ID)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "folder sync %s peer %s: %v\n", folder.ID, peer.ID, err)
+			structuredlog.Event("error", "folder.sync.journal_failed", "remote journal was not read", map[string]any{
+				"folder": folder.ID,
+				"peer":   peer.ID,
+				"error":  err.Error(),
+			})
 			continue
 		}
 		if err := applyRemote(peer, folder, byPath, remote); err != nil {
-			fmt.Fprintf(os.Stderr, "folder sync %s apply %s: %v\n", folder.ID, peer.ID, err)
+			structuredlog.Event("error", "folder.sync.apply_failed", "some remote files were not applied", map[string]any{
+				"folder": folder.ID,
+				"peer":   peer.ID,
+				"error":  err.Error(),
+			})
 			continue
 		}
 	}
@@ -145,7 +159,23 @@ func absorbLocal(root, origin string, byPath map[string]Entry) error {
 	return nil
 }
 
+const (
+	transferWorkers   = 4
+	transferChunkSize = 4 << 20
+)
+
+// fileRetryBackoff is the wait before each retry of one file.
+// Other files keep transferring while a file waits.
+var fileRetryBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+
 func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[string]Entry, remote []Entry) error {
+	type transferJob struct {
+		entry  Entry
+		target string
+	}
+	var jobs []transferJob
+	var mu sync.Mutex
+	var applyErr error
 	for _, entry := range remote {
 		if !safeRel(entry.Path) {
 			continue
@@ -160,17 +190,83 @@ func applyRemote(peer config.PeerConfig, folder config.FolderConfig, byPath map[
 		}
 		if entry.Deleted {
 			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-				return err
+				applyErr = errors.Join(applyErr, err)
+				structuredlog.Event("error", "folder.sync.file_failed", "remote delete was not applied", map[string]any{
+					"folder": folder.ID,
+					"peer":   peer.ID,
+					"path":   entry.Path,
+					"error":  err.Error(),
+				})
+				continue
 			}
+			mu.Lock()
 			byPath[entry.Path] = entry
+			mu.Unlock()
 			continue
 		}
-		if err := downloadFile(peer, folder.ID, entry, target); err != nil {
-			return err
-		}
-		byPath[entry.Path] = entry
+		jobs = append(jobs, transferJob{entry: entry, target: target})
 	}
-	return nil
+	var remaining int64
+	for _, job := range jobs {
+		if job.entry.Size > 0 {
+			remaining += job.entry.Size
+		}
+	}
+	transferprogress.Note(peer.ID, 0, remaining)
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, transferWorkers)
+	var remainMu sync.Mutex
+	note := func(delta, left int64) {
+		transferprogress.Note(peer.ID, delta, left)
+	}
+	for _, job := range jobs {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func(job transferJob) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			var got int64
+			err := downloadFile(peer, folder.ID, job.entry, job.target, func(n int64) {
+				got += n
+				remainMu.Lock()
+				remaining -= n
+				if remaining < 0 {
+					remaining = 0
+				}
+				left := remaining
+				remainMu.Unlock()
+				note(n, left)
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				applyErr = errors.Join(applyErr, err)
+				structuredlog.Event("error", "folder.sync.file_failed", "remote file was not applied", map[string]any{
+					"folder": folder.ID,
+					"peer":   peer.ID,
+					"path":   job.entry.Path,
+					"error":  err.Error(),
+				})
+				leftover := job.entry.Size - got
+				if leftover < 0 {
+					leftover = 0
+				}
+				remainMu.Lock()
+				remaining -= leftover
+				if remaining < 0 {
+					remaining = 0
+				}
+				left := remaining
+				remainMu.Unlock()
+				note(0, left)
+				return
+			}
+			byPath[job.entry.Path] = job.entry
+		}(job)
+	}
+	wg.Wait()
+	transferprogress.Note(peer.ID, 0, 0)
+	return applyErr
 }
 
 type scanned struct {
@@ -232,48 +328,149 @@ func hashFile(path string) (string, int64, error) {
 	return hex.EncodeToString(hash.Sum(nil)), n, nil
 }
 
-func downloadFile(peer config.PeerConfig, folderID string, entry Entry, target string) error {
+func downloadFile(peer config.PeerConfig, folderID string, entry Entry, target string, progress func(int64)) error {
+	var last error
+	attempts := 1 + len(fileRetryBackoff)
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			delay := fileRetryBackoff[attempt-1]
+			structuredlog.Event("warn", "folder.sync.file_retry", "retrying file download", map[string]any{
+				"folder":  folderID,
+				"peer":    peer.ID,
+				"path":    entry.Path,
+				"attempt": attempt + 1,
+				"error":   last.Error(),
+			})
+			time.Sleep(delay)
+		}
+		last = downloadFileOnce(peer, folderID, entry, target, progress)
+		if last == nil {
+			return nil
+		}
+	}
+	return last
+}
+
+func downloadFileOnce(peer config.PeerConfig, folderID string, entry Entry, target string, progress func(int64)) error {
+	if entry.Size < 0 {
+		return fmt.Errorf("download %s: negative size", entry.Path)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	tmp := target + ".fse-sync-tmp"
+	if entry.Size == 0 {
+		if err := os.WriteFile(tmp, nil, 0o644); err != nil {
+			return err
+		}
+		return finishDownload(tmp, target, entry)
+	}
+	offset, err := resumeOffset(tmp, entry.Size)
+	if err != nil {
+		return err
+	}
+	for offset < entry.Size {
+		end := offset + transferChunkSize - 1
+		if end >= entry.Size {
+			end = entry.Size - 1
+		}
+		written, err := fetchRange(peer, folderID, entry.Path, tmp, offset, end, entry.Size)
+		if err != nil {
+			return err
+		}
+		if written <= 0 {
+			return fmt.Errorf("download %s: empty response at byte %d", entry.Path, offset)
+		}
+		offset += written
+		if progress != nil {
+			progress(written)
+		}
+	}
+	return finishDownload(tmp, target, entry)
+}
+
+func resumeOffset(tmp string, size int64) (int64, error) {
+	info, err := os.Stat(tmp)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if info.Size() > size {
+		if err := os.Remove(tmp); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	return info.Size(), nil
+}
+
+func fetchRange(peer config.PeerConfig, folderID, rel, tmp string, offset, end, total int64) (int64, error) {
+	var written int64
 	_, err := link.Dial(context.Background(), peer, func(ctx context.Context, base string, client *http.Client) error {
-		endpoint := base + "/v1/folder-file?folder=" + url.QueryEscape(folderID) + "&path=" + url.QueryEscape(entry.Path)
+		endpoint := base + "/v1/folder-file?folder=" + url.QueryEscape(folderID) + "&path=" + url.QueryEscape(rel)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return err
 		}
 		req.Header.Set("X-FSE-API-Key", peer.APIKey)
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, end))
 		resp, err := client.Do(req)
 		if err != nil {
 			return err
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("download %s: %s", entry.Path, resp.Status)
+		full := resp.StatusCode == http.StatusOK && offset == 0
+		if resp.StatusCode != http.StatusPartialContent && !full {
+			return fmt.Errorf("download %s: %s", rel, resp.Status)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		tmp := target + ".fse-sync-tmp"
-		file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		file, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			return err
 		}
-		hash := sha256.New()
-		if _, err := io.Copy(io.MultiWriter(file, hash), resp.Body); err != nil {
-			_ = file.Close()
-			_ = os.Remove(tmp)
+		defer file.Close()
+		if full {
+			if err := file.Truncate(0); err != nil {
+				return err
+			}
+		}
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return err
+		}
+		reader := io.Reader(resp.Body)
+		if !full {
+			reader = io.LimitReader(resp.Body, end-offset+1)
+		}
+		n, err := io.Copy(file, reader)
+		if err != nil {
 			return err
 		}
 		if err := file.Close(); err != nil {
-			_ = os.Remove(tmp)
 			return err
 		}
-		sum := hex.EncodeToString(hash.Sum(nil))
-		if entry.SHA256 != "" && !strings.EqualFold(sum, entry.SHA256) {
-			_ = os.Remove(tmp)
-			return fmt.Errorf("downloaded %s checksum mismatch", entry.Path)
+		written = n
+		if full && total > 0 && n > total {
+			return fmt.Errorf("download %s: received %d bytes, want %d", rel, n, total)
 		}
-		return os.Rename(tmp, target)
+		return nil
 	})
-	return err
+	return written, err
+}
+
+func finishDownload(tmp, target string, entry Entry) error {
+	sum, size, err := hashFile(tmp)
+	if err != nil {
+		return err
+	}
+	if entry.Size > 0 && size != entry.Size {
+		return fmt.Errorf("downloaded %s size %d, want %d", entry.Path, size, entry.Size)
+	}
+	if entry.SHA256 != "" && !strings.EqualFold(sum, entry.SHA256) {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("downloaded %s checksum mismatch", entry.Path)
+	}
+	return os.Rename(tmp, target)
 }
 
 func fetchRemoteJournal(peer config.PeerConfig, folderID string) ([]Entry, error) {

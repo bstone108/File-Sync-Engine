@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/routing"
 )
@@ -88,7 +89,7 @@ func Gather(cfg config.Config, extras Extras) Profile {
 		if !strings.Contains(raw, "://") {
 			normalized = scheme + "://" + net.JoinHostPort(raw, port)
 		}
-		if !keepReachableAddress(normalized) {
+		if !keepReachableAddress(normalized) || skipTailscaleAddress(normalized) {
 			return
 		}
 		if _, ok := seen[normalized]; ok {
@@ -111,7 +112,7 @@ func Gather(cfg config.Config, extras Extras) Profile {
 	}
 	relays := []string{}
 	for _, relay := range normalizeList(extras.Relays) {
-		if !keepReachableAddress(relay) {
+		if !keepReachableAddress(relay) || skipTailscaleAddress(relay) {
 			continue
 		}
 		relays = append(relays, relay)
@@ -144,7 +145,7 @@ func (p Profile) Endpoints(primary string) []config.EndpointConfig {
 	out := []config.EndpointConfig{}
 	add := func(kind, address, hint string) {
 		address = strings.TrimSpace(address)
-		if address == "" || !keepReachableAddress(address) {
+		if address == "" || !keepReachableAddress(address) || skipTailscaleAddress(address) {
 			return
 		}
 		if _, ok := seen[address]; ok {
@@ -189,7 +190,7 @@ func MergeProfiles(current, observed Profile) Profile {
 	seen := map[string]struct{}{}
 	merged := []Address{}
 	for _, address := range append(append([]Address{}, current.Addresses...), observed.Addresses...) {
-		if address.Address == "" || !keepReachableAddress(address.Address) {
+		if address.Address == "" || !keepReachableAddress(address.Address) || skipTailscaleAddress(address.Address) {
 			continue
 		}
 		if _, ok := seen[address.Address]; ok {
@@ -263,4 +264,8 @@ func usableLinkIP(ip net.IP) bool {
 
 func keepReachableAddress(address string) bool {
 	return routing.ClassifyEndpointNetwork(address) != routing.ContainerBridgeNetwork
+}
+
+func skipTailscaleAddress(address string) bool {
+	return advertise.ExcludeTailscale() && advertise.IsTailscaleHost(address)
 }

@@ -84,7 +84,7 @@ func ResolveWithObservations(cfg config.Config, envOverride, detectedHost string
 
 func resolve(cfg config.Config, envOverride, detectedHost string, obs Observations) (string, error) {
 	for _, candidate := range configuredCandidates(cfg, envOverride) {
-		if !HostReachable(candidate) {
+		if skipTailscale(candidate) || !HostReachable(candidate) {
 			continue
 		}
 		return Normalize(candidate, cfg)
@@ -93,12 +93,12 @@ func resolve(cfg config.Config, envOverride, detectedHost string, obs Observatio
 		return Normalize(candidate, cfg)
 	}
 	for _, candidate := range observationURLs(cfg, obs) {
-		if !HostReachable(candidate) {
+		if skipTailscale(candidate) || !HostReachable(candidate) {
 			continue
 		}
 		return Normalize(candidate, cfg)
 	}
-	if strings.TrimSpace(detectedHost) != "" && HostReachable(detectedHost) {
+	if strings.TrimSpace(detectedHost) != "" && !skipTailscale(detectedHost) && HostReachable(detectedHost) {
 		return Normalize(detectedHost, cfg)
 	}
 	if PublishedAPIPort() > 0 {
@@ -178,6 +178,9 @@ func SelectDetected(ips []string) string {
 		}
 		switch {
 		case isTailscaleIP(ip):
+			if ExcludeTailscale() {
+				continue
+			}
 			vpn = append(vpn, ip.String())
 		case ip.IsPrivate():
 			lan = append(lan, ip.String())
@@ -230,10 +233,13 @@ func publishedPortCandidate(detectedHost string) (string, bool) {
 		return "", false
 	}
 	host := strings.TrimSpace(detectedHost)
-	if host == "" || !HostReachable(host) {
+	if host == "" || !HostReachable(host) || skipTailscale(host) {
+		if ExcludeTailscale() {
+			return "", false
+		}
 		host = SelectDetected(tailscaleIPs(context.Background()))
 	}
-	if host == "" || !HostReachable(host) {
+	if host == "" || !HostReachable(host) || skipTailscale(host) {
 		return "", false
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port)), true
@@ -338,6 +344,16 @@ func addrIP(addr net.Addr) net.IP {
 	default:
 		return nil
 	}
+}
+
+// IsTailscaleHost reports CGNAT 100.64.0.0/10 and the Tailscale IPv6 ULA.
+func IsTailscaleHost(host string) bool {
+	ip := net.ParseIP(hostname(host))
+	return ip != nil && isTailscaleIP(ip)
+}
+
+func skipTailscale(raw string) bool {
+	return ExcludeTailscale() && IsTailscaleHost(raw)
 }
 
 func isTailscaleIP(ip net.IP) bool {

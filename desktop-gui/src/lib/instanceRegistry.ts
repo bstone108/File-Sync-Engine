@@ -338,6 +338,100 @@ export function formatTransferByteSummary(bytes: number | undefined): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
 }
 
+export type LocalPeerLinkSummary = {
+  connectionState: ManagedDaemonConnectionState;
+  label: string;
+  pairingState: PeerPairingNegotiationState;
+  pairingDetail: string;
+  receiveRemainingBytes: number;
+  sendRemainingBytes: number;
+  averageReceiveBytesPerSecond: number;
+  averageSendBytesPerSecond: number;
+  statusSummary: string;
+};
+
+type LocalPeerSnapshot = {
+  id?: string;
+  endpoint?: string;
+  endpoints?: string[];
+  connectionPath?: string;
+  receiveRemainingBytes?: number;
+  sendRemainingBytes?: number;
+  averageReceiveBytesPerSecond?: number;
+  averageSendBytesPerSecond?: number;
+};
+
+function peerPathLabel(path: string): string {
+  switch (path) {
+    case 'lan':
+      return 'LAN';
+    case 'hole-punched':
+      return 'Hole-punched';
+    case 'direct':
+      return 'Direct';
+    case 'tailscale':
+      return 'Tailscale';
+    case 'relay':
+      return 'Relay';
+    default:
+      return path;
+  }
+}
+
+function peerEndpointText(peer: LocalPeerSnapshot): string {
+  if (peer.endpoints && peer.endpoints.length > 0) {
+    return peer.endpoints.join(', ');
+  }
+  return peer.endpoint?.trim() || 'no saved endpoint';
+}
+
+// summarizeLocalPeerLink describes the configured peers, not the local API socket.
+// A live local API with an unreachable peer is "Peer unreachable", with zero rates.
+export function summarizeLocalPeerLink(peers: LocalPeerSnapshot[]): LocalPeerLinkSummary {
+  const sum = (pick: (peer: LocalPeerSnapshot) => number | undefined) => peers.reduce((total, peer) => total + (pick(peer) ?? 0), 0);
+  if (peers.length === 0) {
+    return {
+      connectionState: 'online',
+      label: 'Online',
+      pairingState: 'discovered',
+      pairingDetail: 'No peers configured',
+      receiveRemainingBytes: 0,
+      sendRemainingBytes: 0,
+      averageReceiveBytesPerSecond: 0,
+      averageSendBytesPerSecond: 0,
+      statusSummary: 'Local engine API is up. No peers are configured.'
+    };
+  }
+  const connected = peers.filter((peer) => Boolean(peer.connectionPath));
+  if (connected.length === 0) {
+    const saved = peers.map((peer) => `${peer.id ?? 'peer'}: ${peerEndpointText(peer)}`).join('; ');
+    return {
+      connectionState: 'failed',
+      label: 'Peer unreachable',
+      pairingState: 'offline',
+      pairingDetail: saved,
+      receiveRemainingBytes: 0,
+      sendRemainingBytes: 0,
+      averageReceiveBytesPerSecond: 0,
+      averageSendBytesPerSecond: 0,
+      statusSummary: `Peer unreachable. Saved paths: ${saved}.`
+    };
+  }
+  const path = connected[0].connectionPath ?? '';
+  const relay = connected.every((peer) => peer.connectionPath === 'relay');
+  return {
+    connectionState: 'online',
+    label: connected.length === 1 ? peerPathLabel(path) : `${connected.length} peers connected`,
+    pairingState: relay ? 'waiting-on-relay' : 'direct-connection-established',
+    pairingDetail: connected.map((peer) => `${peer.id ?? 'peer'} ${peerPathLabel(peer.connectionPath ?? '')}`).join(', '),
+    receiveRemainingBytes: sum((peer) => peer.receiveRemainingBytes),
+    sendRemainingBytes: sum((peer) => peer.sendRemainingBytes),
+    averageReceiveBytesPerSecond: sum((peer) => peer.averageReceiveBytesPerSecond),
+    averageSendBytesPerSecond: sum((peer) => peer.averageSendBytesPerSecond),
+    statusSummary: `Connected. ${connected.map((peer) => `${peer.id ?? 'peer'} via ${peerPathLabel(peer.connectionPath ?? '')}`).join(', ')}.`
+  };
+}
+
 export function buildReadableHostStatusMetrics(instance: ManagedDaemonInstance): ManagedDaemonTransferStatusMetrics[] {
   return [
     { label: 'Online/offline', value: formatConnectionStateLabel(instance.connectionState) },

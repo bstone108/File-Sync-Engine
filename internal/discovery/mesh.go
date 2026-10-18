@@ -131,6 +131,36 @@ func SetIdentityRelays(addrs []string) {
 	mesh.identityRelays = append([]string(nil), addrs...)
 }
 
+// HelperRelayAddrs returns same-identity helper relays and this node's circuit
+// addresses. The public bootstrap list is not copied into reconnect profiles.
+func HelperRelayAddrs() []string {
+	mesh.mu.Lock()
+	relays := append([]string(nil), mesh.identityRelays...)
+	mesh.mu.Unlock()
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(relays))
+	add := func(addr string) {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			return
+		}
+		if _, ok := seen[addr]; ok {
+			return
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	for _, addr := range relays {
+		add(addr)
+	}
+	for _, addr := range SharedListenAddrs() {
+		if strings.Contains(addr, "p2p-circuit") {
+			add(addr)
+		}
+	}
+	return out
+}
+
 // OrderedRelays returns same-identity helpers, then public relays.
 func OrderedRelays() []string {
 	mesh.mu.Lock()

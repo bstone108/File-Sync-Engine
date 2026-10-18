@@ -11,7 +11,7 @@ Traversal is on by default. `discovery.nat.disabled` or `FSE_NAT_TRAVERSAL=0` tu
 - UPnP and NAT-PMP map the published API port on the local gateway when the gateway allows it.
 - STUN learns the external IP. The default servers are `stun.l.google.com:19302` and `stun.cloudflare.com:3478`. The mapped STUN port belongs to the query socket, so the API port still comes from the published port or from UPnP/NAT-PMP.
 
-Direct, LAN, and Tailscale addresses are still tried. If the libp2p stream fails, pairing falls back to the HTTPS API URL in the provider record.
+Direct, LAN, and Tailscale addresses are still tried. A reconnect profile keeps every usable path: LAN, public addresses learned from STUN, AutoNAT, or a NAT mapping, Tailscale, and same-identity relay addresses. Dialing uses the saved profile first, then exchanged and LAN addresses, then a DHT address. `FSE_ADVERTISE_EXCLUDE_TAILSCALE=1` leaves Tailscale and CGNAT `100.64.0.0/10` (and the Tailscale IPv6 prefix) out of advertisement, libp2p announcements, and new reconnect profiles when those addresses are not actually reachable. If the libp2p stream fails, pairing falls back to the HTTPS API URL in the provider record.
 
 Dialing races the candidates. A relay success is kept only until a LAN, hole-punched, or direct path connects. `/v1/peers` reports `connectionPath` as `lan`, `hole-punched`, `direct`, `tailscale`, or `relay`. The peers page shows that path.
 

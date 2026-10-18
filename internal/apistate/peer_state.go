@@ -15,6 +15,7 @@ import (
 	"filesyncengine/internal/schemaversion"
 	"filesyncengine/internal/snapshotcontrol"
 	"filesyncengine/internal/state"
+	"filesyncengine/internal/transferprogress"
 )
 
 // StateBuildOptions supplies the daemon API state projection inputs that used
@@ -125,13 +126,23 @@ func BuildState(opts StateBuildOptions) api.State {
 
 // BuildPeerState projects one configured peer into the daemon API state.
 func BuildPeerState(cfg config.Config, peer config.PeerConfig, store state.JSONStore) api.PeerState {
+	endpoints := peerEndpointList(peer)
 	endpoint := ""
-	if len(peer.Endpoints) > 0 {
-		endpoint = peer.Endpoints[0].Kind + ":" + peer.Endpoints[0].Address
-	} else if len(peer.Addresses) > 0 {
-		endpoint = "manual:" + peer.Addresses[0]
+	if len(endpoints) > 0 {
+		endpoint = endpoints[0]
 	}
-	peerState := api.PeerState{ID: peer.ID, Status: "configured", Endpoint: endpoint, ConnectionPath: peerConnectionPath(peer), Transfer: PeerTransferState(cfg.Transfer, peer), NetworkDiagnostics: PeerNetworkDiagnostics(peer, cfg)}
+	progress := transferprogress.Get(peer.ID)
+	peerState := api.PeerState{
+		ID:                           peer.ID,
+		Status:                       "configured",
+		Endpoint:                     endpoint,
+		Endpoints:                    endpoints,
+		ConnectionPath:               peerConnectionPath(peer),
+		ReceiveRemainingBytes:        progress.RemainingBytes,
+		AverageReceiveBytesPerSecond: progress.BytesPerSecond,
+		Transfer:                     PeerTransferState(cfg.Transfer, peer),
+		NetworkDiagnostics:           PeerNetworkDiagnostics(peer, cfg),
+	}
 	if statuses, err := store.PeerFolderStatuses(peer.ID); err == nil {
 		peerState.Metadata = PeerMetadataState(statuses)
 	}
@@ -149,6 +160,33 @@ func MaintenanceEnabled(cfg config.Config) bool {
 		}
 	}
 	return false
+}
+
+func peerEndpointList(peer config.PeerConfig) []string {
+	out := make([]string, 0, len(peer.Endpoints)+len(peer.Addresses)+len(peer.Relays))
+	for _, endpoint := range peer.Endpoints {
+		if strings.TrimSpace(endpoint.Address) == "" {
+			continue
+		}
+		kind := endpoint.Kind
+		if kind == "" {
+			kind = "manual"
+		}
+		out = append(out, kind+":"+endpoint.Address)
+	}
+	if len(out) == 0 {
+		for _, address := range peer.Addresses {
+			if strings.TrimSpace(address) != "" {
+				out = append(out, "manual:"+address)
+			}
+		}
+	}
+	for _, relay := range peer.Relays {
+		if strings.TrimSpace(relay) != "" {
+			out = append(out, "relay:"+relay)
+		}
+	}
+	return out
 }
 
 func peerConnectionPath(peer config.PeerConfig) string {
