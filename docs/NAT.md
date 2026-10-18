@@ -6,14 +6,14 @@ Traversal is on by default. `discovery.nat.disabled` or `FSE_NAT_TRAVERSAL=0` tu
 
 - Public DHT discovery stays enabled, and it is only a backup. The lookup order is documented in `docs/CONFIG.md`: saved connection details, peer exchange and same-identity connection details, LAN discovery, then DHT.
 - The node stays private, and AutoRelay reserves a relay, until a TCP dial-back of the libp2p port succeeds. A published container port or a LAN address is not that proof. After the dial-back, the node answers DHT queries.
-- DCUtR hole punching runs over a relayed connection and replaces it with a direct path when the punch succeeds.
-- Circuit relay v2 and autorelay. Same-identity helpers are tried before public relays.
-- UPnP and NAT-PMP map the published API port on the local gateway when the gateway allows it.
+- DCUtR hole punching runs over a relayed connection and replaces it with a direct path when the punch succeeds. Success and failure are logged as `libp2p.dcutr.ok` and `libp2p.dcutr.failed`.
+- Circuit relay v2 and autorelay. Same-identity helpers are tried before public relays. Public IPFS/kubo relays are relay v2 limited circuits (about 128 KiB and 2 minutes). Those circuits are used for DCUtR, pairing, and `/v1/sync-journal` only. File bytes wait for a direct or hole-punched path, then for an unlimited relay: a same-identity helper or a relay configured with `discovery.nat.relayPeers` / `FSE_RELAY_PEERS`. The default bootstrap list is not that fallback.
+- UPnP and NAT-PMP map the published API port and the libp2p port on the local gateway when the gateway allows it. Each attempt is logged (`nat.pmp.ok` / `nat.pmp.failed`, `nat.upnp.ok` / `nat.upnp.failed`, and `nat.mapping.ok` / `nat.mapping.failed`).
 - STUN learns the external IP. The default servers are `stun.l.google.com:19302` and `stun.cloudflare.com:3478`. The mapped STUN port belongs to the query socket, so the API port still comes from the published port or from UPnP/NAT-PMP.
 
 Direct, LAN, and Tailscale addresses are still tried. A reconnect profile keeps every usable path: LAN, public addresses learned from STUN, AutoNAT, or a NAT mapping, Tailscale, and same-identity relay addresses. Dialing uses the saved LAN and Tailscale profile first, then exchanged and LAN addresses, then a libp2p stream (relay, hole punch, or direct), and only then an authenticated public API URL. A literal public IP that the paired peer did not authenticate is removed on startup. `FSE_ADVERTISE_EXCLUDE_TAILSCALE=1` leaves Tailscale and CGNAT `100.64.0.0/10` (and the Tailscale IPv6 prefix) out of advertisement, libp2p announcements, and new reconnect profiles when those addresses are not actually reachable. If the libp2p stream fails, pairing falls back to the HTTPS API URL in the provider record.
 
-Dialing races the candidates. A relay success is kept only until a LAN, hole-punched, or direct path connects. `/v1/peers` reports `connectionPath` as `lan`, `hole-punched`, `direct`, `tailscale`, or `relay`. The peers page shows that path.
+Dialing races the candidates. A relay success is kept only until a LAN, hole-punched, or direct path connects. `/v1/peers` reports `connectionPath` as `lan`, `hole-punched`, `direct`, `tailscale`, `relay`, or `limited-relay`. `limited-relay` means the only path is a limited public circuit, so file transfer is not using it. The peers page shows that path and a `networkDiagnostics` entry with code `limited-relay`.
 
 ## Public infrastructure
 
@@ -30,7 +30,7 @@ The CI namespace test puts two engines behind separate NATs. The only shared hos
 
 An instance that AutoNAT marks public, or that has a UPnP/NAT-PMP mapping, helps other instances in the same identity group:
 
-- It serves circuit relay v2. Reservations and circuits are limited to libp2p peer IDs in an enabled identity group. Code-paired peers outside the group are refused. The default cap is 32 reservations, 4 circuits, and 1 MiB in each direction before the relay resets the circuit. `discovery.nat.maxRelayReservations` sets the reservation cap, up to 128.
+- It serves circuit relay v2 with no per-circuit data limit, so a punched path that fails can still move file bytes through a publicly reachable same-identity engine. Reservations and circuits are limited to libp2p peer IDs in an enabled identity group. Code-paired peers outside the group are refused. The default cap is 32 reservations and 4 circuits. `discovery.nat.maxRelayReservations` sets the reservation cap, up to 128.
 - Hole punching is coordinated on that relay. A successful punch is reported as `hole-punched` and new streams leave the relay.
 - `/fse/observe/1.0.0` answers same-identity peers with the address the helper observed and with the helper's own relay address.
 

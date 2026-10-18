@@ -13,6 +13,7 @@ import (
 
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/routing"
+	"filesyncengine/internal/structuredlog"
 	"github.com/huin/goupnp/dcps/internetgateway2"
 	natpmp "github.com/jackpal/go-nat-pmp"
 )
@@ -195,9 +196,16 @@ func persistRefreshedURL(path string) (string, error) {
 	return cfg.API.AdvertiseURL, applyErr
 }
 
-// StartAutoDetect asks the local gateway for a port mapping onto the published
-// API port. Failure leaves the other detectors in place.
-func StartAutoDetect(ctx context.Context, cfg config.Config) {
+type portMapping struct {
+	service  string
+	internal int
+	external int
+}
+
+// portMappingTargets is the API port and the libp2p port. The names match
+// FSE_LIBP2P_PORT and FSE_PUBLISHED_LIBP2P_PORT. This package does not import
+// discovery.
+func portMappingTargets(cfg config.Config) []portMapping {
 	internal := listenPortNumber(cfg.API.Listen)
 	if internal == 0 {
 		internal = 22420
@@ -206,18 +214,65 @@ func StartAutoDetect(ctx context.Context, cfg config.Config) {
 	if external == 0 {
 		external = internal
 	}
+	targets := []portMapping{{service: "api", internal: internal, external: external}}
+	libp2pInternal := envPort("FSE_LIBP2P_PORT", 22421)
+	libp2pExternal := envPort("FSE_PUBLISHED_LIBP2P_PORT", libp2pInternal)
+	if libp2pInternal != internal || libp2pExternal != external {
+		targets = append(targets, portMapping{service: "libp2p", internal: libp2pInternal, external: libp2pExternal})
+	}
+	return targets
+}
+
+func envPort(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 1 || port > 65535 {
+		return fallback
+	}
+	return port
+}
+
+// StartAutoDetect asks the local gateway to map the API port and the libp2p
+// port. Each NAT-PMP and UPnP attempt is logged. Failure leaves STUN and the
+// other detectors in place.
+func StartAutoDetect(ctx context.Context, cfg config.Config) {
+	targets := portMappingTargets(cfg)
 	go func() {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		detectCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		detectCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		defer cancel()
-		ip, port, err := mapExternalPort(detectCtx, internal, external)
-		if err == nil && ip != "" && port != 0 {
-			NoteNAT(ip, port)
-			if mappingHook != nil {
-				mappingHook(ip, port)
+		apiMapped := false
+		for _, target := range targets {
+			ip, port, err := mapExternalPort(detectCtx, target.internal, target.external)
+			fields := map[string]any{
+				"service":  target.service,
+				"internal": target.internal,
+				"external": target.external,
 			}
+			if err == nil && ip != "" && port != 0 {
+				fields["ip"] = ip
+				fields["mapped"] = port
+				structuredlog.Event("info", "nat.mapping.ok", "gateway mapped a local port", fields)
+				if target.service == "api" {
+					NoteNAT(ip, port)
+					apiMapped = true
+				}
+				if mappingHook != nil {
+					mappingHook(ip, port)
+				}
+				continue
+			}
+			if err != nil {
+				fields["error"] = err.Error()
+			}
+			structuredlog.Event("warn", "nat.mapping.failed", "gateway did not map a local port", fields)
+		}
+		if apiMapped {
 			return
 		}
 		stunIP, _, stunErr := stunDiscover(detectCtx)
@@ -397,7 +452,25 @@ func discoverMappedPort(ctx context.Context, internalPort, externalPort int) (st
 	return upnpMap(ctx, internalPort, externalPort)
 }
 
+func logMappingAttempt(protocol string, internalPort, externalPort int, ip string, port int, err error) {
+	fields := map[string]any{"internal": internalPort, "external": externalPort}
+	if err != nil {
+		fields["error"] = err.Error()
+		structuredlog.Event("warn", "nat."+protocol+".failed", protocol+" port mapping failed", fields)
+		return
+	}
+	fields["ip"] = ip
+	fields["mapped"] = port
+	structuredlog.Event("info", "nat."+protocol+".ok", protocol+" port mapping succeeded", fields)
+}
+
 func natPMPMap(ctx context.Context, internalPort, externalPort int) (string, int, error) {
+	ip, port, err := natPMPMapOnce(ctx, internalPort, externalPort)
+	logMappingAttempt("pmp", internalPort, externalPort, ip, port, err)
+	return ip, port, err
+}
+
+func natPMPMapOnce(ctx context.Context, internalPort, externalPort int) (string, int, error) {
 	if err := validMappingPorts(internalPort, externalPort); err != nil {
 		return "", 0, err
 	}
@@ -445,6 +518,12 @@ func natPMPMap(ctx context.Context, internalPort, externalPort int) (string, int
 }
 
 func upnpMap(ctx context.Context, internalPort, externalPort int) (string, int, error) {
+	ip, port, err := upnpMapOnce(ctx, internalPort, externalPort)
+	logMappingAttempt("upnp", internalPort, externalPort, ip, port, err)
+	return ip, port, err
+}
+
+func upnpMapOnce(ctx context.Context, internalPort, externalPort int) (string, int, error) {
 	if err := validMappingPorts(internalPort, externalPort); err != nil {
 		return "", 0, err
 	}

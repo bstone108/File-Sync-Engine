@@ -111,7 +111,22 @@ func sharedHost() host.Host {
 
 func registerAPIStream(h host.Host, handler http.Handler) {
 	h.SetStreamHandler(protocol.ID(APIProtocol), func(stream network.Stream) {
-		serveAPIStream(stream, handler)
+		serveAPIStream(stream, rejectLimitedBulk(handler))
+	})
+}
+
+func rejectLimitedBulk(next http.Handler) http.Handler {
+	if next == nil {
+		return nil
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		stream, ok := streamFromContext(r.Context())
+		if ok && stream != nil && stream.Conn() != nil && stream.Conn().Stat().Limited && !AllowsLimitedAPI(r.URL.Path) {
+			w.Header().Set("X-FSE-Limited-Relay", "1")
+			http.Error(w, "limited relay cannot carry file data", http.StatusServiceUnavailable)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -124,7 +139,16 @@ func serveAPIStream(stream network.Stream, handler http.Handler) {
 	}
 	defer stream.Close()
 	ln := newOnceListener(streamConn{Stream: stream})
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 30 * time.Second}
+	srv := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 30 * time.Second,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if found, ok := streamFromConn(c); ok {
+				return context.WithValue(ctx, streamContextKey, found)
+			}
+			return ctx
+		},
+	}
 	// Serve accepts the one connection, then blocks until that connection
 	// closes. Returning here releases the stream instead of leaking a handler
 	// goroutine per block.
@@ -138,6 +162,8 @@ type StreamSession struct {
 	Client *http.Client
 	Remote string
 	Path   nat.Path
+	live   *nat.Path
+	remote *string
 }
 
 // DialStream connects to peerID using only the supplied multiaddrs and returns
@@ -172,20 +198,45 @@ func DialStream(ctx context.Context, peerID string, addrs []string) (StreamSessi
 	if err := h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: parsed}); err != nil {
 		return StreamSession{}, err
 	}
-	remote := ""
-	conns := h.Network().ConnsToPeer(pid)
-	if len(conns) > 0 && conns[0].RemoteMultiaddr() != nil {
-		remote = conns[0].RemoteMultiaddr().String()
-	}
-	path := nat.Classify(remote)
-	if path == "" {
-		path = nat.PathRelay
-	}
-	return StreamSession{
-		Client: &http.Client{Transport: streamRoundTripper{host: h, peer: pid}},
+	path, remote := peerSessionPath(h, pid)
+	live := path
+	session := StreamSession{
 		Remote: remote,
 		Path:   path,
-	}, nil
+		live:   &live,
+		remote: &remote,
+	}
+	session.Client = &http.Client{Transport: streamRoundTripper{host: h, peer: pid, live: session.live, remote: session.remote}}
+	return session, nil
+}
+
+func peerSessionPath(h host.Host, pid peer.ID) (nat.Path, string) {
+	if conn := unlimitedPeerConn(h, pid); conn != nil {
+		return connPath(conn)
+	}
+	conns := h.Network().ConnsToPeer(pid)
+	for _, conn := range conns {
+		if conn != nil {
+			return connPath(conn)
+		}
+	}
+	return nat.PathRelay, ""
+}
+
+// CurrentPath is the path of the stream that carried the last request.
+func (s StreamSession) CurrentPath() nat.Path {
+	if s.live != nil && *s.live != "" {
+		return *s.live
+	}
+	return s.Path
+}
+
+// CurrentRemote is the multiaddr of the stream that carried the last request.
+func (s StreamSession) CurrentRemote() string {
+	if s.remote != nil && *s.remote != "" {
+		return *s.remote
+	}
+	return s.Remote
 }
 
 // connectRelayHop dials the relay named by a circuit address before the
@@ -215,9 +266,37 @@ type streamError string
 
 func (e streamError) Error() string { return string(e) }
 
+type streamContextKeyType struct{}
+
+var streamContextKey = streamContextKeyType{}
+
+func streamFromConn(c net.Conn) (network.Stream, bool) {
+	for c != nil {
+		switch conn := c.(type) {
+		case *trackConn:
+			c = conn.Conn
+		case streamConn:
+			return conn.Stream, conn.Stream != nil
+		default:
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
+func streamFromContext(ctx context.Context) (network.Stream, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	stream, ok := ctx.Value(streamContextKey).(network.Stream)
+	return stream, ok && stream != nil
+}
+
 type streamRoundTripper struct {
-	host host.Host
-	peer peer.ID
+	host   host.Host
+	peer   peer.ID
+	live   *nat.Path
+	remote *string
 }
 
 func (t streamRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -228,13 +307,24 @@ func (t streamRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// A relayed connection is limited. Application streams are refused on it
-	// until the dialer opts in, which is how a NAT'd peer reaches another.
-	ctx = network.WithAllowLimitedConn(ctx, "fse-api")
+	path := ""
+	if req.URL != nil {
+		path = req.URL.Path
+	}
+	if AllowsLimitedAPI(path) {
+		return t.exchange(apiStreamContext(ctx, path), req)
+	}
+	return openBulk(ctx, t.host, t.peer, func(ctx context.Context) (*http.Response, error) {
+		return t.exchange(ctx, req)
+	})
+}
+
+func (t streamRoundTripper) exchange(ctx context.Context, req *http.Request) (*http.Response, error) {
 	stream, err := t.host.NewStream(ctx, t.peer, protocol.ID(APIProtocol))
 	if err != nil {
 		return nil, err
 	}
+	noteResponsePath(t.live, t.remote, stream)
 	_ = stream.SetDeadline(time.Now().Add(30 * time.Second))
 	outbound := req.Clone(ctx)
 	if outbound == nil {
@@ -251,6 +341,11 @@ func (t streamRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	if err != nil {
 		_ = stream.Reset()
 		return nil, err
+	}
+	if limitedRelayResponse(resp) {
+		_ = resp.Body.Close()
+		nat.DefaultPaths.ObserveLimited(t.peer.String(), "")
+		return nil, ErrLimitedRelay
 	}
 	resp.Body = &streamBody{ReadCloser: resp.Body, stream: stream}
 	return resp, nil

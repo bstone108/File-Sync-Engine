@@ -1,16 +1,20 @@
 package advertise
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/structuredlog"
 )
 
 func TestResolveUsesVerifiedGUIHostWhenBridgeIsTheOnlyLocalAddress(t *testing.T) {
@@ -214,6 +218,58 @@ func TestGatewayFromProcNetRoute(t *testing.T) {
 	got := gatewayFromRouteTable(table)
 	if got == nil || !got.Equal(net.ParseIP("192.168.1.1")) {
 		t.Fatalf("gateway = %v", got)
+	}
+}
+
+func TestPortMappingTargetsIncludeLibp2pAndLogFailures(t *testing.T) {
+	t.Setenv("FSE_LIBP2P_PORT", "22421")
+	t.Setenv("FSE_PUBLISHED_LIBP2P_PORT", "32421")
+	got := portMappingTargets(config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}})
+	if len(got) != 2 || got[0].service != "api" || got[0].internal != 22420 || got[1].service != "libp2p" || got[1].internal != 22421 || got[1].external != 32421 {
+		t.Fatalf("targets = %+v", got)
+	}
+	structuredlog.Reset()
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		structuredlog.Reset()
+	})
+	if _, _, err := natPMPMap(context.Background(), 0, 22420); err == nil || !strings.Contains(buf.String(), "nat.pmp.failed") {
+		t.Fatalf("pmp log err=%v body=%s", err, buf.String())
+	}
+	buf.Reset()
+	previous := mapExternalPort
+	var mu sync.Mutex
+	var ports [][2]int
+	mapExternalPort = func(_ context.Context, internal, external int) (string, int, error) {
+		mu.Lock()
+		ports = append(ports, [2]int{internal, external})
+		mu.Unlock()
+		return "", 0, errors.New("no gateway")
+	}
+	t.Cleanup(func() { mapExternalPort = previous })
+	stunWas := stunDiscover
+	stunDiscover = func(context.Context) (string, int, error) { return "", 0, errors.New("no stun") }
+	t.Cleanup(func() { stunDiscover = stunWas })
+	StartAutoDetect(context.Background(), config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(ports)
+		mu.Unlock()
+		if n >= 2 && strings.Contains(buf.String(), "nat.mapping.failed") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ports) != 2 || ports[0] != [2]int{22420, 22420} || ports[1] != [2]int{22421, 32421} {
+		t.Fatalf("mapped ports = %+v log=%s", ports, buf.String())
+	}
+	if !strings.Contains(buf.String(), `"service":"api"`) || !strings.Contains(buf.String(), `"service":"libp2p"`) {
+		t.Fatalf("log = %s", buf.String())
 	}
 }
 

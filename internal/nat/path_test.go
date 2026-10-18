@@ -90,6 +90,25 @@ func TestRaceKeepsRelayWhenDirectFails(t *testing.T) {
 	}
 }
 
+func TestObserveLimitedReplacesRelayOnly(t *testing.T) {
+	reg := &Registry{}
+	reg.Observe("neko", "/p2p-circuit", PathRelay)
+	reg.ObserveLimited("neko", "")
+	obs, ok := reg.Active("neko")
+	if !ok || obs.Path != PathLimitedRelay || obs.Address != "/p2p-circuit" {
+		t.Fatalf("limited = %+v ok=%v", obs, ok)
+	}
+	reg.Observe("neko", "192.168.1.20:22420", PathLAN)
+	reg.ObserveLimited("neko", "")
+	obs, ok = reg.Active("neko")
+	if !ok || obs.Path != PathLAN {
+		t.Fatalf("lan was replaced: %+v", obs)
+	}
+	if Rank(PathLimitedRelay) <= Rank(PathRelay) {
+		t.Fatal("limited relay should rank worse than an unlimited relay")
+	}
+}
+
 func TestPreferRelaysPutsHelpersFirst(t *testing.T) {
 	got := PreferRelays(
 		[]string{"/ip4/198.51.100.8/tcp/22421/p2p/helper", "/ip4/198.51.100.8/tcp/22421/p2p/helper"},

@@ -1308,7 +1308,7 @@ func peersVisibleToGUI(state State) []PeerState {
 					current.Status = "configured"
 				}
 				current.ConnectionPath = activeConnectionPath(peer.ID)
-				out = append(out, current)
+				out = append(out, annotateLimitedRelay(current))
 			}
 			return out
 		}
@@ -1322,7 +1322,7 @@ func peersVisibleToGUI(state State) []PeerState {
 			continue
 		}
 		peer.ConnectionPath = activeConnectionPath(peer.ID)
-		out = append(out, peer)
+		out = append(out, annotateLimitedRelay(peer))
 	}
 	return out
 }
@@ -1332,6 +1332,23 @@ func activeConnectionPath(peerID string) string {
 		return string(obs.Path)
 	}
 	return ""
+}
+
+func annotateLimitedRelay(peer PeerState) PeerState {
+	if peer.ConnectionPath != string(nat.PathLimitedRelay) {
+		return peer
+	}
+	for _, diagnostic := range peer.NetworkDiagnostics {
+		if diagnostic.Code == "limited-relay" {
+			return peer
+		}
+	}
+	peer.NetworkDiagnostics = append(append([]PeerNetworkDiagnostic(nil), peer.NetworkDiagnostics...), PeerNetworkDiagnostic{
+		Code:      "limited-relay",
+		RoutePath: "limited-relay",
+		Guidance:  "Only a limited relay is reachable. Pairing and journal checks can use it. File transfer needs a direct path or an unlimited relay.",
+	})
+	return peer
 }
 
 // livePeerStates overlays the path and receive progress recorded by the last
@@ -1349,6 +1366,7 @@ func livePeerStates(peers []PeerState) []PeerState {
 		if obs, ok := nat.DefaultPaths.Active(out[i].ID); ok {
 			out[i].ConnectionPath = string(obs.Path)
 		}
+		out[i] = annotateLimitedRelay(out[i])
 		progress := transferprogress.Get(out[i].ID)
 		out[i].ReceiveRemainingBytes = progress.RemainingBytes
 		out[i].AverageReceiveBytesPerSecond = progress.BytesPerSecond

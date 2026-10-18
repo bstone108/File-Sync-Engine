@@ -163,6 +163,8 @@ func HelperRelayAddrs() []string {
 }
 
 // OrderedRelays returns same-identity helpers, then public relays.
+// An empty public list falls back to the DHT bootstrap multiaddrs. Those
+// nodes are candidates for a reservation, not for bulk transfer.
 func OrderedRelays() []string {
 	mesh.mu.Lock()
 	defer mesh.mu.Unlock()
@@ -171,6 +173,15 @@ func OrderedRelays() []string {
 		public = append([]string(nil), DefaultPublicDHTBootstrapPeers...)
 	}
 	return nat.PreferRelays(mesh.identityRelays, public)
+}
+
+// UnlimitedRelayAddrs returns same-identity helpers and explicitly configured
+// public relays. The default bootstrap list is omitted: public kubo relays are
+// limited circuits and cannot carry file bytes.
+func UnlimitedRelayAddrs() []string {
+	mesh.mu.Lock()
+	defer mesh.mu.Unlock()
+	return nat.PreferRelays(mesh.identityRelays, mesh.publicRelays)
 }
 
 // RefreshIdentityMembers allows reservations from configured peers in an
@@ -252,7 +263,7 @@ func (sameIdentityACL) AllowConnect(src peer.ID, _ ma.Multiaddr, dest peer.ID) b
 	return mesh.allows(src) && mesh.allows(dest)
 }
 
-func helperRelayOptions() []relayv2.Option {
+func helperResources() relayv2.Resources {
 	resources := relayv2.DefaultResources()
 	mesh.mu.Lock()
 	resources.MaxReservations = mesh.maxReservations
@@ -263,8 +274,15 @@ func helperRelayOptions() []relayv2.Option {
 	resources.MaxCircuits = 4
 	resources.MaxReservationsPerIP = 4
 	resources.MaxReservationsPerPeer = 1
-	resources.Limit = &relayv2.RelayLimit{Duration: resources.Limit.Duration, Data: 1 << 20}
-	return []relayv2.Option{relayv2.WithResources(resources), relayv2.WithACL(sameIdentityACL{})}
+	// A nil limit is an unlimited circuit. Public kubo relays stay limited
+	// (about 128 KiB and 2 minutes). This helper is the bulk-transfer fallback
+	// when hole punching cannot open a direct path.
+	resources.Limit = nil
+	return resources
+}
+
+func helperRelayOptions() []relayv2.Option {
+	return []relayv2.Option{relayv2.WithResources(helperResources()), relayv2.WithACL(sameIdentityACL{})}
 }
 
 type holepunchTracer struct{}
@@ -275,7 +293,9 @@ func (holepunchTracer) Trace(evt *holepunch.Event) {
 	}
 	switch evt.Type {
 	case holepunch.StartHolePunchEvtT:
-		structuredlog.Event("info", "libp2p.holepunch.start", "libp2p hole punch started", map[string]any{"peer": evt.Remote.String()})
+		fields := map[string]any{"peer": evt.Remote.String()}
+		structuredlog.Event("info", "libp2p.holepunch.start", "libp2p hole punch started", fields)
+		structuredlog.Event("info", "libp2p.dcutr.start", "DCUtR hole punch started", fields)
 	case holepunch.EndHolePunchEvtT:
 		end, ok := evt.Evt.(holepunch.EndHolePunchEvt)
 		if !ok {
@@ -283,13 +303,14 @@ func (holepunchTracer) Trace(evt *holepunch.Event) {
 		}
 		if end.Success {
 			nat.DefaultPaths.Observe(evt.Remote.String(), "", nat.PathHolePunched)
-			structuredlog.Event("info", "libp2p.holepunch.ok", "libp2p hole punch succeeded", map[string]any{"peer": evt.Remote.String()})
+			fields := map[string]any{"peer": evt.Remote.String()}
+			structuredlog.Event("info", "libp2p.holepunch.ok", "libp2p hole punch succeeded", fields)
+			structuredlog.Event("info", "libp2p.dcutr.ok", "DCUtR hole punch succeeded", fields)
 			return
 		}
-		structuredlog.Event("warn", "libp2p.holepunch.failed", "libp2p hole punch failed", map[string]any{
-			"peer":  evt.Remote.String(),
-			"error": end.Error,
-		})
+		fields := map[string]any{"peer": evt.Remote.String(), "error": end.Error}
+		structuredlog.Event("warn", "libp2p.holepunch.failed", "libp2p hole punch failed", fields)
+		structuredlog.Event("warn", "libp2p.dcutr.failed", "DCUtR hole punch failed", fields)
 	}
 }
 
@@ -344,6 +365,9 @@ func watchConnections(n network.Network) {
 				addr = conn.RemoteMultiaddr().String()
 			}
 			path := nat.Classify(addr)
+			if conn.Stat().Limited {
+				path = nat.PathLimitedRelay
+			}
 			if current, ok := nat.DefaultPaths.Active(conn.RemotePeer().String()); ok && current.Path == nat.PathHolePunched && path != nat.PathRelay {
 				return
 			}
