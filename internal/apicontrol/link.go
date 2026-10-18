@@ -191,7 +191,9 @@ func redeemPairCode(ctx context.Context, configPath string, req api.PairCodeRede
 	}, nil
 }
 
-// HandlePairCodeClaim burns the code and stores the redeemer's reconnect profile.
+// HandlePairCodeClaim reserves the code for this redeemer and stores their
+// reconnect profile. The code is burned by CommitPairCodeClaim after the
+// HTTP response is written.
 func HandlePairCodeClaim(configPath string, req link.ClaimRequest) (link.ClaimResponse, error) {
 	cfg, err := config.LoadFile(configPath)
 	if err != nil {
@@ -227,6 +229,11 @@ func HandlePairCodeClaim(configPath string, req link.ClaimRequest) (link.ClaimRe
 		CertificateSHA256: firstNonEmpty(record.CertificateSHA256, certificate),
 		Profile:           link.MergeProfiles(record.Profile(), local),
 	}, nil
+}
+
+// CommitPairCodeClaim burns the code after the claim response was written.
+func CommitPairCodeClaim(req link.ClaimRequest) error {
+	return linkService.CommitClaim(req.Code, req.DiscoveryID)
 }
 
 // HandleLinkProfile returns this engine's current reconnect profile.
