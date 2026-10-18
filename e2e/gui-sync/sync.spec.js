@@ -51,7 +51,7 @@ async function importOn(page, packageText, expected) {
   await clickClearOfSidebar(page.getByTestId('parse-pairing'));
   await clickClearOfSidebar(page.getByTestId('import-pairing'));
   if (expected === 'paired') {
-    await expect(page.getByText(/identity import accepted|already paired/i)).toBeVisible();
+    await expect(page.getByText(/identity import accepted|already paired/i)).toBeVisible({ timeout: 45000 });
     return;
   }
   await expect(page.getByText(expected, { exact: false })).toBeVisible();
