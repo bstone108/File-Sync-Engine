@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"filesyncengine/internal/foldershare"
 )
 
 func TestFolderIndexAndFileDownloadExposeConfiguredFolderData(t *testing.T) {
@@ -135,6 +138,65 @@ func TestFolderFileAndBlockRejectSymlinkEscape(t *testing.T) {
 		if got := rec.Body.String(); got == "outside secret" {
 			t.Fatalf("%s leaked outside file content", path)
 		}
+	}
+}
+
+func TestFolderBlockSubhashAndManifestAreNotStored(t *testing.T) {
+	root := t.TempDir()
+	payload := bytes.Repeat([]byte("abcd"), 50)
+	if err := os.WriteFile(filepath.Join(root, "chunked.txt"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(State{NodeName: "node-a", FoldersState: []FolderState{{ID: "docs", Path: root, Mode: "sendonly", Status: "configured"}}}, "secret")
+	before, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/folder-block-subhashes?folder=docs&path=chunked.txt&index=0&blockSize=100&subSize=40", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	rec := httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("subhash status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Hashes []string `json:"hashes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := foldershare.SubHashes(payload[:100], 40)
+	if len(got.Hashes) != len(want) {
+		t.Fatalf("hashes=%v", got.Hashes)
+	}
+	for i := range want {
+		if got.Hashes[i] != want[i] {
+			t.Fatalf("hash %d = %s", i, got.Hashes[i])
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/folder-block?folder=docs&path=chunked.txt&index=0&blockSize=100&sub=1&subSize=40", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != string(payload[40:80]) {
+		t.Fatalf("subrange status=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/folder-manifest?folder=docs&path=chunked.txt", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	rec = httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"blockSize"`)) || bytes.Contains(rec.Body.Bytes(), []byte("subHash")) {
+		t.Fatalf("manifest status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	after, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("handler stored %d entries, want %d", len(after), len(before))
 	}
 }
 
