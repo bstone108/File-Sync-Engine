@@ -85,6 +85,8 @@ func TestAnnouncedMultiaddrsUsePublishedPortAndAPI(t *testing.T) {
 func TestAnnounceHostsKeepEveryPath(t *testing.T) {
 	t.Setenv(advertise.EnvVarList, "https://203.0.113.9:22420")
 	t.Setenv(advertise.EnvExcludeTailscale, "")
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	t.Cleanup(func() { advertise.SetReachabilityProbe(nil) })
 	SetAnnounceAPIURL("https://100.64.8.8:22420")
 	t.Cleanup(func() { SetAnnounceAPIURL("") })
 	joined := strings.Join(multiaddrStrings(announcedAddrs(nil)), " ")
@@ -100,6 +102,11 @@ func TestAnnounceHostsKeepEveryPath(t *testing.T) {
 	}
 	if !strings.Contains(excluded, "/ip4/203.0.113.9/tcp/") {
 		t.Fatalf("public path missing: %s", excluded)
+	}
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return fmt.Errorf("closed") })
+	closed := strings.Join(multiaddrStrings(announcedAddrs(nil)), " ")
+	if strings.Contains(closed, "203.0.113.9") {
+		t.Fatalf("closed public port was announced: %s", closed)
 	}
 }
 
@@ -131,6 +138,8 @@ func TestAnnouncedAddrsOmitLoopbackWhenNothingIsVerified(t *testing.T) {
 
 func TestAnnouncedAddrsReplaceBridgeListenAddrs(t *testing.T) {
 	t.Setenv(EnvPublishedLibp2pPort, "22423")
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	t.Cleanup(func() { advertise.SetReachabilityProbe(nil) })
 	SetAnnounceAPIURL("https://192.0.2.20:22430")
 	t.Cleanup(func() { SetAnnounceAPIURL("") })
 	bridge, err := ma.NewMultiaddr("/ip4/172.17.0.4/tcp/22421")
@@ -159,6 +168,8 @@ func TestProductionRouterReusesThePublishedPort(t *testing.T) {
 	}
 	t.Setenv(EnvLibp2pPort, strconv.Itoa(port))
 	t.Setenv(EnvPublishedLibp2pPort, strconv.Itoa(port))
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	t.Cleanup(func() { advertise.SetReachabilityProbe(nil) })
 	SetAnnounceAPIURL("https://192.0.2.10:22420")
 	t.Cleanup(func() {
 		ResetSharedRouter()

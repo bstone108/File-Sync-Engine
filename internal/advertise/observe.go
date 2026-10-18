@@ -282,6 +282,43 @@ func activeProbe(obs Observations) func(context.Context, string, int) error {
 	return dialProbe
 }
 
+// NeedsPublicDialback reports whether host is a global address. LAN and
+// Tailscale addresses are not dialed back by this check.
+func NeedsPublicDialback(host string) bool {
+	return publicNeedsDialback(host)
+}
+
+// MayAnnounceLibp2p reports whether host may be published on the libp2p port.
+// A public address is announced only after a TCP dial-back to that port
+// succeeds. A private address is announced when it is on a local interface
+// and is not the default gateway.
+func MayAnnounceLibp2p(host string, port int) bool {
+	host = hostname(host)
+	if host == "" || !HostReachable(host) {
+		return false
+	}
+	if publicNeedsDialback(host) {
+		if port < 1 || port > 65535 {
+			port = 22421
+		}
+		return PublicDialbackOK(host, port)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsLoopback() {
+		return true
+	}
+	if gw := defaultGateway(); gw != nil && ip.Equal(gw) {
+		return false
+	}
+	if isTailscaleIP(ip) {
+		return true
+	}
+	if ip.IsPrivate() {
+		return hostOnInterface(ip)
+	}
+	return false
+}
+
 // publicNeedsDialback is true for a global address that is not a LAN or
 // Tailscale address. Those addresses are advertised only after a TCP dial-back
 // to the API port succeeds. AutoNAT reachability of the libp2p port is not
@@ -465,6 +502,12 @@ func localIPToward(dst net.IP) string {
 	return addr.IP.String()
 }
 
+// IsDefaultGateway reports the IPv4 default route's next hop.
+func IsDefaultGateway(ip net.IP) bool {
+	gw := defaultGateway()
+	return ip != nil && gw != nil && ip.Equal(gw)
+}
+
 func defaultGateway() net.IP {
 	data, err := readRouteTable()
 	if err != nil {
@@ -478,6 +521,20 @@ var readRouteTable = func() ([]byte, error) {
 }
 
 func gatewayFromRouteTable(table string) net.IP {
+	_, gw := defaultRouteFromTable(table)
+	return gw
+}
+
+func defaultRouteIface() string {
+	data, err := readRouteTable()
+	if err != nil {
+		return ""
+	}
+	iface, _ := defaultRouteFromTable(string(data))
+	return iface
+}
+
+func defaultRouteFromTable(table string) (string, net.IP) {
 	for _, line := range strings.Split(table, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 3 || fields[1] != "00000000" {
@@ -487,9 +544,66 @@ func gatewayFromRouteTable(table string) net.IP {
 		if ip == nil || ip.IsUnspecified() {
 			continue
 		}
-		return ip
+		return fields[0], ip
 	}
-	return nil
+	return "", nil
+}
+
+func hostOnInterface(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || routing.ContainerInterface(iface.Name) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if other := addrIP(addr); other != nil && other.Equal(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func routeInterfaceChoice(ips []string) string {
+	ifaceName := defaultRouteIface()
+	if ifaceName == "" || len(ips) == 0 {
+		return ""
+	}
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return ""
+	}
+	onIface := map[string]struct{}{}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		if ip := addrIP(addr); ip != nil {
+			onIface[ip.String()] = struct{}{}
+		}
+	}
+	var matches []string
+	for _, raw := range ips {
+		ip := net.ParseIP(strings.TrimSpace(raw))
+		if ip == nil {
+			continue
+		}
+		if _, ok := onIface[ip.String()]; ok {
+			matches = append(matches, ip.String())
+		}
+	}
+	return firstDetected(matches)
 }
 
 func parseLittleEndianIPv4(hexword string) net.IP {

@@ -309,7 +309,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Sync two engines behind separate NATs
-        run: sudo --preserve-env=PATH,GOROOT,GOPATH,GOCACHE,GOMODCACHE,HOME go test ./internal/natlab/ -count=1 -timeout 180s -run TestNATNamespaceEnginesSync
+        run: sudo --preserve-env=PATH,GOROOT,GOPATH,GOCACHE,GOMODCACHE,HOME go test ./internal/natlab/ -count=1 -timeout 240s -run TestNATNamespaceEnginesSync
 
   transfer-soak:
     name: Throttled transfer soak

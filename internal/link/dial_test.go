@@ -41,6 +41,15 @@ func TestHostnameAPIIsTriedBeforeRelay(t *testing.T) {
 		Kind: "manual", Address: "https://203.0.113.9:22420", NetworkHint: "wan",
 	})
 	stages = endpointStages(peer)
+	for _, stage := range stages {
+		for _, endpoint := range stage {
+			if strings.Contains(endpoint.Address, "203.0.113.9") {
+				t.Fatal("unauthenticated public IP was dialed")
+			}
+		}
+	}
+	peer.Endpoints[1].Authenticated = true
+	stages = endpointStages(peer)
 	for _, endpoint := range stages[0] {
 		if strings.Contains(endpoint.Address, "203.0.113.9") {
 			t.Fatal("public IP was preferred ahead of libp2p")
@@ -57,7 +66,7 @@ func TestHostnameAPIIsTriedBeforeRelay(t *testing.T) {
 		}
 	}
 	if !foundWAN {
-		t.Fatalf("public IP was dropped: %+v", stages)
+		t.Fatalf("authenticated public IP was dropped: %+v", stages)
 	}
 }
 

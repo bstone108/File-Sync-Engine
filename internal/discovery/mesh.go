@@ -18,6 +18,7 @@ import (
 
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/nat"
+	"filesyncengine/internal/structuredlog"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
@@ -269,14 +270,51 @@ func helperRelayOptions() []relayv2.Option {
 type holepunchTracer struct{}
 
 func (holepunchTracer) Trace(evt *holepunch.Event) {
-	if evt == nil || evt.Type != holepunch.EndHolePunchEvtT || evt.Remote == "" {
+	if evt == nil || evt.Remote == "" {
 		return
 	}
-	end, ok := evt.Evt.(holepunch.EndHolePunchEvt)
-	if !ok || !end.Success {
+	switch evt.Type {
+	case holepunch.StartHolePunchEvtT:
+		structuredlog.Event("info", "libp2p.holepunch.start", "libp2p hole punch started", map[string]any{"peer": evt.Remote.String()})
+	case holepunch.EndHolePunchEvtT:
+		end, ok := evt.Evt.(holepunch.EndHolePunchEvt)
+		if !ok {
+			return
+		}
+		if end.Success {
+			nat.DefaultPaths.Observe(evt.Remote.String(), "", nat.PathHolePunched)
+			structuredlog.Event("info", "libp2p.holepunch.ok", "libp2p hole punch succeeded", map[string]any{"peer": evt.Remote.String()})
+			return
+		}
+		structuredlog.Event("warn", "libp2p.holepunch.failed", "libp2p hole punch failed", map[string]any{
+			"peer":  evt.Remote.String(),
+			"error": end.Error,
+		})
+	}
+}
+
+func watchAutoRelay(h host.Host) {
+	if h == nil {
 		return
 	}
-	nat.DefaultPaths.Observe(evt.Remote.String(), "", nat.PathHolePunched)
+	sub, err := h.EventBus().Subscribe(new(event.EvtAutoRelayAddrsUpdated))
+	if err != nil {
+		return
+	}
+	defer sub.Close()
+	for ev := range sub.Out() {
+		updated, ok := ev.(event.EvtAutoRelayAddrsUpdated)
+		if !ok {
+			continue
+		}
+		addrs := make([]string, 0, len(updated.RelayAddrs))
+		for _, addr := range updated.RelayAddrs {
+			if addr != nil {
+				addrs = append(addrs, addr.String())
+			}
+		}
+		structuredlog.Event("info", "libp2p.relay.reserved", "libp2p reserved a relay", map[string]any{"addresses": addrs})
+	}
 }
 
 func markSelfReachabilityEmit() {

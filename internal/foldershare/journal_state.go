@@ -22,8 +22,17 @@ var (
 	forceScan     = map[string]struct{}{}
 	changedPaths  = map[string]map[string]struct{}{}
 	wakeCh        = make(chan struct{}, 1)
-	passReporter  func(folderID string, peer config.PeerConfig, writes, fetched, reused int)
+	passReporter  func(folderID string, peer config.PeerConfig, stats PassStats)
 )
+
+// PassStats is what one peer pass actually changed.
+type PassStats struct {
+	Writes  int
+	Fetched int
+	Reused  int
+	Deletes int
+	Moves   int
+}
 
 type cachedJournal struct {
 	mod    time.Time
@@ -78,21 +87,21 @@ func WakeChannel() <-chan struct{} { return wakeCh }
 // SetPassReporter receives real transfer counts after a peer pass that moved
 // or reused blocks. An empty pass is not reported, so the API does not claim
 // a direct transfer that did not happen.
-func SetPassReporter(fn func(folderID string, peer config.PeerConfig, writes, fetched, reused int)) {
+func SetPassReporter(fn func(folderID string, peer config.PeerConfig, stats PassStats)) {
 	journalMu.Lock()
 	passReporter = fn
 	journalMu.Unlock()
 }
 
-func reportPass(folderID string, peer config.PeerConfig, writes, fetched, reused int) {
-	if writes+fetched+reused == 0 {
+func reportPass(folderID string, peer config.PeerConfig, stats PassStats) {
+	if stats.Writes+stats.Fetched+stats.Reused+stats.Deletes+stats.Moves == 0 {
 		return
 	}
 	journalMu.Lock()
 	fn := passReporter
 	journalMu.Unlock()
 	if fn != nil {
-		fn(folderID, peer, writes, fetched, reused)
+		fn(folderID, peer, stats)
 	}
 }
 

@@ -1202,6 +1202,10 @@ func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, foldersVisibleToGUI(state))
 }
 
+// emptyStateHash is SHA-256 of an empty metadata summary. foldershare journals
+// replace it when the metadata store has not indexed the folder.
+const emptyStateHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
 // foldersVisibleToGUI lists the folders stored in config without waiting for
 // hot reload. The daemon adopts config only after a quiet period, which is
 // too late for the folder row the GUI shows as soon as an add is accepted.
@@ -1230,9 +1234,30 @@ func foldersVisibleToGUI(state State) []FolderState {
 		current.Enabled = folder.SharingEnabled()
 		current.SharedWith = append([]string(nil), folder.SharedWith...)
 		current.Ignore = append([]string(nil), folder.Ignore...)
-		if current.Index.TotalFiles == 0 {
-			if n := foldershare.CountLiveFiles(state.ConfigPath, folder.ID); n > 0 {
-				current.Index.TotalFiles = n
+		if current.Index.VerifiedFiles == 0 && current.Index.KnownBlocks == 0 {
+			if live, verified, blocks, bytes, hash, ok := foldershare.JournalIndex(state.ConfigPath, folder.ID); ok {
+				if current.Index.TotalFiles == 0 {
+					current.Index.TotalFiles = live
+				}
+				current.Index.VerifiedFiles = verified
+				current.Index.KnownBlocks = blocks
+				if current.Index.Mode == "" {
+					current.Index.Mode = "verified"
+				}
+				if current.LocalBytes == 0 {
+					current.LocalBytes = bytes
+				}
+				if current.Sync.LocalStateHash == "" || current.Sync.LocalStateHash == emptyStateHash {
+					current.Sync.LocalStateHash = hash
+				}
+				if current.ProgressLabel == "" || current.ProgressLabel == "Not scanned" {
+					if live > 0 && verified == live {
+						current.ProgressLabel = "Up to date"
+						current.SyncPercent = 100
+					} else if live > 0 {
+						current.ProgressLabel = "Syncing"
+					}
+				}
 			}
 		}
 		if !current.Enabled {

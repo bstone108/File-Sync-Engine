@@ -83,11 +83,20 @@ func ResolveWithObservations(cfg config.Config, envOverride, detectedHost string
 }
 
 func resolve(cfg config.Config, envOverride, detectedHost string, obs Observations) (string, error) {
-	for _, candidate := range configuredCandidates(cfg, envOverride) {
+	for _, candidate := range explicitCandidates(envOverride) {
 		if skipTailscale(candidate) || !HostReachable(candidate) {
 			continue
 		}
 		return Normalize(candidate, cfg)
+	}
+	for _, candidate := range PublishedAPIURLs(cfg) {
+		if skipTailscale(candidate) || !HostReachable(candidate) {
+			continue
+		}
+		return Normalize(candidate, cfg)
+	}
+	if saved := strings.TrimSpace(cfg.API.AdvertiseURL); savedAdvertiseOK(saved) {
+		return Normalize(saved, cfg)
 	}
 	if candidate, ok := publishedPortCandidate(detectedHost); ok && HostReachable(candidate) {
 		return Normalize(candidate, cfg)
@@ -129,12 +138,41 @@ func StartupMessage(url string, err error) string {
 	return ""
 }
 
-func configuredCandidates(cfg config.Config, envOverride string) []string {
+func explicitCandidates(envOverride string) []string {
 	out := []string{envOverride}
-	out = append(out, ListFromEnv(os.Getenv(EnvVarList))...)
+	return append(out, ListFromEnv(os.Getenv(EnvVarList))...)
+}
+
+func configuredCandidates(cfg config.Config, envOverride string) []string {
+	out := explicitCandidates(envOverride)
 	out = append(out, cfg.API.AdvertiseURL)
 	out = append(out, PublishedAPIURLs(cfg)...)
 	return out
+}
+
+// savedAdvertiseOK keeps a stored URL that is a name, loopback, Tailscale, or
+// an address on a local interface. A private address that is only the gateway
+// or a container address that is not on this host is replaced.
+func savedAdvertiseOK(candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || skipTailscale(candidate) || !HostReachable(candidate) {
+		return false
+	}
+	host := hostname(candidate)
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsLoopback() {
+		return true
+	}
+	if publicNeedsDialback(host) {
+		return PublicDialbackOK(host, 0)
+	}
+	if isTailscaleIP(ip) {
+		return true
+	}
+	if gw := defaultGateway(); gw != nil && ip.Equal(gw) {
+		return false
+	}
+	return hostOnInterface(ip)
 }
 
 // Normalize turns a host or URL into scheme://host:port using the API listen port.
@@ -167,9 +205,27 @@ func DetectHost() string {
 	return SelectDetected(observedIPs())
 }
 
-// SelectDetected prefers a LAN address, then Tailscale, then a public address.
-// Container-internal addresses are dropped.
+// SelectDetected prefers the address on the default-route interface, then a
+// LAN address, then Tailscale, then a public address. The default gateway and
+// container-internal addresses are dropped, so a Docker host does not advertise
+// the gateway in front of its own interface.
 func SelectDetected(ips []string) string {
+	gw := defaultGateway()
+	filtered := make([]string, 0, len(ips))
+	for _, raw := range ips {
+		ip := net.ParseIP(strings.TrimSpace(raw))
+		if ip != nil && gw != nil && ip.Equal(gw) {
+			continue
+		}
+		filtered = append(filtered, raw)
+	}
+	if prefer := routeInterfaceChoice(filtered); prefer != "" {
+		return prefer
+	}
+	return firstDetected(filtered)
+}
+
+func firstDetected(ips []string) string {
 	var lan, vpn, public []string
 	for _, raw := range ips {
 		ip := net.ParseIP(strings.TrimSpace(raw))
