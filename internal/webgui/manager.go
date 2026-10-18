@@ -225,6 +225,7 @@ func dockerProxyRoutes() []proxyRoute {
 		{BrowserPath: "/api/v1/logs", NativePath: "/v1/logs", Methods: get},
 		{BrowserPath: "/api/v1/schema", NativePath: "/v1/schema", Methods: get},
 		{BrowserPath: "/api/v1/config", NativePath: "/v1/config", Methods: []string{http.MethodGet, http.MethodPatch}},
+		{BrowserPath: "/api/v1/encryption-profiles", NativePath: "/v1/encryption-profiles", Methods: get},
 		{BrowserPath: "/api/v1/filesystem/browse", NativePath: "/v1/filesystem/browse", Methods: get, QueryKeys: []string{"path"}},
 		{BrowserPath: "/api/v1/api/trust", NativePath: "/v1/api/trust", Methods: get},
 		{BrowserPath: "/api/v1/api/trust-command", NativePath: "/v1/api/trust-command", Methods: post},

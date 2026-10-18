@@ -26,10 +26,6 @@ import (
 	"filesyncengine/internal/routing"
 	"filesyncengine/internal/scanner"
 	"filesyncengine/internal/state"
-
-	"golang.org/x/crypto/chacha20poly1305"
-	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/hkdf"
 )
 
 type MetadataStore interface {
@@ -82,7 +78,6 @@ type ServerConfig struct {
 	Folders                      map[string]string
 	Identity                     peeridentity.Identity
 	EncryptionLevel              int
-	AllowWeakerEncryptionLevel   bool
 	TrustedPeerPublicKeys        map[string]string
 	KnownPeers                   []discovery.Peer
 	IdentityGroups               []discovery.IdentityGroupState
@@ -129,24 +124,22 @@ func (s *Server) Serve(ctx context.Context, stream io.ReadWriter) error {
 				}
 				continue
 			}
-			level, err := negotiateEncryptionLevel(s.encryptionLevel(), msg.Hello.EncryptionLevel, s.cfg.AllowWeakerEncryptionLevel)
+			level, err := negotiateEncryptionLevel(s.encryptionLevel(), msg.Hello.EncryptionLevel)
 			if err != nil {
 				return err
 			}
-			hello, sessionPrivate, err := signedSessionProtocolHello(s.cfg.NodeID, s.cfg.Identity, level, msg.Hello.Nonce, advertisedTransferLimits(s.cfg.Transfer, s.cfg.Peer))
+			hello, _, session, err := signedResponderHello(s.cfg.NodeID, s.cfg.Identity, level, msg.Hello, advertisedTransferLimits(s.cfg.Transfer, s.cfg.Peer), []string{"folder-index", "block-transfer"})
 			if err != nil {
-				return err
+				if writeErr := codec.Write(protocol.Message{Type: protocol.MessageError, Error: encryptionRetry(err)}); writeErr != nil {
+					return writeErr
+				}
+				continue
 			}
-			hello.Capabilities = []string{"folder-index", "block-transfer"}
 			if err := codec.Write(protocol.Message{Type: protocol.MessageHello, Hello: hello}); err != nil {
 				return err
 			}
 			if level > 0 {
-				secure, err := secureCodec(stream, sessionPrivate, msg.Hello, hello, false)
-				if err != nil {
-					return err
-				}
-				codec = secure
+				codec = codecForSession(stream, session)
 			}
 			remotePeer = discovery.Peer{ID: msg.Hello.NodeID}
 			negotiated := negotiatedTransferLimits(s.cfg.Transfer, s.cfg.Peer, msg.Hello.Transfer)
@@ -279,7 +272,7 @@ func (s *Server) verifyClientHello(hello *protocol.Hello) error {
 	if expected == "" {
 		return nil
 	}
-	return peeridentity.VerifyHello(peeridentity.SignedHello{NodeID: hello.NodeID, PublicKey: hello.PublicKey, SessionPublicKey: hello.SessionPublicKey, EncryptionLevel: hello.EncryptionLevel, Signature: hello.Signature}, expected, []byte(hello.Nonce))
+	return peeridentity.VerifyHello(signedHelloFromProtocol(hello), expected, []byte(hello.Nonce))
 }
 
 func metadataError(err error) *protocol.Error {
@@ -466,7 +459,6 @@ type PullOptions struct {
 	Identity                             peeridentity.Identity
 	EncryptionLevel                      int
 	PeerPublicKey                        string
-	AllowWeakerEncryptionLevel           bool
 	KnownPeers                           []discovery.Peer
 	IdentityGroups                       []discovery.IdentityGroupState
 	Transfer                             config.TransferConfig
@@ -501,55 +493,6 @@ type PullResult struct {
 	MetadataFullRefreshes          int
 }
 
-func negotiateEncryptionLevel(localLevel, peerLevel int, allowWeaker bool) (int, error) {
-	if err := peeridentity.ValidateEncryptionLevel(localLevel); err != nil {
-		return 0, err
-	}
-	if err := peeridentity.ValidateEncryptionLevel(peerLevel); err != nil {
-		return 0, err
-	}
-	if allowWeaker {
-		return localLevel, nil
-	}
-	if peerLevel > localLevel {
-		return peerLevel, nil
-	}
-	return localLevel, nil
-}
-
-func signedProtocolHello(nodeID string, identity peeridentity.Identity, encryptionLevel int, nonce string, transfer *protocol.TransferLimits) (*protocol.Hello, error) {
-	hello, _, err := signedSessionProtocolHello(nodeID, identity, encryptionLevel, nonce, transfer)
-	return hello, err
-}
-
-func signedSessionProtocolHello(nodeID string, identity peeridentity.Identity, encryptionLevel int, nonce string, transfer *protocol.TransferLimits) (*protocol.Hello, []byte, error) {
-	var sessionPrivate []byte
-	var sessionPublic string
-	if encryptionLevel > 0 {
-		priv := make([]byte, curve25519.ScalarSize)
-		if _, err := rand.Read(priv); err != nil {
-			return nil, nil, err
-		}
-		pub, err := curve25519.X25519(priv, curve25519.Basepoint)
-		if err != nil {
-			return nil, nil, err
-		}
-		sessionPrivate = priv
-		sessionPublic = base64.StdEncoding.EncodeToString(pub)
-	}
-	if encryptionLevel == 0 && identity.PrivateKey == "" {
-		return &protocol.Hello{ProtocolVersion: 1, NodeID: nodeID, EncryptionLevel: 0, Transfer: transfer, Nonce: nonce}, sessionPrivate, nil
-	}
-	if identity.PrivateKey == "" {
-		return &protocol.Hello{ProtocolVersion: 1, NodeID: nodeID, PublicKey: identity.PublicKey, SessionPublicKey: sessionPublic, EncryptionLevel: encryptionLevel, Transfer: transfer, Nonce: nonce}, sessionPrivate, nil
-	}
-	signed, err := peeridentity.SignSessionHello(identity, nodeID, encryptionLevel, sessionPublic, []byte(nonce))
-	if err != nil {
-		return nil, nil, err
-	}
-	return &protocol.Hello{ProtocolVersion: 1, NodeID: signed.NodeID, PublicKey: signed.PublicKey, SessionPublicKey: signed.SessionPublicKey, EncryptionLevel: signed.EncryptionLevel, Transfer: transfer, Nonce: nonce, Signature: signed.Signature}, sessionPrivate, nil
-}
-
 func advertisedTransferLimits(global config.TransferConfig, peer config.PeerConfig) *protocol.TransferLimits {
 	local := config.EffectiveTransferLimits(global, peer, config.TransferConfig{}, config.PeerConfig{})
 	return &protocol.TransferLimits{SendBytesPerSecond: local.SendBytesPerSecond, ReceiveBytesPerSecond: local.ReceiveBytesPerSecond}
@@ -574,76 +517,7 @@ func verifyServerHello(hello *protocol.Hello, expectedPublicKey string, nonce st
 	if hello == nil {
 		return fmt.Errorf("hello payload required")
 	}
-	return peeridentity.VerifyHello(peeridentity.SignedHello{NodeID: hello.NodeID, PublicKey: hello.PublicKey, SessionPublicKey: hello.SessionPublicKey, EncryptionLevel: hello.EncryptionLevel, Signature: hello.Signature}, expectedPublicKey, []byte(nonce))
-}
-
-func secureCodec(stream io.ReadWriter, localSessionPrivate []byte, clientHello *protocol.Hello, serverHello *protocol.Hello, clientSide bool) (*protocol.Codec, error) {
-	level := 0
-	if serverHello != nil {
-		level = serverHello.EncryptionLevel
-	}
-	if level == 0 {
-		return protocol.NewCodec(stream, stream), nil
-	}
-	if len(localSessionPrivate) != curve25519.ScalarSize {
-		return nil, fmt.Errorf("local stream session key required for encrypted level %d", level)
-	}
-	remoteSessionPublic := ""
-	if clientSide {
-		remoteSessionPublic = serverHello.SessionPublicKey
-	} else if clientHello != nil {
-		remoteSessionPublic = clientHello.SessionPublicKey
-	}
-	remotePublic, err := base64.StdEncoding.DecodeString(remoteSessionPublic)
-	if err != nil || len(remotePublic) != curve25519.PointSize {
-		return nil, fmt.Errorf("peer stream session public key required for encrypted level %d", level)
-	}
-	shared, err := curve25519.X25519(localSessionPrivate, remotePublic)
-	if err != nil {
-		return nil, err
-	}
-	clientNonce := ""
-	serverNonce := ""
-	clientID := ""
-	serverID := ""
-	if clientHello != nil {
-		clientNonce = clientHello.Nonce
-		clientID = clientHello.NodeID
-	}
-	if serverHello != nil {
-		serverNonce = serverHello.Nonce
-		serverID = serverHello.NodeID
-	}
-	salt := []byte("fse-stream-aead-v1|" + clientNonce + "|" + serverNonce + "|" + clientID + "|" + serverID)
-	reader := hkdf.New(sha256.New, shared, salt, []byte("stream payload encryption"))
-	keyClientToServer := make([]byte, chacha20poly1305.KeySize)
-	keyServerToClient := make([]byte, chacha20poly1305.KeySize)
-	clientNoncePrefix := make([]byte, chacha20poly1305.NonceSizeX-8)
-	serverNoncePrefix := make([]byte, chacha20poly1305.NonceSizeX-8)
-	if _, err := io.ReadFull(reader, keyClientToServer); err != nil {
-		return nil, err
-	}
-	if _, err := io.ReadFull(reader, keyServerToClient); err != nil {
-		return nil, err
-	}
-	if _, err := io.ReadFull(reader, clientNoncePrefix); err != nil {
-		return nil, err
-	}
-	if _, err := io.ReadFull(reader, serverNoncePrefix); err != nil {
-		return nil, err
-	}
-	clientAEAD, err := chacha20poly1305.NewX(keyClientToServer)
-	if err != nil {
-		return nil, err
-	}
-	serverAEAD, err := chacha20poly1305.NewX(keyServerToClient)
-	if err != nil {
-		return nil, err
-	}
-	if clientSide {
-		return protocol.NewEncryptedCodec(stream, stream, clientAEAD, serverAEAD, clientNoncePrefix, serverNoncePrefix), nil
-	}
-	return protocol.NewEncryptedCodec(stream, stream, serverAEAD, clientAEAD, serverNoncePrefix, clientNoncePrefix), nil
+	return peeridentity.VerifyHello(signedHelloFromProtocol(hello), expectedPublicKey, []byte(nonce))
 }
 
 func newNonce() (string, error) {
@@ -667,99 +541,70 @@ type scannerBlock struct {
 }
 
 func PullFolder(ctx context.Context, stream io.ReadWriter, opts PullOptions) (PullResult, error) {
-	codec := protocol.NewCodec(stream, stream)
-	nonce, err := newNonce()
+	codec, serverHello, err := clientHandshake(stream, opts, opts.PeerPublicKey, []string{"folder-index", "block-transfer"})
 	if err != nil {
 		return PullResult{}, err
 	}
-	hello, sessionPrivate, err := signedSessionProtocolHello(opts.NodeID, opts.Identity, opts.EncryptionLevel, nonce, advertisedTransferLimits(opts.Transfer, opts.Peer))
-	if err != nil {
-		return PullResult{}, err
+	msg := protocol.Message{Type: protocol.MessageHello, Hello: serverHello}
+	transferDetails := negotiatedTransferLimitDetails(opts.Transfer, opts.Peer, msg.Hello.Transfer)
+	result := PullResult{
+		NegotiatedEncryptionLevel:      msg.Hello.EncryptionLevel,
+		NegotiatedTransfer:             transferDetails.Effective,
+		NegotiatedTransferSendCause:    transferDetails.SendCause,
+		NegotiatedTransferReceiveCause: transferDetails.ReceiveCause,
 	}
-	hello.Capabilities = []string{"folder-index", "block-transfer"}
-	if err := codec.Write(protocol.Message{Type: protocol.MessageHello, Hello: hello}); err != nil {
-		return PullResult{}, err
+	receiveLimiter := ratelimit.NewLimiter(result.NegotiatedTransfer.ReceiveBytesPerSecond)
+	if len(opts.KnownPeers) > 0 || len(opts.IdentityGroups) > 0 {
+		if err := codec.Write(protocol.Message{Type: protocol.MessagePeerExchange, PeerExchange: &protocol.PeerExchange{Peers: peersToProtocol(opts.KnownPeers), IdentityGroups: groupsToProtocol(identityGroupsWithSnapshots(opts.IdentityGroups, opts.SnapshotStore, opts.SnapshotArchiveRoot, opts.SnapshotCheckpointRoot))}}); err != nil {
+			return PullResult{}, err
+		}
+		peerMsg, err := codec.Read()
+		if err != nil {
+			return PullResult{}, err
+		}
+		if peerMsg.Type == protocol.MessageError {
+			return PullResult{}, fmt.Errorf("peer error %s: %s", peerMsg.Error.Code, peerMsg.Error.Message)
+		}
+		if peerMsg.Type != protocol.MessagePeerExchange || peerMsg.PeerExchange == nil {
+			return PullResult{}, fmt.Errorf("expected peer exchange, got %s", peerMsg.Type)
+		}
+		remote := discovery.Peer{ID: msg.Hello.NodeID}
+		plan := discovery.PlanPeerExchange(opts.NodeID, opts.KnownPeers, remote, peersFromProtocol(peerMsg.PeerExchange.Peers))
+		result.LearnedPeers = plan.Learned
+		discovery.NoteExchangedPeers(plan.Learned)
+		remoteGroups := groupsFromProtocol(peerMsg.PeerExchange.IdentityGroups)
+		result.LearnedFolders = planIdentityGroupLearnedFolders(opts.NodeID, opts.IdentityGroups, remote.ID, remoteGroups)
+		learnedSnapshots, err := saveIdentitySnapshotMarkers(opts.SnapshotStore, opts.IdentityGroups, remoteGroups)
+		if err != nil {
+			return PullResult{}, err
+		}
+		result.SnapshotMarkersLearned = learnedSnapshots
 	}
-	if msg, err := codec.Read(); err != nil {
-		return PullResult{}, err
-	} else if msg.Type == protocol.MessageError {
-		return PullResult{}, fmt.Errorf("peer error %s: %s", msg.Error.Code, msg.Error.Message)
-	} else if msg.Type != protocol.MessageHello {
-		return PullResult{}, fmt.Errorf("expected hello, got %s", msg.Type)
-	} else if err := verifyServerHello(msg.Hello, opts.PeerPublicKey, nonce); err != nil {
-		return PullResult{}, err
-	} else if msg.Hello.EncryptionLevel < opts.EncryptionLevel && !opts.AllowWeakerEncryptionLevel {
-		return PullResult{}, fmt.Errorf("peer negotiated weaker encryption level %d below local level %d", msg.Hello.EncryptionLevel, opts.EncryptionLevel)
-	} else if err := peeridentity.ValidateEncryptionLevel(msg.Hello.EncryptionLevel); err != nil {
-		return PullResult{}, err
-	} else {
-		if msg.Hello.EncryptionLevel > 0 {
-			secure, err := secureCodec(stream, sessionPrivate, hello, msg.Hello, true)
-			if err != nil {
-				return PullResult{}, err
-			}
-			codec = secure
+	if opts.MeshSettingsStore != nil {
+		applied, err := exchangeMeshSettingsChanges(codec, opts, msg.Hello.NodeID)
+		if err != nil {
+			return PullResult{}, err
 		}
-		transferDetails := negotiatedTransferLimitDetails(opts.Transfer, opts.Peer, msg.Hello.Transfer)
-		result := PullResult{
-			NegotiatedEncryptionLevel:      msg.Hello.EncryptionLevel,
-			NegotiatedTransfer:             transferDetails.Effective,
-			NegotiatedTransferSendCause:    transferDetails.SendCause,
-			NegotiatedTransferReceiveCause: transferDetails.ReceiveCause,
-		}
-		receiveLimiter := ratelimit.NewLimiter(result.NegotiatedTransfer.ReceiveBytesPerSecond)
-		if len(opts.KnownPeers) > 0 || len(opts.IdentityGroups) > 0 {
-			if err := codec.Write(protocol.Message{Type: protocol.MessagePeerExchange, PeerExchange: &protocol.PeerExchange{Peers: peersToProtocol(opts.KnownPeers), IdentityGroups: groupsToProtocol(identityGroupsWithSnapshots(opts.IdentityGroups, opts.SnapshotStore, opts.SnapshotArchiveRoot, opts.SnapshotCheckpointRoot))}}); err != nil {
-				return PullResult{}, err
-			}
-			peerMsg, err := codec.Read()
-			if err != nil {
-				return PullResult{}, err
-			}
-			if peerMsg.Type == protocol.MessageError {
-				return PullResult{}, fmt.Errorf("peer error %s: %s", peerMsg.Error.Code, peerMsg.Error.Message)
-			}
-			if peerMsg.Type != protocol.MessagePeerExchange || peerMsg.PeerExchange == nil {
-				return PullResult{}, fmt.Errorf("expected peer exchange, got %s", peerMsg.Type)
-			}
-			remote := discovery.Peer{ID: msg.Hello.NodeID}
-			plan := discovery.PlanPeerExchange(opts.NodeID, opts.KnownPeers, remote, peersFromProtocol(peerMsg.PeerExchange.Peers))
-			result.LearnedPeers = plan.Learned
-			discovery.NoteExchangedPeers(plan.Learned)
-			remoteGroups := groupsFromProtocol(peerMsg.PeerExchange.IdentityGroups)
-			result.LearnedFolders = planIdentityGroupLearnedFolders(opts.NodeID, opts.IdentityGroups, remote.ID, remoteGroups)
-			learnedSnapshots, err := saveIdentitySnapshotMarkers(opts.SnapshotStore, opts.IdentityGroups, remoteGroups)
-			if err != nil {
-				return PullResult{}, err
-			}
-			result.SnapshotMarkersLearned = learnedSnapshots
-		}
-		if opts.MeshSettingsStore != nil {
-			applied, err := exchangeMeshSettingsChanges(codec, opts, msg.Hello.NodeID)
-			if err != nil {
-				return PullResult{}, err
-			}
-			result.MeshSettingsChangesApplied = applied
-		}
-		metadataCurrent := true
-		if opts.MetadataStore != nil {
-			applied, stopped, fullRefresh, err := exchangeMetadataState(codec, opts, msg.Hello.NodeID)
-			if err != nil {
-				return PullResult{}, err
-			}
-			result.MetadataChangesApplied = applied
-			metadataCurrent = !stopped
-			if fullRefresh {
-				result.MetadataFullRefreshes = 1
-				metadataCurrent = true
-			}
-			if stopped && opts.AsyncMetadataCatchupDial != nil {
-				result.MetadataCatchupStarted = true
-				startAsyncMetadataCatchup(ctx, opts, msg.Hello.NodeID)
-			}
-		}
-		return pullFolderAfterHandshake(ctx, codec, opts, result, msg.Hello.NodeID, metadataCurrent, receiveLimiter)
+		result.MeshSettingsChangesApplied = applied
 	}
+	metadataCurrent := true
+	if opts.MetadataStore != nil {
+		applied, stopped, fullRefresh, err := exchangeMetadataState(codec, opts, msg.Hello.NodeID)
+		if err != nil {
+			return PullResult{}, err
+		}
+		result.MetadataChangesApplied = applied
+		metadataCurrent = !stopped
+		if fullRefresh {
+			result.MetadataFullRefreshes = 1
+			metadataCurrent = true
+		}
+		if stopped && opts.AsyncMetadataCatchupDial != nil {
+			result.MetadataCatchupStarted = true
+			startAsyncMetadataCatchup(ctx, opts, msg.Hello.NodeID)
+		}
+	}
+	return pullFolderAfterHandshake(ctx, codec, opts, result, msg.Hello.NodeID, metadataCurrent, receiveLimiter)
 }
 
 func ExchangeMeshSettings(ctx context.Context, stream io.ReadWriter, opts PullOptions) (int, error) {
@@ -771,39 +616,11 @@ func ExchangeMeshSettings(ctx context.Context, stream io.ReadWriter, opts PullOp
 	if opts.MeshSettingsStore == nil {
 		return 0, fmt.Errorf("mesh settings store is required")
 	}
-	codec := protocol.NewCodec(stream, stream)
-	nonce, err := newNonce()
+	codec, serverHello, err := clientHandshake(stream, opts, opts.PeerPublicKey, []string{"mesh-settings"})
 	if err != nil {
 		return 0, err
 	}
-	hello, err := signedProtocolHello(opts.NodeID, opts.Identity, opts.EncryptionLevel, nonce, advertisedTransferLimits(opts.Transfer, opts.Peer))
-	if err != nil {
-		return 0, err
-	}
-	hello.Capabilities = []string{"mesh-settings"}
-	if err := codec.Write(protocol.Message{Type: protocol.MessageHello, Hello: hello}); err != nil {
-		return 0, err
-	}
-	msg, err := codec.Read()
-	if err != nil {
-		return 0, err
-	}
-	if msg.Type == protocol.MessageError {
-		return 0, fmt.Errorf("peer error %s: %s", msg.Error.Code, msg.Error.Message)
-	}
-	if msg.Type != protocol.MessageHello {
-		return 0, fmt.Errorf("expected hello, got %s", msg.Type)
-	}
-	if err := verifyServerHello(msg.Hello, opts.PeerPublicKey, nonce); err != nil {
-		return 0, err
-	}
-	if msg.Hello.EncryptionLevel < opts.EncryptionLevel && !opts.AllowWeakerEncryptionLevel {
-		return 0, fmt.Errorf("peer negotiated weaker encryption level %d below local level %d", msg.Hello.EncryptionLevel, opts.EncryptionLevel)
-	}
-	if err := peeridentity.ValidateEncryptionLevel(msg.Hello.EncryptionLevel); err != nil {
-		return 0, err
-	}
-	return exchangeMeshSettingsChanges(codec, opts, msg.Hello.NodeID)
+	return exchangeMeshSettingsChanges(codec, opts, serverHello.NodeID)
 }
 
 func exchangeMeshSettingsChanges(codec *protocol.Codec, opts PullOptions, peerID string) (int, error) {
@@ -934,30 +751,8 @@ func startAsyncMetadataCatchup(ctx context.Context, opts PullOptions, peerID str
 }
 
 func MetadataCatchupOnly(ctx context.Context, stream io.ReadWriter, opts PullOptions, peerID string) (PullResult, error) {
-	codec := protocol.NewCodec(stream, stream)
-	nonce, err := newNonce()
+	codec, _, err := clientHandshake(stream, opts, opts.PeerPublicKey, []string{"metadata-state"})
 	if err != nil {
-		return PullResult{}, err
-	}
-	hello, err := signedProtocolHello(opts.NodeID, opts.Identity, opts.EncryptionLevel, nonce, advertisedTransferLimits(opts.Transfer, opts.Peer))
-	if err != nil {
-		return PullResult{}, err
-	}
-	hello.Capabilities = []string{"metadata-state"}
-	if err := codec.Write(protocol.Message{Type: protocol.MessageHello, Hello: hello}); err != nil {
-		return PullResult{}, err
-	}
-	msg, err := codec.Read()
-	if err != nil {
-		return PullResult{}, err
-	}
-	if msg.Type == protocol.MessageError {
-		return PullResult{}, fmt.Errorf("peer error %s: %s", msg.Error.Code, msg.Error.Message)
-	}
-	if msg.Type != protocol.MessageHello {
-		return PullResult{}, fmt.Errorf("expected hello, got %s", msg.Type)
-	}
-	if err := verifyServerHello(msg.Hello, opts.PeerPublicKey, nonce); err != nil {
 		return PullResult{}, err
 	}
 	select {
@@ -1356,8 +1151,8 @@ func fetchStreamBlock(ctx context.Context, primary *protocol.Codec, opts PullOpt
 		return nil, err
 	}
 	defer stream.Close()
-	codec := protocol.NewCodec(stream, stream)
-	if err := streamBlockSourceHandshake(codec, opts, source.PeerPublicKey); err != nil {
+	codec, _, err := clientHandshake(stream, opts, source.PeerPublicKey, []string{"block-transfer"})
+	if err != nil {
 		return nil, err
 	}
 	return requestStreamBlock(ctx, codec, opts.FolderID, rel, index, blockSize, receiveLimiter)
@@ -1394,41 +1189,6 @@ func chooseStreamBlockSource(sources []StreamBlockSource, rel string, index int)
 		}
 	}
 	return StreamBlockSource{Path: routing.RelayPath, Network: routing.WANNetwork, Reachable: true}
-}
-
-func streamBlockSourceHandshake(codec *protocol.Codec, opts PullOptions, peerPublicKey string) error {
-	nonce, err := newNonce()
-	if err != nil {
-		return err
-	}
-	hello, err := signedProtocolHello(opts.NodeID, opts.Identity, opts.EncryptionLevel, nonce, advertisedTransferLimits(opts.Transfer, opts.Peer))
-	if err != nil {
-		return err
-	}
-	hello.Capabilities = []string{"block-transfer"}
-	if err := codec.Write(protocol.Message{Type: protocol.MessageHello, Hello: hello}); err != nil {
-		return err
-	}
-	msg, err := codec.Read()
-	if err != nil {
-		return err
-	}
-	if msg.Type == protocol.MessageError {
-		return fmt.Errorf("peer error %s: %s", msg.Error.Code, msg.Error.Message)
-	}
-	if msg.Type != protocol.MessageHello {
-		return fmt.Errorf("expected hello, got %s", msg.Type)
-	}
-	if peerPublicKey == "" {
-		peerPublicKey = opts.PeerPublicKey
-	}
-	if err := verifyServerHello(msg.Hello, peerPublicKey, nonce); err != nil {
-		return err
-	}
-	if msg.Hello.EncryptionLevel < opts.EncryptionLevel && !opts.AllowWeakerEncryptionLevel {
-		return fmt.Errorf("peer negotiated weaker encryption level %d below local level %d", msg.Hello.EncryptionLevel, opts.EncryptionLevel)
-	}
-	return peeridentity.ValidateEncryptionLevel(msg.Hello.EncryptionLevel)
 }
 
 func requestStreamBlock(ctx context.Context, codec *protocol.Codec, folderID string, rel string, index int, blockSize int, receiveLimiter *ratelimit.Limiter) ([]byte, error) {
