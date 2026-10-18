@@ -34,7 +34,12 @@ async function pairFrom(page) {
   await expect(generate).toBeEnabled();
   await clickClearOfSidebar(generate);
   const text = page.getByTestId('pairing-export-text');
-  await expect(text).toBeVisible({ timeout: 45000 });
+  try {
+    await expect(text).toBeVisible({ timeout: 45000 });
+  } catch (error) {
+    const message = await page.getByTestId('pairing-message').textContent().catch(() => '');
+    throw new Error(`pairing export did not appear: ${(message || '').trim() || 'no pairing message'}`, { cause: error });
+  }
   const value = await text.inputValue();
   expect(value).toContain('reachableAPIURL');
   expect(value).toContain('https://fse-');

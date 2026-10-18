@@ -313,22 +313,6 @@
       && !/is ready|paired by code/i.test(message);
   }
 
-  function onPairingButtonClick(event: MouseEvent) {
-    const target = event.target;
-    if (!(target instanceof Element)) {
-      return;
-    }
-    const button = target.closest('[data-testid="show-pairing-code"], [data-testid="redeem-pairing-code"]');
-    if (!(button instanceof HTMLButtonElement) || button.disabled) {
-      return;
-    }
-    event.preventDefault();
-    if (button.getAttribute('data-testid') === 'show-pairing-code') {
-      void showPairingCode();
-      return;
-    }
-    void redeemRemotePairingCode();
-  }
   let managedDaemonInstances: ManagedDaemonInstance[] = ensureLocalInstanceFirst([defaultLocalDaemonInstance()]);
   let selectedInstanceID = managedDaemonInstances[0].id;
   let expandedInstanceGroups: Record<string, boolean> = defaultExpandedInstanceGroups(managedDaemonInstances);
@@ -1851,7 +1835,6 @@
   }
 
   onMount(() => {
-    document.addEventListener('click', onPairingButtonClick);
     if (window.matchMedia('(prefers-color-scheme: light)').matches) {
       theme = 'light';
     }
@@ -1863,7 +1846,6 @@
         void tick();
       }, 3000);
       return () => {
-        document.removeEventListener('click', onPairingButtonClick);
         clearInterval(timer);
       };
     }
@@ -1877,7 +1859,6 @@
       void refreshDesktopAppUpdateStatus();
     }, 15000);
     return () => {
-      document.removeEventListener('click', onPairingButtonClick);
       clearInterval(statusTimer);
     };
   });

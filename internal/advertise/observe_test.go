@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -335,5 +336,61 @@ func TestRefreshNowDoesNotCallProbeForExplicitOverride(t *testing.T) {
 	}
 	if strings.Contains(string(mustRead(t, path)), "192.0.2.40") {
 		t.Fatal("GUI host replaced the override")
+	}
+}
+
+func TestPublicDialbackIsSharedUntilTheProbeChanges(t *testing.T) {
+	t.Cleanup(resetObservations)
+	var calls atomic.Int32
+	SetReachabilityProbe(func(context.Context, string, int) error {
+		calls.Add(1)
+		return errors.New("closed")
+	})
+	if PublicDialbackOK("203.0.113.9", 22421) {
+		t.Fatal("closed port was accepted")
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if PublicDialbackOK("203.0.113.9", 22421) {
+				t.Error("cached closed port was accepted")
+			}
+		}()
+	}
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatalf("dial-backs = %d, want 1", calls.Load())
+	}
+
+	key := net.JoinHostPort("203.0.113.9", "22421")
+	dialbackMu.Lock()
+	entry := dialbackCache[key]
+	entry.until = time.Now().Add(-time.Second)
+	dialbackCache[key] = entry
+	dialbackMu.Unlock()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	observationMu.Lock()
+	probeFn = func(context.Context, string, int) error {
+		close(started)
+		<-release
+		return nil
+	}
+	observationMu.Unlock()
+	if PublicDialbackOK("203.0.113.9", 22421) {
+		t.Fatal("expired cache blocked on a refresh instead of returning the last result")
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expired dial-back did not refresh")
+	}
+	close(release)
+
+	SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	if !PublicDialbackOK("203.0.113.9", 22421) {
+		t.Fatal("probe change did not dial again")
 	}
 }

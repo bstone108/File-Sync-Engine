@@ -68,6 +68,7 @@ func SetReachabilityProbe(fn func(context.Context, string, int) error) {
 	observationMu.Lock()
 	probeFn = fn
 	observationMu.Unlock()
+	clearDialbackCache()
 }
 
 // CurrentObservations is the set Apply uses while choosing an advertise URL.
@@ -377,8 +378,33 @@ func publicNeedsDialback(host string) bool {
 	return ip.IsGlobalUnicast()
 }
 
+// dialbackTTL is how long a dial-back result is reused before a refresh.
+// Announce and the GUI config poll call this for every public candidate.
+// Dialing again on each call stacked multi-second stalls onto the browser
+// connection pool and the identity-package request never got a socket.
+const dialbackTTL = 30 * time.Second
+
+type dialbackEntry struct {
+	ok    bool
+	until time.Time
+}
+
+type dialbackFlight struct {
+	done chan struct{}
+	ok   bool
+}
+
+var (
+	dialbackMu       sync.Mutex
+	dialbackGen      uint64
+	dialbackCache    = map[string]dialbackEntry{}
+	dialbackInflight = map[string]*dialbackFlight{}
+)
+
 // PublicDialbackOK reports whether a learned public host may be announced.
 // LAN, Tailscale, and empty hosts are left to the caller's other checks.
+// The first lookup dials. Later lookups reuse that result, and an expired
+// result is returned immediately while one refresh runs in the background.
 func PublicDialbackOK(host string, port int) bool {
 	host = hostname(host)
 	if host == "" || !publicNeedsDialback(host) {
@@ -387,9 +413,60 @@ func PublicDialbackOK(host string, port int) bool {
 	if port < 1 || port > 65535 {
 		port = 22420
 	}
+	key := net.JoinHostPort(host, strconv.Itoa(port))
+	now := time.Now()
+	dialbackMu.Lock()
+	if entry, ok := dialbackCache[key]; ok && now.Before(entry.until) {
+		dialbackMu.Unlock()
+		return entry.ok
+	}
+	if entry, ok := dialbackCache[key]; ok {
+		if _, busy := dialbackInflight[key]; !busy {
+			flight := &dialbackFlight{done: make(chan struct{})}
+			dialbackInflight[key] = flight
+			gen := dialbackGen
+			dialbackMu.Unlock()
+			go finishDialback(key, host, port, flight, gen)
+		} else {
+			dialbackMu.Unlock()
+		}
+		return entry.ok
+	}
+	if flight, ok := dialbackInflight[key]; ok {
+		dialbackMu.Unlock()
+		<-flight.done
+		return flight.ok
+	}
+	flight := &dialbackFlight{done: make(chan struct{})}
+	dialbackInflight[key] = flight
+	gen := dialbackGen
+	dialbackMu.Unlock()
+	return finishDialback(key, host, port, flight, gen)
+}
+
+func finishDialback(key, host string, port int, flight *dialbackFlight, gen uint64) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
-	defer cancel()
-	return activeProbe(Observations{})(ctx, host, port) == nil
+	ok := activeProbe(Observations{})(ctx, host, port) == nil
+	cancel()
+	flight.ok = ok
+	dialbackMu.Lock()
+	if dialbackGen == gen {
+		dialbackCache[key] = dialbackEntry{ok: ok, until: time.Now().Add(dialbackTTL)}
+		if dialbackInflight[key] == flight {
+			delete(dialbackInflight, key)
+		}
+	}
+	dialbackMu.Unlock()
+	close(flight.done)
+	return ok
+}
+
+func clearDialbackCache() {
+	dialbackMu.Lock()
+	dialbackGen++
+	dialbackCache = map[string]dialbackEntry{}
+	dialbackInflight = map[string]*dialbackFlight{}
+	dialbackMu.Unlock()
 }
 
 func reachPort(cfg config.Config) int {
@@ -696,7 +773,6 @@ func (e errString) Error() string { return string(e) }
 
 func resetObservations() {
 	observationMu.Lock()
-	defer observationMu.Unlock()
 	guiHost = ""
 	learnedIPs = nil
 	natIP = ""
@@ -705,4 +781,6 @@ func resetObservations() {
 	probeFn = nil
 	changeFn = nil
 	lastAttempt = time.Time{}
+	observationMu.Unlock()
+	clearDialbackCache()
 }
