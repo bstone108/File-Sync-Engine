@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>File-Sync-Engine</Name>
-  <Repository>ghcr.io/bstone108/file-sync-engine:2026.10.16.03</Repository>
+  <Repository>ghcr.io/bstone108/file-sync-engine:2026.10.18.01</Repository>
   <Registry>https://github.com/bstone108/File-Sync-Engine/pkgs/container/file-sync-engine</Registry>
   <Network>bridge</Network>
   <MyIP/>
