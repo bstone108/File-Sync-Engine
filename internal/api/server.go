@@ -44,6 +44,8 @@ type State struct {
 	Maintenance         MaintenanceState `json:"maintenance"`
 	Backup              BackupState      `json:"backup"`
 	WebGUI              WebGUIState      `json:"webGUI,omitempty"`
+	NATType             string           `json:"natType,omitempty"`
+	STUNMappedAddress   string           `json:"stunMappedAddress,omitempty"`
 	FoldersState        []FolderState    `json:"-"`
 	PeersState          []PeerState      `json:"-"`
 }
@@ -1124,7 +1126,14 @@ func (s *Server) requireKey(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, s.snapshotState())
+	writeJSON(w, withNATStatus(s.snapshotState()))
+}
+
+func withNATStatus(state State) State {
+	natType, mapped := advertise.ReportedNAT()
+	state.NATType = natType
+	state.STUNMappedAddress = mapped
+	return state
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {

@@ -249,9 +249,6 @@ func TestPortMappingTargetsIncludeLibp2pAndLogFailures(t *testing.T) {
 		return "", 0, errors.New("no gateway")
 	}
 	t.Cleanup(func() { mapExternalPort = previous })
-	stunWas := stunDiscover
-	stunDiscover = func(context.Context) (string, int, error) { return "", 0, errors.New("no stun") }
-	t.Cleanup(func() { stunDiscover = stunWas })
 	StartAutoDetect(context.Background(), config.Config{API: config.APIConfig{Listen: "0.0.0.0:22420"}})
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

@@ -108,6 +108,23 @@
     detail?: string;
   };
 
+  function natTypeLabel(natType: string | undefined): string {
+    switch (natType) {
+      case 'cone':
+        return 'Cone NAT';
+      case 'symmetric':
+        return 'Symmetric NAT';
+      case 'unknown':
+        return 'NAT unknown';
+      case 'disabled':
+        return 'NAT detection off';
+      case 'pending':
+        return 'Checking NAT';
+      default:
+        return natType ? natType : 'Checking NAT';
+    }
+  }
+
   function limitedRelayGuidance(peer: DaemonPeer): string {
     const diagnostics = peer.networkDiagnostics;
     if (Array.isArray(diagnostics)) {
@@ -2098,6 +2115,7 @@
         <dt>Identity</dt><dd>{status?.identityPublicKey ?? 'Loading'}</dd>
         <dt>Engine schema</dt><dd>{status?.engineSchemaVersion ?? '—'}</dd>
         <dt>Daemon</dt><dd>{status?.status ?? 'starting'}</dd>
+        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status?.natType)}{#if status?.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}</dd>
         <dt>Folders</dt><dd>{daemonFolders.length}</dd>
         <dt>Peers</dt><dd>{daemonPeers.length}</dd>
       </dl>
@@ -2125,6 +2143,7 @@
     {#if status}
       <dl class="host-status-grid" aria-label="Daemon operational summary">
         <dt>Daemon</dt><dd>{status.status ?? 'running'}</dd>
+        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status.natType)}{#if status.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}</dd>
         <dt>Folders</dt><dd>{daemonFolders.length}</dd>
         <dt>Peers</dt><dd>{daemonPeers.length}</dd>
         <dt>Started</dt><dd>{status.startedAt ?? 'unknown'}</dd>

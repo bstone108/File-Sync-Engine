@@ -24,6 +24,8 @@ export type DaemonStatus = {
     lastUpdateMessage?: string;
     autoUpdate?: boolean;
   };
+  natType?: string;
+  stunMappedAddress?: string;
 };
 
 export type DaemonFolder = {
