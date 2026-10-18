@@ -240,28 +240,76 @@ func SetExternalMappingHook(fn func(ip string, port int)) {
 
 func observationURLs(cfg config.Config, obs Observations) []string {
 	port := reachPort(cfg)
+	probe := activeProbe(obs)
 	out := []string{}
-	if host := hostname(obs.GUIHost); acceptableAutoHost(host) {
-		probe := obs.Probe
-		if probe == nil {
-			probe = dialProbe
+	consider := func(host string, hostPort int) {
+		if !acceptableAutoHost(host) {
+			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
-		err := probe(ctx, host, port)
-		cancel()
-		if err == nil {
-			out = append(out, net.JoinHostPort(host, strconv.Itoa(port)))
+		if hostPort < 1 || hostPort > 65535 {
+			hostPort = port
 		}
+		if publicNeedsDialback(host) {
+			ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+			err := probe(ctx, host, hostPort)
+			cancel()
+			if err != nil {
+				return
+			}
+		}
+		out = append(out, net.JoinHostPort(host, strconv.Itoa(hostPort)))
 	}
+	consider(hostname(obs.GUIHost), port)
 	for _, ip := range obs.ObservedIPs {
-		if acceptableAutoHost(ip) {
-			out = append(out, net.JoinHostPort(ip, strconv.Itoa(port)))
-		}
+		consider(ip, port)
 	}
-	if obs.ExternalPort > 0 && obs.ExternalPort <= 65535 && acceptableAutoHost(obs.ExternalIP) {
-		out = append(out, net.JoinHostPort(obs.ExternalIP, strconv.Itoa(obs.ExternalPort)))
+	if obs.ExternalPort > 0 && obs.ExternalPort <= 65535 {
+		consider(obs.ExternalIP, obs.ExternalPort)
 	}
 	return out
+}
+
+func activeProbe(obs Observations) func(context.Context, string, int) error {
+	if obs.Probe != nil {
+		return obs.Probe
+	}
+	observationMu.Lock()
+	fn := probeFn
+	observationMu.Unlock()
+	if fn != nil {
+		return fn
+	}
+	return dialProbe
+}
+
+// publicNeedsDialback is true for a global address that is not a LAN or
+// Tailscale address. Those addresses are advertised only after a TCP dial-back
+// to the API port succeeds. AutoNAT reachability of the libp2p port is not
+// the same as a forwarded API port.
+func publicNeedsDialback(host string) bool {
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil {
+		return true
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || isTailscaleIP(ip) || routing.IsContainerBridgeIP(ip) {
+		return false
+	}
+	return ip.IsGlobalUnicast()
+}
+
+// PublicDialbackOK reports whether a learned public host may be announced.
+// LAN, Tailscale, and empty hosts are left to the caller's other checks.
+func PublicDialbackOK(host string, port int) bool {
+	host = hostname(host)
+	if host == "" || !publicNeedsDialback(host) {
+		return host != ""
+	}
+	if port < 1 || port > 65535 {
+		port = 22420
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	return activeProbe(Observations{})(ctx, host, port) == nil
 }
 
 func reachPort(cfg config.Config) int {

@@ -119,8 +119,9 @@ func HandleRedeemPairCode(ctx context.Context, configPath string, req api.PairCo
 		return api.PairCodeRedeemResponse{}, err
 	}
 	remoteProfile := record.Profile()
-	body, _, err := link.PostJSON(ctx, config.PeerConfig{
+	body, _, err := link.PostSecret(ctx, config.PeerConfig{
 		APICertificateSHA256: record.CertificateSHA256,
+		DHTPeerID:            remoteProfile.DHTPeerID,
 		Relays:               record.Relays,
 		Endpoints:            remoteProfile.Endpoints(""),
 	}, "/v1/pair-code/claim", payload)

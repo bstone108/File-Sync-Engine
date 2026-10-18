@@ -46,6 +46,17 @@ func (r *Registry) Active(peerID string) (Observation, bool) {
 	return obs, ok && obs.Path != ""
 }
 
+// Forget drops a peer's path. A failed dial calls it so the API does not
+// keep reporting a connection that is no longer up.
+func (r *Registry) Forget(peerID string) {
+	if r == nil || peerID == "" {
+		return
+	}
+	r.mu.Lock()
+	delete(r.peers, peerID)
+	r.mu.Unlock()
+}
+
 // Reset clears the table. Tests use it between cases.
 func (r *Registry) Reset() {
 	if r == nil {

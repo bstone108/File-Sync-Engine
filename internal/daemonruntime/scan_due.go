@@ -136,7 +136,8 @@ func processPeerPull(opts ScanDueOptions, pull peerpullplan.Pull) {
 		return
 	}
 	if opts.PeerPuller == nil {
-		publish(opts.Publisher, api.Event{Type: "peer.sync.error", FolderID: opts.FolderID, PeerID: pull.PeerID, Message: "peer puller is not configured"})
+		// foldershare publishes the real transfer counts. An empty puller used
+		// to report writes=0 routePath=direct for a transfer that never ran.
 		return
 	}
 	publish(opts.Publisher, api.Event{Type: "peer.sync.started", FolderID: opts.FolderID, PeerID: pull.PeerID, Message: "peer transfer pass started"})

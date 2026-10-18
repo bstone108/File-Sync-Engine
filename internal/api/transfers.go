@@ -21,13 +21,17 @@ type TransferReadModel struct {
 }
 
 type TransferReadModelItem struct {
-	FolderID   string    `json:"folderId"`
-	PeerID     string    `json:"peerId,omitempty"`
-	Status     string    `json:"status"`
-	StartedAt  time.Time `json:"startedAt,omitempty"`
-	FinishedAt time.Time `json:"finishedAt,omitempty"`
-	EventType  string    `json:"eventType"`
-	Message    string    `json:"message,omitempty"`
+	FolderID      string    `json:"folderId"`
+	PeerID        string    `json:"peerId,omitempty"`
+	Status        string    `json:"status"`
+	StartedAt     time.Time `json:"startedAt,omitempty"`
+	FinishedAt    time.Time `json:"finishedAt,omitempty"`
+	EventType     string    `json:"eventType"`
+	Message       string    `json:"message,omitempty"`
+	Writes        int       `json:"writes,omitempty"`
+	BlocksFetched int       `json:"blocksFetched,omitempty"`
+	BlocksReused  int       `json:"blocksReused,omitempty"`
+	RoutePath     string    `json:"routePath,omitempty"`
 }
 
 func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request) {
@@ -59,16 +63,22 @@ func buildTransferReadModel(events []Event, limit int) TransferReadModel {
 			continue
 		}
 		key := event.FolderID + "\x00" + event.PeerID
+		writes, fetched, reused, route := transferCounts(event.Message)
+		item := TransferReadModelItem{
+			FolderID: event.FolderID, PeerID: event.PeerID, Status: status, EventType: event.Type, Message: event.Message,
+			Writes: writes, BlocksFetched: fetched, BlocksReused: reused, RoutePath: route,
+		}
 		if status == "active" {
-			active[key] = TransferReadModelItem{FolderID: event.FolderID, PeerID: event.PeerID, Status: status, StartedAt: event.Time, EventType: event.Type, Message: event.Message}
+			item.StartedAt = event.Time
+			active[key] = item
 			continue
 		}
-		startedAt := time.Time{}
 		if current, ok := active[key]; ok {
-			startedAt = current.StartedAt
+			item.StartedAt = current.StartedAt
 			delete(active, key)
 		}
-		history = append(history, TransferReadModelItem{FolderID: event.FolderID, PeerID: event.PeerID, Status: status, StartedAt: startedAt, FinishedAt: event.Time, EventType: event.Type, Message: event.Message})
+		item.FinishedAt = event.Time
+		history = append(history, item)
 	}
 	activeItems := make([]TransferReadModelItem, 0, len(active))
 	for _, item := range active {
@@ -82,6 +92,26 @@ func buildTransferReadModel(events []Event, limit int) TransferReadModel {
 		history = history[:limit]
 	}
 	return TransferReadModel{Active: activeItems, History: history}
+}
+
+func transferCounts(message string) (writes, fetched, reused int, route string) {
+	for _, field := range strings.Fields(message) {
+		key, val, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "writes":
+			writes, _ = strconv.Atoi(val)
+		case "blocksFetched":
+			fetched, _ = strconv.Atoi(val)
+		case "blocksReused":
+			reused, _ = strconv.Atoi(val)
+		case "routePath":
+			route = val
+		}
+	}
+	return writes, fetched, reused, route
 }
 
 func transferEventStatus(eventType string) (string, bool) {

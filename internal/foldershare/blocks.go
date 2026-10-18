@@ -204,7 +204,7 @@ func indexLocalBlocks(root string, byPath map[string]Entry) map[string]storedBlo
 	return out
 }
 
-func downloadFile(peer config.PeerConfig, folder config.FolderConfig, entry Entry, target string, locals map[string]storedBlock, progress func(network, completed int64)) error {
+func downloadFile(peer config.PeerConfig, folder config.FolderConfig, entry Entry, target string, locals map[string]storedBlock, progress func(network, completed int64)) (int, int, error) {
 	var last error
 	attempts := 1 + len(fileRetryBackoff)
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -219,50 +219,52 @@ func downloadFile(peer config.PeerConfig, folder config.FolderConfig, entry Entr
 			})
 			time.Sleep(delay)
 		}
-		last = downloadFileOnce(peer, folder.ID, entry, target, locals, progress)
-		if last == nil {
-			return nil
+		fetched, reused, err := downloadFileOnce(peer, folder.ID, entry, target, locals, progress)
+		if err == nil {
+			return fetched, reused, nil
 		}
+		last = err
 	}
-	return last
+	return 0, 0, last
 }
 
-func downloadFileOnce(peer config.PeerConfig, folderID string, entry Entry, target string, locals map[string]storedBlock, progress func(network, completed int64)) error {
+func downloadFileOnce(peer config.PeerConfig, folderID string, entry Entry, target string, locals map[string]storedBlock, progress func(network, completed int64)) (int, int, error) {
+	fail := func(err error) (int, int, error) { return 0, 0, err }
 	if entry.Size < 0 {
-		return fmt.Errorf("download %s: negative size", entry.Path)
+		return fail(fmt.Errorf("download %s: negative size", entry.Path))
 	}
 	ready, err := ensureBlocks(peer, folderID, entry)
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	entry = ready
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
+		return fail(err)
 	}
 	tmp := target + ".fse-sync-tmp"
 	statePath := target + ".fse-sync-state"
 	if entry.Size == 0 {
 		if err := os.WriteFile(tmp, nil, 0o644); err != nil {
-			return err
+			return fail(err)
 		}
 		if err := finishDownload(tmp, target, entry); err != nil {
-			return err
+			return fail(err)
 		}
 		_ = os.Remove(statePath)
-		return nil
+		return 0, 0, nil
 	}
 	if err := validateBlocks(entry); err != nil {
-		return err
+		return fail(err)
 	}
 	have := loadPartial(statePath, tmp, entry)
 	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return err
+		return fail(err)
 	}
 	defer file.Close()
 	if len(have) == 0 {
 		if err := file.Truncate(0); err != nil {
-			return err
+			return fail(err)
 		}
 	}
 	oldPath := ""
@@ -270,6 +272,7 @@ func downloadFileOnce(peer config.PeerConfig, folderID string, entry Entry, targ
 		oldPath = target
 	}
 	var failed error
+	var fetched, reused int
 	completed := int64(0)
 	emit := func(network, done int64) {
 		if progress != nil {
@@ -278,6 +281,7 @@ func downloadFileOnce(peer config.PeerConfig, folderID string, entry Entry, targ
 	}
 	for _, block := range entry.Blocks {
 		if _, ok := have[block.Index]; ok {
+			reused++
 			completed += int64(block.Size)
 			continue
 		}
@@ -292,24 +296,29 @@ func downloadFileOnce(peer config.PeerConfig, folderID string, entry Entry, targ
 		}
 		have[block.Index] = struct{}{}
 		if err := savePartial(statePath, entry, have); err != nil {
-			return err
+			return fail(err)
+		}
+		if network == 0 {
+			reused++
+		} else {
+			fetched++
 		}
 		completed += int64(block.Size)
 		emit(network, completed)
 	}
 	emit(0, completed)
 	if failed != nil {
-		return failed
+		return fail(failed)
 	}
 	if err := file.Close(); err != nil {
-		return err
+		return fail(err)
 	}
 	if err := finishDownload(tmp, target, entry); err != nil {
 		_ = os.Remove(statePath)
-		return err
+		return fail(err)
 	}
 	_ = os.Remove(statePath)
-	return nil
+	return fetched, reused, nil
 }
 
 func ensureBlocks(peer config.PeerConfig, folderID string, entry Entry) (Entry, error) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/link"
 	"filesyncengine/internal/peeridentity"
 )
 
@@ -231,6 +232,7 @@ func PairedPeerID(nodeName, discoveryID string) string {
 // UpsertPairedPeer stores the API key, certificate pin, and HTTPS endpoint learned
 // during daemon-to-daemon pairing. An existing peer with the same identity is updated.
 func UpsertPairedPeer(path string, peer config.PeerConfig) error {
+	peer = authenticatedPeer(peer)
 	cfg, err := config.LoadFile(path)
 	if err != nil {
 		return err
@@ -282,6 +284,7 @@ func UpsertPairedPeer(path string, peer config.PeerConfig) error {
 // MergePairedPeerLink adds newly observed addresses, relays, and the DHT
 // identity without removing addresses that still work.
 func MergePairedPeerLink(path, peerID string, peer config.PeerConfig) error {
+	peer = authenticatedPeer(peer)
 	cfg, err := config.LoadFile(path)
 	if err != nil {
 		return err
@@ -314,6 +317,25 @@ func MergePairedPeerLink(path, peerID string, peer config.PeerConfig) error {
 		return save(path, cfg)
 	}
 	return fmt.Errorf("peer %q not found", peerID)
+}
+
+func authenticatedPeer(peer config.PeerConfig) config.PeerConfig {
+	var endpoints []config.EndpointConfig
+	for _, endpoint := range peer.Endpoints {
+		if link.KeepPairedAddress(endpoint.Address, peer.DHTPeerID) {
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	peer.Endpoints = endpoints
+	var relays []string
+	for _, relay := range peer.Relays {
+		relay = link.CircuitForPeer(relay, peer.DHTPeerID)
+		if link.KeepPairedAddress(relay, peer.DHTPeerID) {
+			relays = append(relays, relay)
+		}
+	}
+	peer.Relays = relays
+	return peer
 }
 
 func unionStrings(left, right []string) []string {

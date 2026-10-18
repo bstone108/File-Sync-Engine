@@ -8,9 +8,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"filesyncengine/internal/advertise"
@@ -55,6 +58,7 @@ import (
 	"filesyncengine/internal/metadatareconcile"
 	"filesyncengine/internal/metadatastore"
 	"filesyncengine/internal/monitor"
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/pairing"
 	"filesyncengine/internal/peerevents"
 	"filesyncengine/internal/peerpullplan"
@@ -158,6 +162,7 @@ func run(configPath string) {
 			fatalexit.Exit(2, fmt.Sprintf("daemon panic: %v\n%s", recovered, debug.Stack()))
 		}
 	}()
+	discovery.SetLibp2pKeyPath(filepath.Join(filepath.Dir(configPath), "libp2p.key"))
 	cfg, _, err := config.EnsureAPIKey(configPath)
 	if err != nil {
 		exitCLIF("ensure api key: %v", err)
@@ -213,6 +218,7 @@ func run(configPath string) {
 		structuredlog.Event("error", "pairing.local.listen", "local pairing lookup is unavailable", map[string]any{"error": localErr.Error()})
 	}
 	pairService := link.NewService(nil)
+	pairService.SetStorePath(filepath.Join(filepath.Dir(configPath), "pairing-codes.json"))
 	pairService.SetDirectoryFactory(func() (link.Directory, string, error) {
 		current := cfg
 		if loaded, loadErr := config.LoadFile(configPath); loadErr == nil {
@@ -316,6 +322,7 @@ func run(configPath string) {
 		})
 	}
 	emitMonitorEvent := func(event monitor.Event) {
+		foldershare.Wake()
 		peerPulls := peerPullsWithEndpointObservations(cfg, event.FolderID, liveEndpointObservations)
 		daemonruntime.HandleMonitorEvent(daemonruntime.MonitorEventOptions{
 			Event:        event,
@@ -323,10 +330,6 @@ func run(configPath string) {
 			TransferGate: transferControl,
 			SyncRunner:   syncRunner,
 			PeerPulls:    peerPulls,
-			PeerPuller: daemonruntime.PeerPullerFunc(func(pull peerPull) (peersync.Result, error) {
-				// Bidirectional folder alignment is owned by foldershare. A mirror pull would delete files the other side just created.
-				return peersync.Result{}, nil
-			}),
 			WarningHandler: func(warnings []foldersync.InaccessibleWarning) {
 				publishFolderWarnings(apiServer, warnings)
 			},
@@ -373,9 +376,44 @@ func run(configPath string) {
 	}
 	fatalexit.Go(func() { advertise.StartAutoDetect(detectCtx, cfg) })
 	fatalexit.Go(func() { daemonwebgui.StartAutoUpdate(detectCtx, configPath, apiServer.SetWebGUIState) })
+	discovery.SetAPIHandler(apiServer.Router())
+	foldershare.SetPassReporter(func(folderID string, peer config.PeerConfig, writes, fetched, reused int) {
+		route := ""
+		if obs, ok := nat.DefaultPaths.Active(peer.ID); ok {
+			route = string(obs.Path)
+		}
+		apiServer.Publish(api.Event{
+			Type:     "peer.sync.finished",
+			FolderID: folderID,
+			PeerID:   peer.ID,
+			Message: peerevents.SyncFinishedMessageWithRoute(peersync.Result{
+				Writes:        writes,
+				BlocksFetched: fetched,
+				BlocksReused:  reused,
+			}, peerevents.Route{Path: route}),
+		})
+	})
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
+	fatalexit.Go(func() {
+		select {
+		case <-sigCh:
+			_ = stopSignal.Handler(context.Background())
+		case <-detectCtx.Done():
+		}
+	})
 	schedule := daemonloop.NewPollSchedule(time.Now(), time.Now())
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	reconcile := func() {
+		if fresh, loadErr := config.LoadFile(configPath); loadErr == nil {
+			foldershare.Reconcile(fresh, configPath, func(folderID string) bool {
+				return transferControl.IsPaused(folderID, "")
+			})
+		}
+	}
+	reconcile()
 	for {
 		select {
 		case <-stopSignal.Done():
@@ -384,15 +422,12 @@ func run(configPath string) {
 			apiServer.Publish(stopProjection.Event)
 			structuredlog.Event(stopProjection.LogLevel, stopProjection.LogEvent, stopProjection.LogMessage, stopProjection.LogFields)
 			return
+		case <-foldershare.WakeChannel():
 		case <-ticker.C:
 			apicontrol.SweepPairingCodes(detectCtx)
 		}
 		now := time.Now()
-		if fresh, loadErr := config.LoadFile(configPath); loadErr == nil {
-			foldershare.Reconcile(fresh, configPath, func(folderID string) bool {
-				return transferControl.IsPaused(folderID, "")
-			})
-		}
+		reconcile()
 		daemonloop.RunDueWork(&schedule, now, daemonloop.DueWorkOptions{
 			DiscoveryInterval: discoveryPollInterval,
 			MetadataInterval:  metadataReconciliationInterval,

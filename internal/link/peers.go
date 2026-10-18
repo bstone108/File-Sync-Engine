@@ -13,8 +13,12 @@ type PeerAPIDirectory struct {
 	Endpoints func() []string
 }
 
+// ErrPeerDirectoryLookupOnly means this directory answers lookups and does not
+// publish. MultiDirectory treats it as expected, not as a rejected record.
+var ErrPeerDirectoryLookupOnly = errors.New("connected peers look pairing records up and do not publish them")
+
 func (d PeerAPIDirectory) Publish(context.Context, string, []byte) error {
-	return errors.New("connected peers do not store a new pairing record")
+	return ErrPeerDirectoryLookupOnly
 }
 
 func (d PeerAPIDirectory) Unpublish(context.Context, string) error {

@@ -49,7 +49,7 @@ func (m *MultiDirectory) Publish(ctx context.Context, namespace string, payload 
 	for _, dir := range m.dirs {
 		go func(dir Directory) {
 			err := dir.Publish(pubCtx, namespace, payload)
-			if err != nil {
+			if err != nil && !errors.Is(err, ErrPeerDirectoryLookupOnly) {
 				structuredlog.Event("error", "pairing.publish.failed", "pairing directory rejected a record", map[string]any{"error": err.Error()})
 			}
 			results <- err

@@ -10,6 +10,57 @@ import (
 	"filesyncengine/internal/config"
 )
 
+func TestHostnameAPIIsTriedBeforeRelay(t *testing.T) {
+	peer := config.PeerConfig{
+		ID:        "fse-a",
+		DHTPeerID: "12D3KooWPeer",
+		Relays:    []string{"/ip4/10.200.0.1/tcp/4001/p2p/12D3KooWRelay/p2p-circuit"},
+		Endpoints: []config.EndpointConfig{{
+			Kind: "manual", Address: "https://fse-a:22420", NetworkHint: "wan",
+		}},
+	}
+	stages := endpointStages(peer)
+	if len(stages) <= libp2pStage || len(stages[0]) != 1 || !strings.Contains(stages[0][0].Address, "fse-a") {
+		t.Fatalf("hostname was not in the preferred stage: %+v", stages)
+	}
+	foundWAN := false
+	for i, stage := range stages {
+		if i <= libp2pStage {
+			continue
+		}
+		for _, endpoint := range stage {
+			if strings.Contains(endpoint.Address, "203.0.113.9") {
+				foundWAN = true
+			}
+			if strings.Contains(endpoint.Address, "fse-a") {
+				t.Fatalf("hostname fell through to stage %d", i)
+			}
+		}
+	}
+	peer.Endpoints = append(peer.Endpoints, config.EndpointConfig{
+		Kind: "manual", Address: "https://203.0.113.9:22420", NetworkHint: "wan",
+	})
+	stages = endpointStages(peer)
+	for _, endpoint := range stages[0] {
+		if strings.Contains(endpoint.Address, "203.0.113.9") {
+			t.Fatal("public IP was preferred ahead of libp2p")
+		}
+	}
+	for i, stage := range stages {
+		if i <= libp2pStage {
+			continue
+		}
+		for _, endpoint := range stage {
+			if strings.Contains(endpoint.Address, "203.0.113.9") {
+				foundWAN = true
+			}
+		}
+	}
+	if !foundWAN {
+		t.Fatalf("public IP was dropped: %+v", stages)
+	}
+}
+
 func TestDialFailsOverWhenFirstAddressDies(t *testing.T) {
 	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/sync-journal" {
