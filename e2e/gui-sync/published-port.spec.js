@@ -128,7 +128,10 @@ test('pairing works when only published ports connect the containers', async ({ 
     expect(code).toMatch(/[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}/);
     await expect.poll(() => {
       const raw = engineLog('published-a');
-      if (raw.includes('pairing code advertised on the DHT')) {
+      // A published port the node dials itself is not public reachability.
+      // Two clients that can dial each other serve the pairing record on that
+      // connection until a remote peer confirms the port.
+      if (raw.includes('pairing code advertised on the DHT') || raw.includes('pairing code is served to a connected peer')) {
         return 'ok';
       }
       const lines = raw.split('\n').filter((line) => line.includes('libp2p.bootstrap.dial') || line.includes('pairing.publish.failed'));

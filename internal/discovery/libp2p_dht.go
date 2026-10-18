@@ -22,6 +22,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	routingdiscovery "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
+	"github.com/libp2p/go-libp2p/p2p/protocol/autonatv2"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/libp2p/go-libp2p/p2p/transport/quicreuse"
 	ma "github.com/multiformats/go-multiaddr"
@@ -38,22 +39,26 @@ const dhtQueryLimit = 64
 // peers advertising the same namespace. Manual/configured peers remain wired as
 // separate static discovery sources by the daemon.
 type Libp2pDHTRouter struct {
-	host           host.Host
-	dht            *dht.IpfsDHT
-	discovery      *routingdiscovery.RoutingDiscovery
-	mu             sync.Mutex
-	advertise      map[string]struct{}
-	payloads       map[string][]byte
-	bootstrapped   bool
-	bootstrapAt    time.Time
-	bootstrapWait  chan struct{}
-	bootstrapErr   error
-	bootstrapPeers []string
-	resolver       multiaddrResolver
-	modeReason     string
-	quicCM         *quicreuse.ConnManager
-	stopSTUN       func()
-	remotePublic   atomic.Bool
+	host            host.Host
+	dht             *dht.IpfsDHT
+	discovery       *routingdiscovery.RoutingDiscovery
+	mu              sync.Mutex
+	advertise       map[string]struct{}
+	payloads        map[string][]byte
+	bootstrapped    bool
+	bootstrapAt     time.Time
+	bootstrapWait   chan struct{}
+	bootstrapErr    error
+	bootstrapPeers  []string
+	resolver        multiaddrResolver
+	modeReason      string
+	quicCM          *quicreuse.ConnManager
+	stopSTUN        func()
+	remotePublic    atomic.Bool
+	autonat         *autonatv2.AutoNAT
+	closed          chan struct{}
+	closeOnce       sync.Once
+	dialbackRunning atomic.Bool
 }
 
 type Libp2pDHTRouterOptions struct {
@@ -135,6 +140,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		modeReason: reason,
 		quicCM:     quicCM,
 		stopSTUN:   startLibp2pSTUN(h, quicCM),
+		closed:     make(chan struct{}),
 	}
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
 	h.SetStreamHandler(protocol.ID(ObserveProtocol), router.handleObserve)
@@ -158,6 +164,10 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	// Stay private so AutoRelay reserves a relay until a remote peer dials back.
 	if NATEnabled() {
 		router.notePrivateReachability()
+		// Start before any peer connects so the AutoNAT client observes the
+		// identify event. A client started later never learns that peer.
+		router.remoteAutoNAT()
+		go router.runRemoteDialback()
 	}
 	return router, nil
 }
@@ -691,10 +701,22 @@ func (r *Libp2pDHTRouter) Close() error {
 	if r == nil {
 		return nil
 	}
+	r.closeOnce.Do(func() {
+		if r.closed != nil {
+			close(r.closed)
+		}
+	})
 	unregisterRouter(r)
 	if r.stopSTUN != nil {
 		r.stopSTUN()
 		r.stopSTUN = nil
+	}
+	r.mu.Lock()
+	an := r.autonat
+	r.autonat = nil
+	r.mu.Unlock()
+	if an != nil {
+		an.Close()
 	}
 	if r.host == nil {
 		return nil
