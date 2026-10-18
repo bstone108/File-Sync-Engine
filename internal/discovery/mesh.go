@@ -296,20 +296,28 @@ func noteReachability(public bool) {
 }
 
 func watchConnections(n network.Network) {
-	n.Notify(&network.NotifyBundle{ConnectedF: func(_ network.Network, conn network.Conn) {
-		if conn == nil {
-			return
-		}
-		addr := ""
-		if conn.RemoteMultiaddr() != nil {
-			addr = conn.RemoteMultiaddr().String()
-		}
-		path := nat.Classify(addr)
-		if current, ok := nat.DefaultPaths.Active(conn.RemotePeer().String()); ok && current.Path == nat.PathHolePunched && path != nat.PathRelay {
-			return
-		}
-		nat.DefaultPaths.Observe(conn.RemotePeer().String(), addr, path)
-	}})
+	n.Notify(&network.NotifyBundle{
+		ConnectedF: func(_ network.Network, conn network.Conn) {
+			if conn == nil {
+				return
+			}
+			addr := ""
+			if conn.RemoteMultiaddr() != nil {
+				addr = conn.RemoteMultiaddr().String()
+			}
+			path := nat.Classify(addr)
+			if current, ok := nat.DefaultPaths.Active(conn.RemotePeer().String()); ok && current.Path == nat.PathHolePunched && path != nat.PathRelay {
+				return
+			}
+			nat.DefaultPaths.Observe(conn.RemotePeer().String(), addr, path)
+		},
+		DisconnectedF: func(_ network.Network, conn network.Conn) {
+			if conn == nil {
+				return
+			}
+			nat.DefaultPaths.Forget(conn.RemotePeer().String())
+		},
+	})
 }
 
 // ParseObservation reads a helper's observed address and relay address.

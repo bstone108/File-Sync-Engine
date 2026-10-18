@@ -1448,6 +1448,17 @@
     }
   }
 
+  function transferDetail(transfer: { writes?: number; blocksFetched?: number; blocksReused?: number; routePath?: string; receivedBytes?: number; remainingBytes?: number; bytesPerSecond?: number }): string {
+    const parts: string[] = [];
+    if ((transfer.writes ?? 0) > 0 || (transfer.blocksFetched ?? 0) > 0 || (transfer.blocksReused ?? 0) > 0 || transfer.routePath) {
+      parts.push(`writes ${transfer.writes ?? 0}, fetched ${transfer.blocksFetched ?? 0}, reused ${transfer.blocksReused ?? 0}${transfer.routePath ? `, ${transfer.routePath}` : ''}`);
+    }
+    if ((transfer.receivedBytes ?? 0) > 0 || (transfer.remainingBytes ?? 0) > 0 || (transfer.bytesPerSecond ?? 0) > 0) {
+      parts.push(`${transfer.receivedBytes ?? 0} B received, ${transfer.remainingBytes ?? 0} B left, ${transfer.bytesPerSecond ?? 0} B/s`);
+    }
+    return parts.length ? ` ${parts.join('; ')}` : '';
+  }
+
   async function refreshTransfers() {
     loading = true;
     try {
@@ -2660,7 +2671,7 @@
         {:else}
           <ul class="event-list" aria-label="Active transfer passes">
             {#each daemonTransfers.active as transfer}
-              <li><strong>{transfer.folderId}</strong>{transfer.peerId ? ` · peer ${transfer.peerId}` : ' · local folder pass'} · {transfer.status}<br />{transfer.message ?? transfer.eventType}</li>
+              <li><strong>{transfer.folderId || 'folder'}</strong>{transfer.peerId ? ` · peer ${transfer.peerId}` : ' · local folder pass'} · {transfer.status}<br />{transfer.message ?? transfer.eventType}{transferDetail(transfer)}</li>
             {/each}
           </ul>
         {/if}
@@ -2670,11 +2681,11 @@
         {:else}
           <ul class="event-list" aria-label="Recent transfer history">
             {#each daemonTransfers.history as transfer}
-              <li><strong>{transfer.folderId}</strong>{transfer.peerId ? ` · peer ${transfer.peerId}` : ' · local folder pass'} · {transfer.status} · {transfer.finishedAt ?? 'time unavailable'}<br />{transfer.message ?? transfer.eventType}</li>
+              <li><strong>{transfer.folderId}</strong>{transfer.peerId ? ` · peer ${transfer.peerId}` : ' · local folder pass'} · {transfer.status} · {transfer.finishedAt ?? 'time unavailable'}<br />{transfer.message ?? transfer.eventType}{transferDetail(transfer)}</li>
             {/each}
           </ul>
         {/if}
-        <p>Live byte progress and rate telemetry are not available from the daemon runtime, so this view does not invent percentages, bytes remaining, or throughput charts.</p>
+        <p>Live byte progress and rates come from the daemon while a transfer is moving. A pass that has not moved bytes does not invent a rate or a direct route.</p>
       </section>
     {/if}
 

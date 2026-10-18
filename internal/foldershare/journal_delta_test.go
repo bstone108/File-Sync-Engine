@@ -26,10 +26,10 @@ func TestJournalDeltaSendsOnlyTheChangedEntry(t *testing.T) {
 	if delta || cursor == 0 || len(full) != 1 {
 		t.Fatalf("full journal cursor=%d delta=%v entries=%d", cursor, delta, len(full))
 	}
-	Wake()
 	if err := os.WriteFile(filepath.Join(root, "two.txt"), []byte("two"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	NoteChanged("docs", filepath.Join(root, "two.txt"))
 	Reconcile(cfg, configPath, nil)
 	changed, next, delta, err := JournalDelta(configPath, "docs", cursor)
 	if err != nil {

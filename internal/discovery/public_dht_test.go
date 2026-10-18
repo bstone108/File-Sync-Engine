@@ -26,6 +26,7 @@ func (r *recordingDHTRouter) FindPeers(ctx context.Context, namespace string) ([
 }
 
 func TestPublicDHTSourceBootstrapsWithDefaultPublicServers(t *testing.T) {
+	resetDHTWalkCache()
 	router := &recordingDHTRouter{peers: []Peer{{ID: "peer-b", Addresses: []string{"/ip4/203.0.113.10/tcp/22000/p2p/peer-b"}}}}
 	source := NewPublicDHTSource(router, PublicDHTOptions{Namespace: "fse-test", SelfID: "peer-a"})
 
@@ -53,6 +54,7 @@ func TestPublicDHTSourceBootstrapsWithDefaultPublicServers(t *testing.T) {
 }
 
 func TestPublicDHTSourceDeduplicatesAndIgnoresSelf(t *testing.T) {
+	resetDHTWalkCache()
 	router := &recordingDHTRouter{peers: []Peer{
 		{ID: "peer-a", Addresses: []string{"/ip4/127.0.0.1/tcp/22000/p2p/peer-a"}},
 		{ID: "peer-b", Addresses: []string{"/ip4/203.0.113.10/tcp/22000/p2p/peer-b"}},
@@ -89,6 +91,7 @@ func (stallingDHTRouter) FindPeers(context.Context, string) ([]Peer, error) {
 }
 
 func TestPublicDHTSourcePeersDoesNotBlockTheDaemonLoop(t *testing.T) {
+	resetDHTWalkCache()
 	previous := publicDHTPollTimeout
 	publicDHTPollTimeout = 30 * time.Millisecond
 	t.Cleanup(func() { publicDHTPollTimeout = previous })
@@ -99,6 +102,36 @@ func TestPublicDHTSourcePeersDoesNotBlockTheDaemonLoop(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("Peers blocked for %s", elapsed)
+	}
+}
+
+func TestPublicDHTWalkStaysQuietUntilTheCooldownEnds(t *testing.T) {
+	resetDHTWalkCache()
+	router := &recordingDHTRouter{peers: []Peer{{ID: "peer-b", Addresses: []string{"/ip4/203.0.113.10/tcp/22000/p2p/peer-b"}}}}
+	source := NewPublicDHTSource(router, PublicDHTOptions{
+		Namespace:      "fse-idle",
+		SelfID:         "self",
+		BootstrapPeers: []string{"/dnsaddr/bootstrap.libp2p.io"},
+	})
+	if _, err := source.PeersContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.PeersContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if router.bootstrapCalls != 1 || router.query != "fse-idle" {
+		t.Fatalf("idle poll walked the DHT again: bootstrap=%d query=%q", router.bootstrapCalls, router.query)
+	}
+	dhtWalkMu.Lock()
+	prev := dhtWalks["fse-idle"]
+	prev.at = time.Now().Add(-dhtWalkCooldown - time.Second)
+	dhtWalks["fse-idle"] = prev
+	dhtWalkMu.Unlock()
+	if _, err := source.PeersContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if router.bootstrapCalls != 2 {
+		t.Fatalf("walk after cooldown = %d, want 2", router.bootstrapCalls)
 	}
 }
 

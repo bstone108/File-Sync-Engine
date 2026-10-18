@@ -214,3 +214,28 @@ func TestFolderBlockDownloadRejectsOutOfRangeIndex(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestFolderBatchReturnsSeveralSmallFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b.txt"), []byte("beta"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(State{NodeName: "node-a", FoldersState: []FolderState{{ID: "docs", Path: root, Mode: "sendrecv", Status: "configured"}}}, "secret")
+	req := httptest.NewRequest(http.MethodPost, "/v1/folder-batch?folder=docs", bytes.NewBufferString(`{"files":[{"path":"a.txt","index":0},{"path":"b.txt","index":0}]}`))
+	req.Header.Set("X-FSE-API-Key", "secret")
+	rec := httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	files, err := foldershare.ReadFileBatch(rec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Path != "a.txt" || string(files[0].Data) != "alpha" || files[1].Path != "b.txt" || string(files[1].Data) != "beta" {
+		t.Fatalf("files = %+v", files)
+	}
+}

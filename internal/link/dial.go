@@ -76,6 +76,10 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 		err := do(ctx, base, client)
 		if err == nil {
 			discovery.NotePeerReachable(peer.ID)
+			nat.DefaultPaths.Touch(peer.ID)
+			if peer.DHTPeerID != "" {
+				nat.DefaultPaths.Touch(peer.DHTPeerID)
+			}
 			return base, nil
 		}
 		forgetDial(peer.ID)

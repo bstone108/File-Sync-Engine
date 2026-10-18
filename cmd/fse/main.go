@@ -322,6 +322,11 @@ func run(configPath string) {
 		})
 	}
 	emitMonitorEvent := func(event monitor.Event) {
+		if event.Type == "watch.event" {
+			foldershare.NoteChanged(event.FolderID, event.Path)
+		} else {
+			foldershare.RequestFullScan(event.FolderID)
+		}
 		foldershare.Wake()
 		peerPulls := peerPullsWithEndpointObservations(cfg, event.FolderID, liveEndpointObservations)
 		daemonruntime.HandleMonitorEvent(daemonruntime.MonitorEventOptions{

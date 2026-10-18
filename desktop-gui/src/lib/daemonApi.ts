@@ -210,6 +210,13 @@ export type DaemonTransferItem = {
   finishedAt?: string;
   eventType: string;
   message?: string;
+  writes?: number;
+  blocksFetched?: number;
+  blocksReused?: number;
+  routePath?: string;
+  receivedBytes?: number;
+  remainingBytes?: number;
+  bytesPerSecond?: number;
 };
 export type DaemonTransferReadModel = {
   active: DaemonTransferItem[];

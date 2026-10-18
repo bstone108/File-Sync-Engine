@@ -57,6 +57,7 @@ func TestDiscoverySourcesFromConfigWirePublicDHTAndManualPeers(t *testing.T) {
 
 func TestDiscoverySourcesUseDHTWhenNoConnectionDetailsExist(t *testing.T) {
 	discovery.ResetCatalog()
+	discovery.ResetDHTWalkCacheForTest()
 	router := &runtimeRecordingDHTRouter{peers: []discovery.Peer{{ID: "peer-dht", Addresses: []string{"/ip4/203.0.113.9/tcp/22000/p2p/peer-dht"}}}}
 	cfg := config.Config{
 		NodeName: "node-a",
