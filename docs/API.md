@@ -62,6 +62,8 @@ The `backup` object reports whether this node is configured as a backup destinat
   "folders": 2,
   "peers": 3,
   "status": "running",
+  "natType": "cone",
+  "stunMappedAddress": "203.0.113.8:42421",
   "webGUI": {"enabled": true, "version": "2026.10.15.05", "lastUpdateCheck": "2026-10-15T23:00:00Z", "lastUpdateResult": "current", "lastUpdateMessage": "Web GUI 2026.10.15.05 is already the newest package compatible with this engine.", "autoUpdate": true},
   "maintenance": {"enabled": false},
   "backup": {

@@ -98,7 +98,7 @@ Secrets are generated inside `/config/config.jsonc` and are not logged by the en
 | `FSE_LIBP2P_DHT_MODE` | unset | Empty stays in auto mode. A published port or a LAN address does not make the node a DHT server, because that port is often closed from the other home. Auto mode reserves a relay while the node is private and answers DHT queries only after a dial-back of the libp2p port succeeds. Set `server` only when this host is publicly dialable. DHT lookup is still only the backup after saved addresses, connected peers, and LAN discovery. |
 | `FSE_NAT_TRAVERSAL` | on | `0`, `false`, or `off` disables AutoNAT, hole punching, circuit relay, and STUN. |
 | `FSE_MESH_HELPER` | on | `0`, `false`, or `off` stops this instance from relaying and reporting observed addresses for its identity group. Traversal stays on. |
-| `FSE_STUN_SERVERS` | `stun.l.google.com:19302,stun.cloudflare.com:3478` | Comma-separated STUN servers. `off` disables STUN. |
+| `FSE_STUN_SERVERS` | `stun.l.google.com:19302,stun.cloudflare.com:3478` | Comma-separated STUN servers, queried from the libp2p UDP socket at startup and every 2 minutes. `off` disables STUN. |
 | `FSE_RELAY_PEERS` | public libp2p bootstrap | Comma-separated relay multiaddrs tried after same-identity helpers. | 
 | `FSE_WEB_GUI_ENABLED` | `false` | Opt in to the web GUI on every start. Unset or `false` disables the GUI listener. |
 | `FSE_WEB_GUI_VERSION` | unset | Explicit version of the separately delivered web-GUI package; required with every other web-GUI delivery field when opt-in is enabled. |

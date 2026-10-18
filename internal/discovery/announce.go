@@ -245,6 +245,7 @@ func announcedAddrs(existing []ma.Multiaddr) []ma.Multiaddr {
 		apiURL = ""
 	}
 	announced := announcedMultiaddrs(announceHosts(), apiURL, PublishedLibp2pPort(Libp2pListenPort()))
+	announced = appendUniqueMultiaddr(announced, libp2pSTUNCandidate())
 	var circuits []ma.Multiaddr
 	for _, addr := range existing {
 		if addr != nil && strings.Contains(addr.String(), "p2p-circuit") {
@@ -257,6 +258,43 @@ func announcedAddrs(existing []ma.Multiaddr) []ma.Multiaddr {
 		return circuits
 	}
 	return append(announced, circuits...)
+}
+
+// libp2pSTUNCandidate is the QUIC address STUN observed for this socket.
+// Symmetric mappings are not candidates: a third party would see a different port.
+func libp2pSTUNCandidate() ma.Multiaddr {
+	status := advertise.CurrentNATStatus()
+	if !status.Advertise || status.IP == "" || status.Port < 1 || status.Port > 65535 {
+		return nil
+	}
+	ip := net.ParseIP(status.IP)
+	if ip == nil {
+		return nil
+	}
+	var raw string
+	if v4 := ip.To4(); v4 != nil {
+		raw = fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", v4.String(), status.Port)
+	} else {
+		raw = fmt.Sprintf("/ip6/%s/udp/%d/quic-v1", ip.String(), status.Port)
+	}
+	addr, err := ma.NewMultiaddr(raw)
+	if err != nil {
+		return nil
+	}
+	return addr
+}
+
+func appendUniqueMultiaddr(base []ma.Multiaddr, extra ma.Multiaddr) []ma.Multiaddr {
+	if extra == nil {
+		return base
+	}
+	needle := extra.String()
+	for _, addr := range base {
+		if addr != nil && addr.String() == needle {
+			return base
+		}
+	}
+	return append(base, extra)
 }
 
 func verifiedPublicLibp2p() bool {

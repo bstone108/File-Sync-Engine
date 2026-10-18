@@ -236,8 +236,9 @@ func envPort(name string, fallback int) int {
 }
 
 // StartAutoDetect asks the local gateway to map the API port and the libp2p
-// port. Each NAT-PMP and UPnP attempt is logged. Failure leaves STUN and the
-// other detectors in place.
+// port. Each NAT-PMP and UPnP attempt is logged. STUN runs separately, on the
+// libp2p QUIC socket, including when a gateway mapping succeeds. A mapped
+// STUN port is not stored as the API port.
 func StartAutoDetect(ctx context.Context, cfg config.Config) {
 	targets := portMappingTargets(cfg)
 	go func() {
@@ -246,7 +247,6 @@ func StartAutoDetect(ctx context.Context, cfg config.Config) {
 		}
 		detectCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 		defer cancel()
-		apiMapped := false
 		for _, target := range targets {
 			ip, port, err := mapExternalPort(detectCtx, target.internal, target.external)
 			fields := map[string]any{
@@ -260,7 +260,6 @@ func StartAutoDetect(ctx context.Context, cfg config.Config) {
 				structuredlog.Event("info", "nat.mapping.ok", "gateway mapped a local port", fields)
 				if target.service == "api" {
 					NoteNAT(ip, port)
-					apiMapped = true
 				}
 				if mappingHook != nil {
 					mappingHook(ip, port)
@@ -272,21 +271,10 @@ func StartAutoDetect(ctx context.Context, cfg config.Config) {
 			}
 			structuredlog.Event("warn", "nat.mapping.failed", "gateway did not map a local port", fields)
 		}
-		if apiMapped {
-			return
-		}
-		stunIP, _, stunErr := stunDiscover(detectCtx)
-		if stunErr != nil || stunIP == "" {
-			return
-		}
-		NoteObservedIP(stunIP)
 	}()
 }
 
-var (
-	mappingHook  func(string, int)
-	stunDiscover = DiscoverExternalIP
-)
+var mappingHook func(string, int)
 
 // SetExternalMappingHook receives a successful UPnP or NAT-PMP mapping.
 func SetExternalMappingHook(fn func(ip string, port int)) {

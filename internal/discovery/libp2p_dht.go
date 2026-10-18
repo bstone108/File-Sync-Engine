@@ -23,8 +23,10 @@ import (
 	routingdiscovery "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
+	"github.com/libp2p/go-libp2p/p2p/transport/quicreuse"
 	ma "github.com/multiformats/go-multiaddr"
 
+	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/structuredlog"
 )
 
@@ -49,6 +51,8 @@ type Libp2pDHTRouter struct {
 	bootstrapPeers []string
 	resolver       multiaddrResolver
 	modeReason     string
+	quicCM         *quicreuse.ConnManager
+	stopSTUN       func()
 }
 
 type Libp2pDHTRouterOptions struct {
@@ -80,6 +84,10 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", opts.ListenPort),
 			fmt.Sprintf("/ip4/0.0.0.0/udp/%d/quic-v1", opts.ListenPort),
 		))
+		libp2pOpts = append(libp2pOpts, libp2pListenOptions(opts.ListenPort)...)
+		quicBuildMu.Lock()
+		quicBuilt.Store(nil)
+		defer quicBuildMu.Unlock()
 	}
 	mode, reason, err := libp2pDHTMode(opts.DHTMode)
 	if err != nil {
@@ -115,6 +123,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	if err != nil {
 		return nil, err
 	}
+	quicCM := takeQUICConnManager()
 	hostBox.Store(h)
 	kad, err := dht.New(ctx, h, dht.Mode(mode), dht.DisableAutoRefresh())
 	if err != nil {
@@ -129,6 +138,8 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		advertise:  map[string]struct{}{},
 		payloads:   map[string][]byte{},
 		modeReason: reason,
+		quicCM:     quicCM,
+		stopSTUN:   startLibp2pSTUN(h, quicCM),
 	}
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
 	h.SetStreamHandler(protocol.ID(ObserveProtocol), router.handleObserve)
@@ -636,8 +647,29 @@ func (r *Libp2pDHTRouter) FindPeers(ctx context.Context, namespace string) ([]Pe
 	return peers, nil
 }
 
+// ProbeSTUNNow sends one STUN round from this router's QUIC socket.
+// The background probe does not run under go test, so tests call this.
+func (r *Libp2pDHTRouter) ProbeSTUNNow(ctx context.Context) (advertise.NATStatus, error) {
+	if r == nil || r.host == nil || r.quicCM == nil {
+		return advertise.NATStatus{}, fmt.Errorf("libp2p UDP socket is not available")
+	}
+	conn, _, err := shareQUICSocket(r.host, r.quicCM)
+	if err != nil {
+		return advertise.NATStatus{}, err
+	}
+	defer conn.Close()
+	return advertise.ObserveSTUN(ctx, conn), nil
+}
+
 func (r *Libp2pDHTRouter) Close() error {
-	if r == nil || r.host == nil {
+	if r == nil {
+		return nil
+	}
+	if r.stopSTUN != nil {
+		r.stopSTUN()
+		r.stopSTUN = nil
+	}
+	if r.host == nil {
 		return nil
 	}
 	return r.host.Close()
