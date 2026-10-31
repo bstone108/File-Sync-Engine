@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -27,7 +29,9 @@ start)
   ;;
 esac
 `)
-	time.Sleep(400 * time.Millisecond)
+	// SIGTERM before the supervisor installs its trap kills the shell. Wait
+	// until the supervised command is actually sleeping so the trap is in place.
+	waitForSupervisedSleep(t, cmd.Process.Pid)
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		_ = cmd.Process.Kill()
 		t.Fatal(err)
@@ -104,6 +108,53 @@ func startEntrypoint(t *testing.T, fake string) *exec.Cmd {
 		}
 	})
 	return cmd
+}
+
+func waitForSupervisedSleep(t *testing.T, rootPID int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if processTreeContains(rootPID, "sleep") {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("entrypoint did not reach the supervised command")
+}
+
+func processTreeContains(rootPID int, needle string) bool {
+	out, err := exec.Command("ps", "-eo", "pid=,ppid=,args=").Output()
+	if err != nil {
+		return false
+	}
+	children := map[int][]int{}
+	args := map[int]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		pid, errPID := strconv.Atoi(fields[0])
+		ppid, errPPID := strconv.Atoi(fields[1])
+		if errPID != nil || errPPID != nil {
+			continue
+		}
+		args[pid] = strings.Join(fields[2:], " ")
+		children[ppid] = append(children[ppid], pid)
+	}
+	var walk func(int) bool
+	walk = func(pid int) bool {
+		if strings.Contains(args[pid], needle) {
+			return true
+		}
+		for _, child := range children[pid] {
+			if walk(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(rootPID)
 }
 
 func waitFor(t *testing.T, cmd *exec.Cmd, timeout time.Duration) error {
