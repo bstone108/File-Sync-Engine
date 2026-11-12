@@ -1166,8 +1166,8 @@ func TestPullFolderStartsAsyncMetadataCatchupWithoutBlockingFileTransfer(t *test
 	}
 	select {
 	case <-asyncStarted:
-	default:
-		t.Fatalf("async metadata catch-up was not started")
+	case <-time.After(2 * time.Second):
+		t.Fatal("async metadata catch-up was not started")
 	}
 	if !result.MetadataCatchupStarted {
 		t.Fatalf("MetadataCatchupStarted = false, want true")

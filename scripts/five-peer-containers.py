@@ -272,16 +272,26 @@ def main():
     if status != 200:
         fail(f"identity edit = {status} {body}")
     replica = json.loads(read_file("unraid-b", "/config/config-sync.json"))
+    def windows_debug():
+        deadline = time.time() + 20
+        current = {}
+        while time.time() < deadline:
+            current = parse_jsonc(read_file("windows", "/config/config.jsonc"))
+            if current.get("logging", {}).get("level") == "debug":
+                return current
+            time.sleep(1)
+        return current
+
     status, body = api(PORTS["windows"], infos["windows"]["key"], "POST", "/v1/config-sync/merge", json.dumps({"replica": replica}))
     if status != 200:
         fail(f"identity merge = {status} {body}")
-    deadline = time.time() + 15
-    windows_cfg = {}
-    while time.time() < deadline:
-        windows_cfg = parse_jsonc(read_file("windows", "/config/config.jsonc"))
-        if windows_cfg.get("logging", {}).get("level") == "debug":
-            break
-        time.sleep(1)
+    windows_cfg = windows_debug()
+    if windows_cfg.get("logging", {}).get("level") != "debug":
+        replica = json.loads(read_file("unraid-b", "/config/config-sync.json"))
+        status, body = api(PORTS["windows"], infos["windows"]["key"], "POST", "/v1/config-sync/merge", json.dumps({"replica": replica}))
+        if status != 200:
+            fail(f"identity merge retry = {status} {body}")
+        windows_cfg = windows_debug()
     origin_cfg = parse_jsonc(read_file("unraid-b", "/config/config.jsonc"))
     if windows_cfg.get("logging", {}).get("level") != "debug":
         fail(f"windows logging = {windows_cfg.get('logging')}")
