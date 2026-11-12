@@ -173,16 +173,25 @@ func runPeerSync(ctx context.Context, cfg config.Config, configPath string, fold
 		}
 		remote, remoteCursor, err := fetchRemoteJournal(ctx, configPath, peer, folder.ID)
 		if err != nil {
-			if !errors.Is(err, link.ErrDialDeferred) {
-				structuredlog.Event("error", "folder.sync.journal_failed", "remote journal was not read", map[string]any{
-					"folder": folder.ID,
-					"peer":   peer.ID,
-					"error":  err.Error(),
-				})
+			if errors.Is(err, link.ErrDialDeferred) {
+				// The gate already names the next attempt. Pushing it out
+				// here made every later pass miss the gate and never sync.
+				continue
 			}
+			structuredlog.Event("error", "folder.sync.journal_failed", "remote journal was not read", map[string]any{
+				"folder": folder.ID,
+				"peer":   peer.ID,
+				"error":  err.Error(),
+			})
 			link.FinishPeerPass(peer.ID, false)
 			continue
 		}
+		structuredlog.Event("info", "folder.sync.journal", "remote journal was read over the peer session", map[string]any{
+			"folder":  folder.ID,
+			"peer":    peer.ID,
+			"entries": len(remote),
+			"cursor":  remoteCursor,
+		})
 		mu := journalLock(configPath, folder.ID)
 		mu.Lock()
 		entries, loadErr := LoadJournal(configPath, folder.ID)

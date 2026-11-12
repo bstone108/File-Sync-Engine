@@ -134,6 +134,15 @@ func JournalPath(configPath, folderID string) string {
 	return filepath.Join(filepath.Dir(configPath), "sync-journals", safeID(folderID)+".json")
 }
 
+func journalSnapshot(configPath, folderID string) string {
+	data, err := os.ReadFile(JournalPath(configPath, folderID))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 func reconcileFolder(cfg config.Config, configPath string, folder config.FolderConfig) error {
 	mu := journalLock(configPath, folder.ID)
 	mu.Lock()
@@ -155,8 +164,13 @@ func reconcileFolder(cfg config.Config, configPath string, folder config.FolderC
 		} else if err := absorbPaths(folder.Path, origin, byPath, takeChangedPaths(folder.ID)); err != nil {
 			return err
 		}
+		before := journalSnapshot(configPath, folder.ID)
 		if err := saveJournal(configPath, folder.ID, byPath); err != nil {
 			return err
+		}
+		if journalSnapshot(configPath, folder.ID) != before {
+			link.ReleaseAllPeers()
+			WakePeerPass()
 		}
 	}
 	if folder.Mode == config.ModeSendOnly {

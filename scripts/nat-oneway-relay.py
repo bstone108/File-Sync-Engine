@@ -208,6 +208,9 @@ def main():
 
     compose("exec", "-T", "-u", "0", "engine-a", "sh", "-c", "mkdir -p /data/shared && printf from-a > /data/shared/from-a.txt && chmod 666 /data/shared/from-a.txt")
     wait_file("engine-b", "from-a.txt", "from-a", 180)
+    logged = compose("exec", "-T", "engine-b", "sh", "-c", "cat /config/logs/fse.jsonl 2>/dev/null || true", check=False).stdout or ""
+    if "folder.sync.journal" not in logged and "folder.sync.block" not in logged:
+        fail("engine-b synced the file without a libp2p journal or block transfer")
     compose("exec", "-T", "-u", "0", "engine-b", "sh", "-c", "mkdir -p /data/shared && printf from-b > /data/shared/from-b.txt && chmod 666 /data/shared/from-b.txt")
     wait_file("engine-a", "from-b.txt", "from-b", 60)
     restart_and_wait("engine-a", infos["engine-a"]["key"])
