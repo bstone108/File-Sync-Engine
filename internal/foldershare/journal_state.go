@@ -12,7 +12,7 @@ import (
 
 // A local scan hashes every file. The reconcile loop runs every second, so
 // the scan runs on a filesystem wake or every 30s, not on every tick.
-const localScanInterval = 30 * time.Second
+const localScanInterval = 10 * time.Second
 
 var (
 	journalMu     sync.Mutex

@@ -1422,7 +1422,18 @@ func peersVisibleToGUI(state State) []PeerState {
 						break
 					}
 				}
-				current.ConnectionPath = reportedConnectionPath(activeConnectionPath(peer.ID, peer.DHTPeerID), current.Endpoint)
+				path := reportedConnectionPath(activeConnectionPath(peer.ID, peer.DHTPeerID), current.Endpoint)
+				if link.HasSession(peer.ID) || link.HasSession(peer.DHTPeerID) {
+					current.Status = "connected"
+					current.ConnectionPath = path
+				} else {
+					current.Status = "configured"
+					if path == string(nat.PathLimitedRelay) {
+						current.ConnectionPath = path
+					} else {
+						current.ConnectionPath = ""
+					}
+				}
 				out = append(out, annotateLimitedRelay(current))
 			}
 			return out
@@ -1436,7 +1447,16 @@ func peersVisibleToGUI(state State) []PeerState {
 		if _, ok := self[peer.ID]; ok {
 			continue
 		}
-		peer.ConnectionPath = reportedConnectionPath(activeConnectionPath(peer.ID), peer.Endpoint)
+		path := reportedConnectionPath(activeConnectionPath(peer.ID), peer.Endpoint)
+		if peer.Status == "configured" || peer.Status == "" {
+			if path == string(nat.PathLimitedRelay) {
+				peer.ConnectionPath = path
+			} else {
+				peer.ConnectionPath = ""
+			}
+		} else {
+			peer.ConnectionPath = path
+		}
 		out = append(out, annotateLimitedRelay(peer))
 	}
 	return out
@@ -1444,6 +1464,7 @@ func peersVisibleToGUI(state State) []PeerState {
 
 func foreignPrivateEndpoint(address string) bool {
 	host := strings.TrimSpace(address)
+	host = strings.TrimPrefix(host, "manual:")
 	if strings.Contains(host, "://") {
 		parsed, err := url.Parse(host)
 		if err != nil {

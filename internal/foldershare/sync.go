@@ -494,11 +494,14 @@ func finishDownload(tmp, target string, entry Entry) error {
 	return os.Rename(tmp, target)
 }
 
-func fetchRemoteJournal(configPath string, peer config.PeerConfig, folderID string) ([]Entry, int64, error) {
+func fetchRemoteJournal(ctx context.Context, configPath string, peer config.PeerConfig, folderID string) ([]Entry, int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var entries []Entry
 	after := peerCursor(configPath, folderID, peer.ID)
 	var remoteCursor int64
-	used, err := link.Dial(context.Background(), peer, func(ctx context.Context, base string, client *http.Client) error {
+	used, err := link.Dial(ctx, peer, func(ctx context.Context, base string, client *http.Client) error {
 		endpoint := base + "/v1/sync-journal?folder=" + url.QueryEscape(folderID) + "&afterCursor=" + strconv.FormatInt(after, 10)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {

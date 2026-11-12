@@ -29,6 +29,13 @@ var (
 	dialCache   = map[string]dialCacheEntry{}
 )
 
+// HasSession reports a dial that authenticated recently. Status stays
+// configured, and connectionPath stays empty, until this is true.
+func HasSession(peerID string) bool {
+	_, _, ok := cachedDial(peerID)
+	return ok
+}
+
 func cachedDial(peerID string) (string, *http.Client, bool) {
 	if peerID == "" {
 		return "", nil, false
@@ -133,6 +140,7 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 			return "", true
 		}
 		last = err
+		noteRelayRateLimit(err)
 		return "", false
 	}
 	finish := func(used string, stop bool) (string, error, bool) {
@@ -161,8 +169,9 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 			}
 		}
 	}
+	circuits = discovery.PreferRoutableCircuits(circuits)
 	own, publicCircuits := partitionCircuits(id, circuits)
-	if used, stop := try("relay", own, 20*time.Second); stop {
+	if used, stop := try("relay", own, 12*time.Second); stop {
 		if base, err, done := finish(used, stop); done {
 			return base, err
 		}
@@ -170,9 +179,11 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 	// Public relays are the fallback after our own relays miss. The dial
 	// budget is long enough for a live circuit and short enough that a dead
 	// public relay cannot hold the folder sync loop.
-	if used, stop := try("relay", publicCircuits, 20*time.Second); stop {
-		if base, err, done := finish(used, stop); done {
-			return base, err
+	if !relayRateLimited() {
+		if used, stop := try("relay", publicCircuits, 12*time.Second); stop {
+			if base, err, done := finish(used, stop); done {
+				return base, err
+			}
 		}
 	}
 	if last == nil {
@@ -228,11 +239,36 @@ var ErrDialDeferred = errors.New("peer dial is waiting for the offline interval"
 var errDialDeferred = ErrDialDeferred
 
 var (
-	peerDialMu    sync.Mutex
-	peerDialNext  = map[string]time.Time{}
-	peerDialBurst = map[string]time.Time{}
-	forceDialGate bool
+	peerDialMu      sync.Mutex
+	peerDialNext    = map[string]time.Time{}
+	peerDialBurst   = map[string]time.Time{}
+	forceDialGate   bool
+	relayLimitMu    sync.Mutex
+	relayLimitUntil time.Time
+	relayLimitLog   time.Time
 )
+
+func noteRelayRateLimit(err error) {
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "rate limit") {
+		return
+	}
+	relayLimitMu.Lock()
+	relayLimitUntil = time.Now().Add(2 * time.Minute)
+	log := relayLimitLog.IsZero() || time.Since(relayLimitLog) > 2*time.Minute
+	if log {
+		relayLimitLog = time.Now()
+	}
+	relayLimitMu.Unlock()
+	if log {
+		structuredlog.Event("warn", "libp2p.relay.ratelimit", "public relay rate limit; backing off", map[string]any{"error": err.Error()})
+	}
+}
+
+func relayRateLimited() bool {
+	relayLimitMu.Lock()
+	defer relayLimitMu.Unlock()
+	return time.Now().Before(relayLimitUntil)
+}
 
 // dialBurst keeps the journal read and the following block reads in one sync
 // pass. The 60 second offline wait starts after that pass, and each request

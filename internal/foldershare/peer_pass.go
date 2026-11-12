@@ -1,8 +1,10 @@
 package foldershare
 
 import (
+	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,70 +15,126 @@ import (
 	"filesyncengine/internal/structuredlog"
 )
 
+// discovery intervals are the production defaults. Tests replace passOffline.
+
 // peerSyncAsync is false under go test so Reconcile stays synchronous for the
 // existing transfer tests. Production starts the dial on another goroutine so
 // a stuck peer cannot block the local scan.
 var peerSyncAsync = !testing.Testing()
 
-type peerPassState struct {
-	mu      sync.Mutex
-	running bool
-	next    time.Time
-}
-
-var peerPasses sync.Map
-
 func startPeerSync(cfg config.Config, configPath string, folder config.FolderConfig) {
-	if folder.Mode == config.ModeSendOnly || len(peersFor(cfg, folder)) == 0 {
+	if schedulerOn() || folder.Mode == config.ModeSendOnly || len(peersFor(cfg, folder)) == 0 {
 		return
 	}
-	key := configPath + "\x00" + folder.ID
-	state := peerPass(key)
-	state.mu.Lock()
 	if !peerSyncAsync {
-		state.mu.Unlock()
-		runPeerSync(cfg, configPath, folder)
+		ctx, cancel := context.WithTimeout(context.Background(), passDeadline)
+		defer cancel()
+		runPeerSync(ctx, cfg, configPath, folder)
 		return
 	}
-	if state.running || time.Now().Before(state.next) {
-		state.mu.Unlock()
-		return
-	}
-	state.running = true
-	state.mu.Unlock()
 	go func() {
-		defer func() {
-			state.mu.Lock()
-			state.running = false
-			state.next = time.Now().Add(peerPassInterval(cfg, folder))
-			state.mu.Unlock()
-		}()
-		runPeerSync(cfg, configPath, folder)
+		ctx, cancel := context.WithTimeout(context.Background(), passDeadline)
+		defer cancel()
+		passFn(ctx, cfg, configPath, folder)
 	}()
 }
 
-func peerPass(key string) *peerPassState {
-	value, _ := peerPasses.LoadOrStore(key, &peerPassState{})
-	return value.(*peerPassState)
+var (
+	scheduleOnce sync.Once
+	scheduleOn   atomic.Bool
+	passDeadline = 12 * time.Second
+	// passOffline and passLive are the production intervals. Tests shorten them.
+	passOffline = discovery.OfflineProbeInterval
+	passLive    = discovery.LiveProbeInterval
+	passFn      = runPeerSync
+)
+
+func schedulerOn() bool { return scheduleOn.Load() }
+
+// StartSchedulers scans on its own clock and dials on a clock that does not
+// slip when a dial is slow. The first dial pass starts immediately.
+func StartSchedulers(ctx context.Context, configPath string, load func() config.Config) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if load == nil {
+		load = func() config.Config { return config.Config{} }
+	}
+	scheduleOnce.Do(func() {
+		scheduleOn.Store(true)
+		go scanLoop(ctx, configPath, load)
+		go peerLoop(ctx, configPath, load)
+	})
 }
 
-func peerPassInterval(cfg config.Config, folder config.FolderConfig) time.Duration {
-	for _, peer := range peersFor(cfg, folder) {
-		if _, ok := nat.DefaultPaths.Active(peer.ID); ok {
-			return discovery.LiveProbeInterval
+func scanLoop(ctx context.Context, configPath string, load func() config.Config) {
+	ticker := time.NewTicker(localScanInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-WakeChannel():
+		case <-ticker.C:
 		}
-		if peer.DHTPeerID != "" {
-			if _, ok := nat.DefaultPaths.Active(peer.DHTPeerID); ok {
-				return discovery.LiveProbeInterval
+		cfg := load()
+		for _, folder := range cfg.Folders {
+			if !folder.Enabled || folder.Path == "" {
+				continue
 			}
+			_ = reconcileFolder(cfg, configPath, folder)
 		}
 	}
-	return discovery.OfflineProbeInterval
 }
 
-func runPeerSync(cfg config.Config, configPath string, folder config.FolderConfig) {
+func peerLoop(ctx context.Context, configPath string, load func() config.Config) {
+	interval := passOffline
+	var next time.Time
+	for {
+		if wait := time.Until(next); wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		started := time.Now()
+		cfg := load()
+		passCtx, cancel := context.WithTimeout(ctx, passDeadline)
+		live := false
+		for _, folder := range cfg.Folders {
+			if !folder.Enabled || folder.Path == "" || folder.Mode == config.ModeSendOnly {
+				continue
+			}
+			if passFn(passCtx, cfg, configPath, folder) {
+				live = true
+			}
+		}
+		cancel()
+		if live {
+			interval = passLive
+		} else {
+			interval = passOffline
+		}
+		next = started.Add(interval)
+	}
+}
+
+func runPeerSync(ctx context.Context, cfg config.Config, configPath string, folder config.FolderConfig) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	live := false
 	for _, peer := range peersFor(cfg, folder) {
-		remote, remoteCursor, err := fetchRemoteJournal(configPath, peer, folder.ID)
+		if ctx.Err() != nil {
+			return live
+		}
+		remote, remoteCursor, err := fetchRemoteJournal(ctx, configPath, peer, folder.ID)
 		if err != nil {
 			if !errors.Is(err, link.ErrDialDeferred) {
 				structuredlog.Event("error", "folder.sync.journal_failed", "remote journal was not read", map[string]any{
@@ -124,7 +182,11 @@ func runPeerSync(cfg config.Config, configPath string, folder config.FolderConfi
 		}
 		mu.Unlock()
 		link.FinishPeerPass(peer.ID, true)
+		if _, ok := nat.DefaultPaths.Active(peer.ID); ok {
+			live = true
+		}
 	}
+	return live
 }
 
 var journalLocks sync.Map

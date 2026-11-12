@@ -1,9 +1,11 @@
 package foldershare
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,15 +57,14 @@ func TestLocalIndexAdvancesWhilePeerDialIsStuck(t *testing.T) {
 			go func() { _, _ = conn.Read(make([]byte, 1)) }()
 		}
 	}()
-	previous := peerSyncAsync
-	peerSyncAsync = true
-	t.Cleanup(func() { peerSyncAsync = previous })
-
 	root := t.TempDir()
 	cfg := localConfig(root, "https://"+listener.Addr().String(), "pin")
 	cfg.Peers[0].APIKey = "secret"
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	Reconcile(cfg, configPath, nil)
+	dialPath := filepath.Join(t.TempDir(), "dial.json")
+	go func() {
+		_, _, _ = fetchRemoteJournal(context.Background(), dialPath, cfg.Peers[0], "shared")
+	}()
 	time.Sleep(50 * time.Millisecond)
 	if err := os.WriteFile(filepath.Join(root, "arrived.txt"), []byte("while-dialing"), 0o644); err != nil {
 		t.Fatal(err)
@@ -71,7 +72,7 @@ func TestLocalIndexAdvancesWhilePeerDialIsStuck(t *testing.T) {
 	RequestFullScan("shared")
 	done := make(chan struct{})
 	go func() {
-		Reconcile(cfg, configPath, nil)
+		_ = reconcileFolder(cfg, configPath, cfg.Folders[0])
 		close(done)
 	}()
 	select {
@@ -89,4 +90,51 @@ func TestLocalIndexAdvancesWhilePeerDialIsStuck(t *testing.T) {
 		}
 	}
 	t.Fatalf("file added while the peer was unreachable was not indexed: %+v", entries)
+}
+
+func TestPeerPassesStayOnTheClockWhenADialIsSlow(t *testing.T) {
+	previousFn := passFn
+	previousOffline := passOffline
+	previousDeadline := passDeadline
+	previousAsync := peerSyncAsync
+	var mu sync.Mutex
+	var starts []time.Time
+	passFn = func(ctx context.Context, _ config.Config, _ string, _ config.FolderConfig) bool {
+		mu.Lock()
+		starts = append(starts, time.Now())
+		mu.Unlock()
+		<-ctx.Done()
+		return false
+	}
+	passOffline = 200 * time.Millisecond
+	passDeadline = 40 * time.Millisecond
+	peerSyncAsync = true
+	scheduleOnce = sync.Once{}
+	scheduleOn.Store(false)
+	t.Cleanup(func() {
+		passFn = previousFn
+		passOffline = previousOffline
+		passDeadline = previousDeadline
+		peerSyncAsync = previousAsync
+		scheduleOn.Store(false)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	folder := t.TempDir()
+	StartSchedulers(ctx, t.TempDir(), func() config.Config {
+		return config.Config{Folders: []config.FolderConfig{{
+			ID: "shared", Path: folder, Enabled: true, Mode: config.ModeSendReceive,
+			SharedWith: []string{"neko"},
+		}}, Peers: []config.PeerConfig{{ID: "neko", APIKey: "secret"}}}
+	})
+	time.Sleep(520 * time.Millisecond)
+	cancel()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) < 3 {
+		t.Fatalf("passes = %d, want at least 3: %v", len(starts), starts)
+	}
+	if starts[1].Sub(starts[0]) > 350*time.Millisecond || starts[2].Sub(starts[1]) > 350*time.Millisecond {
+		t.Fatalf("pass starts slipped: %v", starts)
+	}
 }

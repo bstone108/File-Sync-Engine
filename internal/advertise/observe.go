@@ -202,6 +202,15 @@ func persistRefreshedURL(path string) (string, error) {
 	if cfg.API.AdvertiseURL == before {
 		return "", applyErr
 	}
+	// Reload so a concurrent config-sync write, such as a logging change, is
+	// not replaced by the copy this refresh loaded earlier.
+	latest, loadErr := config.LoadFile(path)
+	if loadErr != nil {
+		return "", loadErr
+	}
+	latest.API.AdvertiseURL = cfg.API.AdvertiseURL
+	latest.API.AdvertisePinned = cfg.API.AdvertisePinned
+	cfg = latest
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return "", err

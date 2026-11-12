@@ -103,7 +103,7 @@ func TestConfiguredPeerKeepsDHTPathWhenDiscoveryTaggedTheEndpoint(t *testing.T) 
 	if len(peers) != 1 || peers[0].ID != "neko" || peers[0].Status != "configured" {
 		t.Fatalf("peers = %+v", peers)
 	}
-	if peers[0].ConnectionPath != "direct" || strings.HasPrefix(peers[0].Endpoint, "discovered") {
+	if peers[0].ConnectionPath != "" || strings.HasPrefix(peers[0].Endpoint, "discovered") {
 		t.Fatalf("configured peer stayed hidden: %+v", peers[0])
 	}
 }

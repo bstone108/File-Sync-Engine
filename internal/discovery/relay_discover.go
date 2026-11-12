@@ -2,7 +2,9 @@ package discovery
 
 import (
 	"context"
+	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/event"
@@ -14,6 +16,100 @@ import (
 
 	"filesyncengine/internal/structuredlog"
 )
+
+var (
+	rendezvousMu    sync.Mutex
+	rendezvousGroup string
+	discoverLogMu   sync.Mutex
+	discoverLogAt   = map[string]time.Time{}
+)
+
+// SetRendezvousGroup selects the DHT namespace both members of an identity
+// group advertise under. The namespace is derived from the group id so the
+// peers find each other's current relay circuits.
+func SetRendezvousGroup(groupID string) {
+	rendezvousMu.Lock()
+	rendezvousGroup = strings.TrimSpace(groupID)
+	rendezvousMu.Unlock()
+}
+
+func currentRendezvous() string {
+	rendezvousMu.Lock()
+	groupID := rendezvousGroup
+	rendezvousMu.Unlock()
+	if groupID == "" {
+		return ""
+	}
+	return "fse-relay/" + groupID
+}
+
+func logDiscoveredRelay(id string) {
+	if id == "" {
+		return
+	}
+	discoverLogMu.Lock()
+	defer discoverLogMu.Unlock()
+	if last, ok := discoverLogAt[id]; ok && time.Since(last) < 10*time.Minute {
+		return
+	}
+	discoverLogAt[id] = time.Now()
+	structuredlog.Event("info", "libp2p.relay.discover", "identified a hop relay", map[string]any{"peer": id})
+}
+
+// PreferRoutableCircuits drops a relay's private addresses when that relay
+// also advertises a public hop. A public relay's 10.x address is not reachable
+// from another home WAN. A lab relay that has only private addresses is kept.
+func PreferRoutableCircuits(addrs []string) []string {
+	type bucket struct {
+		public  []string
+		private []string
+	}
+	order := []string{}
+	groups := map[string]*bucket{}
+	for _, addr := range addrs {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		id := relayPeerID(addr)
+		if id == "" {
+			id = addr
+		}
+		group := groups[id]
+		if group == nil {
+			group = &bucket{}
+			groups[id] = group
+			order = append(order, id)
+		}
+		if circuitHopPrivate(addr) {
+			group.private = append(group.private, addr)
+			continue
+		}
+		group.public = append(group.public, addr)
+	}
+	var out []string
+	for _, id := range order {
+		group := groups[id]
+		if len(group.public) > 0 {
+			out = append(out, group.public...)
+			continue
+		}
+		out = append(out, group.private...)
+	}
+	return out
+}
+
+func circuitHopPrivate(addr string) bool {
+	if !strings.Contains(addr, "/ip4/") {
+		return false
+	}
+	rest := addr[strings.Index(addr, "/ip4/")+5:]
+	if cut := strings.Index(rest, "/"); cut >= 0 {
+		rest = rest[:cut]
+	}
+	ip := net.ParseIP(rest)
+	return ip != nil && ip.IsPrivate()
+}
 
 // PublicRelayNamespace is the DHT provider key for relays that speak the
 // circuit hop protocol. Peers reserve these relays. Bootstrap nodes are not
@@ -52,7 +148,7 @@ func (r *Libp2pDHTRouter) watchIdentifiedRelays() {
 				continue
 			}
 			noteRelayCandidate(peer.AddrInfo{ID: identified.Peer, Addrs: identified.ListenAddrs})
-			structuredlog.Event("info", "libp2p.relay.discover", "identified a hop relay", map[string]any{"peer": identified.Peer.String()})
+			logDiscoveredRelay(identified.Peer.String())
 		}
 	}
 }
@@ -69,6 +165,9 @@ func (r *Libp2pDHTRouter) watchPublicRelays() {
 			r.advertisePublicRelay(ctx)
 		} else {
 			r.findPublicRelays(ctx)
+		}
+		if rv := currentRendezvous(); rv != "" && r.discovery != nil {
+			_, _ = r.discovery.Advertise(ctx, rv)
 		}
 		cancel()
 		select {

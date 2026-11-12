@@ -1385,7 +1385,7 @@ func TestPeersEndpointReportsLivePathAndReceiveProgress(t *testing.T) {
 	if len(peers) != 1 || peers[0].ID != "live-path-peer" {
 		t.Fatalf("peers = %+v", peers)
 	}
-	if peers[0].ConnectionPath != "lan" || peers[0].ReceiveRemainingBytes != 50 {
-		t.Fatalf("live path/progress missing: %+v", peers[0])
+	if peers[0].ConnectionPath != "" || peers[0].ReceiveRemainingBytes != 50 {
+		t.Fatalf("configured peer should not claim a path: %+v", peers[0])
 	}
 }
