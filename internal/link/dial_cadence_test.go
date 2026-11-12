@@ -42,6 +42,19 @@ func TestOfflinePeerDialIsPromptThenSixtySeconds(t *testing.T) {
 	}
 }
 
+func TestForeignPrivateAddressIsNotDialed(t *testing.T) {
+	const id = "12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU"
+	if KeepPairedAddress("/ip4/192.168.1.101/tcp/22420/https/p2p/"+id, id) {
+		t.Fatal("a foreign private multiaddr was dialable")
+	}
+	if !KeepPairedAddress("/ip4/192.168.1.101/tcp/22421/p2p/12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X/p2p-circuit/p2p/"+id, id) {
+		t.Fatal("a relay circuit through a private hop was dropped")
+	}
+	if !KeepPairedAddress("https://127.0.0.1:22420", id) {
+		t.Fatal("loopback was dropped")
+	}
+}
+
 func TestDHTPeerWithNoAddressIsDialableThroughAStaticRelay(t *testing.T) {
 	const relay = "12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X"
 	const target = "12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU"

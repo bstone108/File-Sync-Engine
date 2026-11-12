@@ -156,6 +156,21 @@ func scheduleRefresh(force bool) {
 	go func() { _ = RefreshNow(path) }()
 }
 
+// Notify tells the running daemon that the advertise URL changed. A user pin
+// has to update status and libp2p announcements without waiting for hot reload.
+func Notify(url string) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return
+	}
+	observationMu.Lock()
+	fn := changeFn
+	observationMu.Unlock()
+	if fn != nil {
+		fn(url)
+	}
+}
+
 // RefreshNow stores a better advertise URL when the current one is empty or a
 // Docker bridge address. An explicit override and a saved host-reachable URL win.
 func RefreshNow(path string) error {
@@ -333,6 +348,16 @@ func activeProbe(obs Observations) func(context.Context, string, int) error {
 // Tailscale addresses are not dialed back by this check.
 func NeedsPublicDialback(host string) bool {
 	return publicNeedsDialback(host)
+}
+
+// ForeignPrivateHost reports a private address that is not on this machine.
+// Loopback and DNS names are not foreign.
+func ForeignPrivateHost(host string) bool {
+	ip := net.ParseIP(hostname(host))
+	if ip == nil || ip.IsLoopback() || !ip.IsPrivate() {
+		return false
+	}
+	return !hostOnInterface(ip)
 }
 
 // MayAnnounceLibp2p reports whether host may be published on the libp2p port.

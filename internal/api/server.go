@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1221,7 +1222,11 @@ func (s *Server) allowSyncFolder(w http.ResponseWriter, r *http.Request, folderI
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, withNATStatus(s.snapshotState()))
+	state := withNATStatus(s.snapshotState())
+	if cfg, err := config.LoadFile(state.ConfigPath); err == nil && cfg.API.AdvertisePinned && strings.TrimSpace(cfg.API.AdvertiseURL) != "" {
+		state.AdvertiseURL = cfg.API.AdvertiseURL
+	}
+	writeJSON(w, state)
 }
 
 func withNATStatus(state State) State {
@@ -1340,27 +1345,19 @@ func foldersVisibleToGUI(state State) []FolderState {
 		current.Ignore = append([]string(nil), folder.Ignore...)
 		if current.Index.VerifiedFiles == 0 && current.Index.KnownBlocks == 0 {
 			if live, verified, blocks, bytes, hash, ok := foldershare.JournalIndex(state.ConfigPath, folder.ID); ok {
-				if current.Index.TotalFiles == 0 {
-					current.Index.TotalFiles = live
-				}
+				current.Index.TotalFiles = live
 				current.Index.VerifiedFiles = verified
 				current.Index.KnownBlocks = blocks
 				if current.Index.Mode == "" {
 					current.Index.Mode = "verified"
 				}
-				if current.LocalBytes == 0 {
-					current.LocalBytes = bytes
-				}
-				if current.Sync.LocalStateHash == "" || current.Sync.LocalStateHash == emptyStateHash {
-					current.Sync.LocalStateHash = hash
-				}
-				if current.ProgressLabel == "" || current.ProgressLabel == "Not scanned" {
-					if live > 0 && verified == live {
-						current.ProgressLabel = "Up to date"
-						current.SyncPercent = 100
-					} else if live > 0 {
-						current.ProgressLabel = "Syncing"
-					}
+				current.LocalBytes = bytes
+				current.Sync.LocalStateHash = hash
+				if live > 0 && verified == live {
+					current.ProgressLabel = "Up to date"
+					current.SyncPercent = 100
+				} else if live > 0 {
+					current.ProgressLabel = "Syncing"
 				}
 			}
 		}
@@ -1411,14 +1408,14 @@ func peersVisibleToGUI(state State) []PeerState {
 				if current.Status == "" || current.Status == "discovered" {
 					current.Status = "configured"
 				}
-				if strings.HasPrefix(current.Endpoint, "discovered") {
+				if strings.HasPrefix(current.Endpoint, "discovered") || foreignPrivateEndpoint(current.Endpoint) {
 					current.Endpoint = ""
 					current.Endpoints = nil
 				}
 				if current.Endpoint == "" {
 					for _, endpoint := range peer.Endpoints {
 						address := strings.TrimSpace(endpoint.Address)
-						if address == "" || strings.Contains(address, "p2p-circuit") {
+						if address == "" || strings.Contains(address, "p2p-circuit") || (foreignPrivateEndpoint(address) && !endpoint.Authenticated) {
 							continue
 						}
 						current.Endpoint = address
@@ -1443,6 +1440,18 @@ func peersVisibleToGUI(state State) []PeerState {
 		out = append(out, annotateLimitedRelay(peer))
 	}
 	return out
+}
+
+func foreignPrivateEndpoint(address string) bool {
+	host := strings.TrimSpace(address)
+	if strings.Contains(host, "://") {
+		parsed, err := url.Parse(host)
+		if err != nil {
+			return false
+		}
+		host = parsed.Hostname()
+	}
+	return advertise.ForeignPrivateHost(host)
 }
 
 func reportedConnectionPath(path, endpoint string) string {

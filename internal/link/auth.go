@@ -27,6 +27,9 @@ func KeepPairedAddress(address, dhtPeerID string) bool {
 		}
 		return parsed.Port() != "4001"
 	}
+	if !strings.Contains(address, "p2p-circuit") && advertise.ForeignPrivateHost(multiaddrHost(address)) {
+		return false
+	}
 	if !strings.HasPrefix(address, "/") {
 		return false
 	}
@@ -67,6 +70,24 @@ func keepDialEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
 		return true
 	}
 	return false
+}
+
+func multiaddrHost(address string) string {
+	if strings.Contains(address, "/ip4/") {
+		rest := address[strings.Index(address, "/ip4/")+5:]
+		if cut := strings.Index(rest, "/"); cut >= 0 {
+			return rest[:cut]
+		}
+		return rest
+	}
+	if strings.Contains(address, "/ip6/") {
+		rest := address[strings.Index(address, "/ip6/")+5:]
+		if cut := strings.Index(rest, "/"); cut >= 0 {
+			return rest[:cut]
+		}
+		return rest
+	}
+	return ""
 }
 
 func literalPublicHTTP(address string) bool {
