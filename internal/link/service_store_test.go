@@ -41,6 +41,9 @@ func TestPairingCodeSurvivesRestartUntilUsed(t *testing.T) {
 	if record.DiscoveryID != publisher.PublicKey {
 		t.Fatalf("record = %+v", record)
 	}
+	if err := restarted.CommitClaim(code, claimer.PublicKey); err != nil {
+		t.Fatal(err)
+	}
 	again := NewService(NewMemoryDirectory())
 	again.SetStorePath(path)
 	if _, err := again.Claim(context.Background(), claim); err == nil {

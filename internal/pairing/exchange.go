@@ -42,8 +42,8 @@ type PairAcceptance struct {
 // ExchangePair posts a bootstrap-proof offer to the remote daemon and returns its API credential.
 func ExchangePair(ctx context.Context, remoteAPIURL, remoteCertSHA256 string, offer PairOffer) (PairAcceptance, error) {
 	remoteAPIURL = strings.TrimRight(strings.TrimSpace(remoteAPIURL), "/")
-	if !strings.HasPrefix(remoteAPIURL, "https://") && !strings.HasPrefix(remoteAPIURL, "http://") {
-		return PairAcceptance{}, errors.New("reachable API URL must be http or https")
+	if !strings.HasPrefix(remoteAPIURL, "https://") {
+		return PairAcceptance{}, errors.New("refusing to send an unencrypted payload")
 	}
 	body, err := json.Marshal(offer)
 	if err != nil {
@@ -85,7 +85,7 @@ func ExchangePair(ctx context.Context, remoteAPIURL, remoteCertSHA256 string, of
 // VerifyPeerCertificate, which checks the SHA-256 fingerprint.
 func verifyPinnedPeerCertificateClient(endpoint, pin string) (*http.Client, error) {
 	if !strings.HasPrefix(endpoint, "https://") {
-		return &http.Client{Timeout: 30 * time.Second}, nil
+		return nil, errors.New("refusing to send an unencrypted payload")
 	}
 	pin = strings.ToLower(strings.TrimSpace(pin))
 	if len(pin) != 64 {

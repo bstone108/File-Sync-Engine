@@ -1,8 +1,13 @@
 package link
 
 import (
+	"net"
 	"net/url"
 	"strings"
+
+	"filesyncengine/internal/advertise"
+	"filesyncengine/internal/config"
+	"filesyncengine/internal/discovery"
 )
 
 // KeepPairedAddress reports whether address is safe to store or dial for the
@@ -28,6 +33,48 @@ func KeepPairedAddress(address, dhtPeerID string) bool {
 	target := multiaddrTarget(address)
 	dhtPeerID = strings.TrimSpace(dhtPeerID)
 	return target != "" && dhtPeerID != "" && target == dhtPeerID
+}
+
+// KeepStoredEndpoint keeps an address only after the paired peer authenticated
+// it. DHT, relay, and observed addresses stay ephemeral until that happens,
+// and plain HTTP is never stored because it cannot pin the API certificate.
+func KeepStoredEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
+	if !endpoint.Authenticated || discovery.PendingDHTAddress(endpoint.Address) {
+		return false
+	}
+	return KeepPairedAddress(endpoint.Address, dhtPeerID)
+}
+
+// keepDialEndpoint decides which saved addresses may carry an API or sync
+// request. A DHT lookup by itself is never one of them. The same URL inside a
+// signed profile is still dialed: the certificate pin authenticates it, and
+// hiding it forces the claim onto a relay that can time out after the code
+// is burned. A literal public address has to be authenticated. LAN, loopback,
+// and hostnames configured for this peer stay available so a paired node can
+// be reached before the next signed profile.
+func keepDialEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
+	if !KeepPairedAddress(endpoint.Address, dhtPeerID) {
+		return false
+	}
+	if discovery.PendingDHTAddress(endpoint.Address) && !endpoint.Authenticated {
+		return false
+	}
+	if endpoint.Authenticated || !literalPublicHTTP(endpoint.Address) {
+		return true
+	}
+	return false
+}
+
+func literalPublicHTTP(address string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(address))
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || advertise.IsTailscaleHost(parsed.Hostname()) {
+		return false
+	}
+	return ip.IsGlobalUnicast()
 }
 
 // CircuitForPeer appends the paired peer id to a relay reservation that names

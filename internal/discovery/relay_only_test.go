@@ -2,12 +2,17 @@ package discovery
 
 import (
 	"context"
+	"net"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	libp2p "github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
@@ -76,6 +81,64 @@ func TestRelayOnlyConnectivity(t *testing.T) {
 	if !foundRelay {
 		t.Fatalf("active connection was not a relay: %+v", conns)
 	}
+}
+
+func TestProductionRouterReservesDiscoveredRelay(t *testing.T) {
+	const relayIP = "1.2.3.4"
+	if ln, err := net.Listen("tcp", relayIP+":0"); err != nil {
+		if os.Geteuid() != 0 {
+			if addErr := exec.Command("sudo", "-n", "ip", "addr", "add", relayIP+"/32", "dev", "lo").Run(); addErr != nil {
+				t.Skip("needs a public relay address; AutoRelay drops private relay IPs")
+			}
+			t.Cleanup(func() {
+				_ = exec.Command("sudo", "-n", "ip", "addr", "del", relayIP+"/32", "dev", "lo").Run()
+			})
+		} else {
+			t.Fatal(err)
+		}
+	} else {
+		_ = ln.Close()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	relayHost := newTestHost(t,
+		libp2p.ListenAddrStrings("/ip4/"+relayIP+"/tcp/0"),
+		libp2p.ForceReachabilityPublic(),
+		libp2p.ResourceManager(&network.NullResourceManager{}),
+		libp2p.EnableRelayService(relayv2.WithACL(allowEveryone{}), relayv2.WithInfiniteLimits()),
+	)
+	kad, err := dht.New(ctx, relayHost, dht.Mode(dht.ModeServer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = kad.Close() })
+	var relayAddr string
+	for _, addr := range relayHost.Addrs() {
+		if addr != nil && strings.Contains(addr.String(), "/tcp/") && !strings.Contains(addr.String(), "quic") {
+			relayAddr = addr.String()
+			break
+		}
+	}
+	bootstrap := relayAddr + "/p2p/" + relayHost.ID().String()
+	router, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{DHTMode: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = router.Close() })
+	router.SetBootstrapPeers([]string{bootstrap})
+	if err := router.Bootstrap(ctx, []string{bootstrap}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, addr := range router.Addrs() {
+			if strings.Contains(addr, "p2p-circuit") && strings.Contains(addr, relayHost.ID().String()) {
+				return
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("no reservation: %v", router.Addrs())
 }
 
 func newTestHost(t *testing.T, opts ...libp2p.Option) host.Host {

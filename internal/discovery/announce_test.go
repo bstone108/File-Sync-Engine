@@ -9,10 +9,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"filesyncengine/internal/advertise"
 )
+
+func TestSelfOrHairpinDialDoesNotPromote(t *testing.T) {
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	t.Cleanup(func() { advertise.SetReachabilityProbe(nil) })
+	SetAnnounceAPIURL("https://138.199.21.250:22420")
+	t.Cleanup(func() { SetAnnounceAPIURL("") })
+	if advertise.PublicDialbackOK("138.199.21.250", 22421) != true {
+		t.Fatal("hairpin probe did not succeed")
+	}
+	if verifiedPublicLibp2p() {
+		t.Fatal("hairpin dial to the public address promoted the node")
+	}
+	self := peer.ID("self")
+	other := peer.ID("kiki")
+	if remoteReachabilitySource(0, self, self, true, false, true) != "" {
+		t.Fatal("a connection from this node counted as a remote dial-back")
+	}
+	if remoteReachabilitySource(0, other, self, true, false, false) != "" {
+		t.Fatal("an unauthenticated inbound dial promoted the node")
+	}
+	if remoteReachabilitySource(0, other, self, false, false, true) != "" {
+		t.Fatal("an outbound dial promoted the node")
+	}
+	if remoteReachabilitySource(0, other, self, true, true, true) != "" {
+		t.Fatal("a relay circuit promoted the node")
+	}
+	if remoteReachabilitySource(1, "", self, false, false, false) != "autonat-v2" {
+		t.Fatal("AutoNAT v2 reachability was ignored")
+	}
+	if remoteReachabilitySource(0, other, self, true, false, true) != "authenticated-peer" {
+		t.Fatal("authenticated peer dial-back was ignored")
+	}
+}
 
 func TestLibp2pIdentityEnvUsesTheProvidedKey(t *testing.T) {
 	t.Setenv("FSE_LIBP2P_PRIVATE_KEY", "CAESQEJDZ+N7os4cl6ICoZdZTNr5kYkeVxBxnQHp0WD798pTTu5F0fYA5fqAt9f59jrDBJ8m/Z3zpnUPmtq5Di9ml+E=")
@@ -85,6 +119,8 @@ func TestAnnouncedMultiaddrsUsePublishedPortAndAPI(t *testing.T) {
 func TestAnnounceHostsKeepEveryPath(t *testing.T) {
 	t.Setenv(advertise.EnvVarList, "https://203.0.113.9:22420")
 	t.Setenv(advertise.EnvExcludeTailscale, "")
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	t.Cleanup(func() { advertise.SetReachabilityProbe(nil) })
 	SetAnnounceAPIURL("https://100.64.8.8:22420")
 	t.Cleanup(func() { SetAnnounceAPIURL("") })
 	joined := strings.Join(multiaddrStrings(announcedAddrs(nil)), " ")
@@ -100,6 +136,11 @@ func TestAnnounceHostsKeepEveryPath(t *testing.T) {
 	}
 	if !strings.Contains(excluded, "/ip4/203.0.113.9/tcp/") {
 		t.Fatalf("public path missing: %s", excluded)
+	}
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return fmt.Errorf("closed") })
+	closed := strings.Join(multiaddrStrings(announcedAddrs(nil)), " ")
+	if strings.Contains(closed, "203.0.113.9") {
+		t.Fatalf("closed public port was announced: %s", closed)
 	}
 }
 
@@ -131,6 +172,8 @@ func TestAnnouncedAddrsOmitLoopbackWhenNothingIsVerified(t *testing.T) {
 
 func TestAnnouncedAddrsReplaceBridgeListenAddrs(t *testing.T) {
 	t.Setenv(EnvPublishedLibp2pPort, "22423")
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	t.Cleanup(func() { advertise.SetReachabilityProbe(nil) })
 	SetAnnounceAPIURL("https://192.0.2.20:22430")
 	t.Cleanup(func() { SetAnnounceAPIURL("") })
 	bridge, err := ma.NewMultiaddr("/ip4/172.17.0.4/tcp/22421")
@@ -159,6 +202,8 @@ func TestProductionRouterReusesThePublishedPort(t *testing.T) {
 	}
 	t.Setenv(EnvLibp2pPort, strconv.Itoa(port))
 	t.Setenv(EnvPublishedLibp2pPort, strconv.Itoa(port))
+	advertise.SetReachabilityProbe(func(context.Context, string, int) error { return nil })
+	t.Cleanup(func() { advertise.SetReachabilityProbe(nil) })
 	SetAnnounceAPIURL("https://192.0.2.10:22420")
 	t.Cleanup(func() {
 		ResetSharedRouter()

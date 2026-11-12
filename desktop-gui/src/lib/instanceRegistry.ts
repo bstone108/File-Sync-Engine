@@ -363,11 +363,18 @@ type LocalPeerSnapshot = {
 };
 
 function isDiscoveredPeer(peer: LocalPeerSnapshot): boolean {
+  if (peer.status === 'configured' || peer.status === 'connected' || peer.status === 'paired') {
+    return false;
+  }
   if (peer.status === 'discovered') {
     return true;
   }
   const endpoint = peer.endpoint?.trim() ?? '';
   return endpoint === 'discovered' || endpoint.startsWith('discovered:');
+}
+
+export function formatConnectionPath(path: string): string {
+  return peerPathLabel(path);
 }
 
 function peerPathLabel(path: string): string {
@@ -382,6 +389,8 @@ function peerPathLabel(path: string): string {
       return 'Tailscale';
     case 'relay':
       return 'Relay';
+    case 'limited-relay':
+      return 'Limited relay (no file transfer)';
     default:
       return path;
   }
@@ -432,7 +441,7 @@ export function summarizeLocalPeerLink(peers: LocalPeerSnapshot[]): LocalPeerLin
     };
   }
   const path = connected[0].connectionPath ?? '';
-  const relay = connected.every((peer) => peer.connectionPath === 'relay');
+  const relay = connected.every((peer) => peer.connectionPath === 'relay' || peer.connectionPath === 'limited-relay');
   return {
     connectionState: 'online',
     label: connected.length === 1 ? peerPathLabel(path) : `${connected.length} peers connected`,

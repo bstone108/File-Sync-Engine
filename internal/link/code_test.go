@@ -107,9 +107,13 @@ func TestCodeLookupRejectsHijackAndIsSingleUse(t *testing.T) {
 	if _, err := service.Claim(context.Background(), claim); err != nil {
 		t.Fatal(err)
 	}
+	if err := service.CommitClaim(code, redeemer.PublicKey); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("second claim = %v", err)
 	}
+	service.waitUnpublish()
 	if _, err := service.Lookup(context.Background(), code); err == nil {
 		t.Fatal("unpublished code was still looked up")
 	}
@@ -159,8 +163,10 @@ func TestManualProfileKeepsLANTailscalePublicRelayAndPin(t *testing.T) {
 	if byHint["vpn_overlay/vpn"] != "https://100.64.1.9:22420" {
 		t.Fatalf("tailscale = %+v", profile.Addresses)
 	}
-	if byHint["wan/manual"] != "https://203.0.113.20:22420" {
-		t.Fatalf("public = %+v", profile.Addresses)
+	for _, address := range profile.Addresses {
+		if strings.Contains(address.Address, "203.0.113.20") {
+			t.Fatalf("unverified public address became an endpoint: %+v", profile.Addresses)
+		}
 	}
 	if _, ok := byHint["container_bridge/manual"]; ok {
 		t.Fatalf("bridge address was advertised: %+v", profile.Addresses)
@@ -173,9 +179,19 @@ func TestManualProfileKeepsLANTailscalePublicRelayAndPin(t *testing.T) {
 	if len(profile.Relays) != 1 || profile.Relays[0] != "https://relay.example:22420" {
 		t.Fatalf("relays = %+v", profile.Relays)
 	}
-	endpoints := profile.Endpoints("https://203.0.113.20:22420")
-	if len(endpoints) != 4 {
+	endpoints := profile.Endpoints("https://10.1.1.5:22420")
+	if len(endpoints) != 2 {
 		t.Fatalf("endpoints = %+v", endpoints)
+	}
+	for _, endpoint := range endpoints {
+		if endpoint.Kind == "relay" || strings.Contains(endpoint.Address, "relay.example") {
+			t.Fatalf("relay was stored as an endpoint: %+v", endpoints)
+		}
+	}
+	for _, endpoint := range endpoints {
+		if !endpoint.Authenticated {
+			t.Fatalf("endpoint was not authenticated: %+v", endpoint)
+		}
 	}
 	withHostPort := Gather(cfg, Extras{ExtraURLs: []string{"https://192.168.1.20:22420", "https://172.17.0.4:22420"}})
 	foundHostPort := false
@@ -250,6 +266,19 @@ func TestPairingCodeReplayIsRejectedWithinExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	other, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherClaim, err := SignClaim(other, ClaimRequest{
+		Code:     code,
+		NodeName: "other",
+		APIKey:   "other-api",
+		Profile:  Profile{DiscoveryID: other.PublicKey, NodeName: "other"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	results := make(chan error, 2)
@@ -265,27 +294,26 @@ func TestPairingCodeReplayIsRejectedWithinExpiry(t *testing.T) {
 	close(start)
 	wg.Wait()
 	close(results)
-	accepted := 0
-	rejected := 0
 	for claimErr := range results {
-		if claimErr == nil {
-			accepted++
-			continue
+		if claimErr != nil {
+			t.Fatalf("same redeemer claim = %v", claimErr)
 		}
-		if strings.Contains(claimErr.Error(), "already used") {
-			rejected++
-			continue
-		}
-		t.Fatalf("claim = %v", claimErr)
 	}
-	if accepted != 1 || rejected != 1 {
-		t.Fatalf("accepted %d rejected %d", accepted, rejected)
+	if _, err := service.Claim(context.Background(), otherClaim); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("other redeemer = %v", err)
 	}
+	if err := service.CommitClaim(code, redeemer.PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	service.waitUnpublish()
 	if _, err := service.Lookup(context.Background(), code); err == nil {
 		t.Fatal("redeemed code is still published")
 	}
 	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("replay = %v", err)
+	}
+	if _, err := service.Claim(context.Background(), otherClaim); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("other redeemer after burn = %v", err)
 	}
 }
 
@@ -323,6 +351,86 @@ func TestExpiredPairingCodeIsUnpublished(t *testing.T) {
 	}
 	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("claim = %v", err)
+	}
+}
+
+type blockingUnpublishDirectory struct {
+	*MemoryDirectory
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *blockingUnpublishDirectory) Unpublish(ctx context.Context, namespace string) error {
+	select {
+	case <-d.entered:
+	default:
+		close(d.entered)
+	}
+	select {
+	case <-d.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return d.MemoryDirectory.Unpublish(ctx, namespace)
+}
+
+func TestClaimReturnsWhileUnpublishBlocks(t *testing.T) {
+	identity, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := &blockingUnpublishDirectory{
+		MemoryDirectory: NewMemoryDirectory(),
+		entered:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		select {
+		case <-dir.release:
+		default:
+			close(dir.release)
+		}
+	})
+	service := NewService(dir)
+	code, _, err := service.Issue(context.Background(), identity, Profile{DiscoveryID: identity.PublicKey, NodeName: "node", Addresses: []Address{{Kind: "manual", Address: "http://10.0.0.2:22420"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemer, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := SignClaim(redeemer, ClaimRequest{Code: code, NodeName: "redeemer", APIKey: "redeemer-api", Profile: Profile{DiscoveryID: redeemer.PublicKey, NodeName: "redeemer"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Claim(context.Background(), claim); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-dir.entered:
+		t.Fatal("reserve unpublished the code")
+	case <-time.After(50 * time.Millisecond):
+	}
+	start := time.Now()
+	if err := service.CommitClaim(code, redeemer.PublicKey); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("commit waited for unpublish: %s", elapsed)
+	}
+	select {
+	case <-dir.entered:
+	case <-time.After(time.Second):
+		t.Fatal("unpublish did not start")
+	}
+	if _, err := service.Claim(context.Background(), claim); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("second claim = %v", err)
+	}
+	close(dir.release)
+	service.waitUnpublish()
+	if _, err := service.Lookup(context.Background(), code); err == nil {
+		t.Fatal("code stayed published after unpublish")
 	}
 }
 

@@ -19,6 +19,9 @@ const (
 	PathDirect      Path = "direct"
 	PathTailscale   Path = "tailscale"
 	PathRelay       Path = "relay"
+	// PathLimitedRelay is a relay v2 circuit with a data limit. Pairing and
+	// small control requests may use it. File bytes may not.
+	PathLimitedRelay Path = "limited-relay"
 )
 
 // ErrAnswered marks a dial whose peer sent an application response.
@@ -61,7 +64,8 @@ func Classify(addr string) Path {
 	return PathDirect
 }
 
-// Rank prefers LAN, then a punched or direct path, then Tailscale, then relay.
+// Rank prefers LAN, then a punched or direct path, then Tailscale, then an
+// unlimited relay. A limited relay is worse than an unlimited one.
 func Rank(path Path) int {
 	switch path {
 	case PathLAN:
@@ -74,8 +78,10 @@ func Rank(path Path) int {
 		return 3
 	case PathRelay:
 		return 4
-	default:
+	case PathLimitedRelay:
 		return 5
+	default:
+		return 6
 	}
 }
 

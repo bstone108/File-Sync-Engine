@@ -11,6 +11,10 @@ TIMEOUT="${SOAK_TIMEOUT:-720}"
 
 cleanup() {
   docker compose -f compose.yaml logs --tail 80 || true
+  for side in soak-a soak-b; do
+    echo "---- $side /config/logs/fse.jsonl ----"
+    docker compose -f compose.yaml exec -T "$side" tail -n 80 /config/logs/fse.jsonl || true
+  done
   docker compose -f compose.yaml down -v || true
 }
 trap cleanup EXIT
@@ -89,7 +93,7 @@ fi
 paired=""
 i=0
 while [ "$i" -lt 8 ]; do
-  paired="$(post 22441 "$KEY_B" /v1/pair-code/redeem "{\"code\":\"$code\"}" || true)"
+  paired="$(curl -ksS -H "X-FSE-API-Key: $KEY_B" -H "Content-Type: application/json" -d "{\"code\":\"$code\"}" "https://127.0.0.1:22441/v1/pair-code/redeem" || true)"
   echo "$paired"
   echo "$paired" | grep -qi 'paired by code' && break
   i=$((i + 1))
@@ -159,7 +163,9 @@ if [ "$elapsed" -le 8 ]; then
   exit 1
 fi
 for side in soak-a soak-b; do
-  if docker compose -f compose.yaml exec -T "$side" sh -c 'grep -q "context deadline exceeded" /config/logs/fse.jsonl'; then
+  # A public bootstrap dial or a relay reservation's DHT refresh gives up
+  # after its own short timeout. That is not a stalled file transfer.
+  if docker compose -f compose.yaml exec -T "$side" sh -c 'grep "context deadline exceeded" /config/logs/fse.jsonl | grep -v libp2p.bootstrap.dial | grep -v libp2p.relay.republish | grep -q .'; then
     echo "$side log contains context deadline exceeded" >&2
     exit 1
   fi

@@ -128,7 +128,9 @@ func newRelayHost(t *testing.T) host.Host {
 	h, err := libp2p.New(
 		libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"),
 		libp2p.ForceReachabilityPublic(),
-		libp2p.EnableRelayService(relayv2.WithACL(relayAllowAll{})),
+		// Unlimited, like a same-identity helper. A public kubo relay is limited
+		// and must not carry this file; that case is covered in discovery.
+		libp2p.EnableRelayService(relayv2.WithACL(relayAllowAll{}), relayv2.WithInfiniteLimits()),
 	)
 	if err != nil {
 		t.Fatal(err)

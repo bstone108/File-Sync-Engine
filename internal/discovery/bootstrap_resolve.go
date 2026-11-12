@@ -151,11 +151,10 @@ func expandBootstrapMultiaddr(ctx context.Context, multiaddr ma.Multiaddr, resol
 }
 
 func addrInfosFromMultiaddrs(original string, addrs []ma.Multiaddr) ([]peer.AddrInfo, error) {
-	originalAddr, _ := ma.NewMultiaddr(original)
-	// Dial the name the user configured. Regional dnsaddr results name ports
-	// that often reset, while libp2p's own resolution of the parent dnsaddr
-	// still finds a reachable transport for that peer ID.
-	dialParent := originalAddr != nil && multiaddrHasDNSAddr(originalAddr) && !multiaddrHasPeerID(originalAddr)
+	// Dial the resolved transport. Replacing every result with the parent
+	// /dnsaddr (which names no peer) makes Connect wait out the dial timeout
+	// on an address libp2p cannot open, so the routing table stays empty and
+	// neither pairing nor relay reservation can start.
 	infos := make([]peer.AddrInfo, 0, len(addrs))
 	var lastErr error
 	for _, addr := range addrs {
@@ -166,9 +165,6 @@ func addrInfosFromMultiaddrs(original string, addrs []ma.Multiaddr) ([]peer.Addr
 		if err != nil {
 			lastErr = err
 			continue
-		}
-		if dialParent {
-			info.Addrs = []ma.Multiaddr{originalAddr}
 		}
 		infos = append(infos, *info)
 	}

@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"strings"
 	"sync"
 
 	"filesyncengine/internal/config"
@@ -76,6 +77,7 @@ var (
 	dhtPeers       []Peer
 	unreachableSet = map[string]struct{}{}
 	localSource    Source
+	pendingDHT     = map[string]struct{}{}
 )
 
 // NoteExchangedPeers stores addresses learned from a connected peer or from
@@ -94,10 +96,55 @@ func NoteLocalPeers(peers []Peer) {
 	catalogMu.Unlock()
 }
 
-// NoteDHTPeers stores a backup lookup. Dial uses these only after earlier paths fail.
+// NoteDHTPeers stores a backup lookup for one dial attempt. The addresses are
+// not peer endpoints. PendingDHTAddress stays true until that attempt
+// authenticates as the expected peer, so a lookup cannot be written to config.
 func NoteDHTPeers(peers []Peer) {
 	catalogMu.Lock()
 	dhtPeers = mergePeers(dhtPeers, peers)
+	for _, peer := range peers {
+		for _, address := range peer.Addresses {
+			address = strings.TrimSpace(address)
+			if address != "" {
+				pendingDHT[address] = struct{}{}
+			}
+		}
+	}
+	catalogMu.Unlock()
+}
+
+// PendingDHTAddress reports an address learned from the DHT that has not
+// authenticated as the expected peer. Callers must not persist it.
+func PendingDHTAddress(address string) bool {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return false
+	}
+	catalogMu.Lock()
+	defer catalogMu.Unlock()
+	_, ok := pendingDHT[address]
+	return ok
+}
+
+// TakeDHTAddresses returns the DHT candidates for one peer and forgets them.
+// A later dial does not reuse the same unauthenticated lookup.
+func TakeDHTAddresses(peerID string) []string {
+	catalogMu.Lock()
+	defer catalogMu.Unlock()
+	addrs := addressesOf(dhtPeers, peerID)
+	dhtPeers = removePeer(dhtPeers, peerID)
+	return addrs
+}
+
+// MarkAddressAuthenticated records that a dial authenticated this address as
+// the expected peer. Only then may a caller persist it.
+func MarkAddressAuthenticated(address string) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return
+	}
+	catalogMu.Lock()
+	delete(pendingDHT, address)
 	catalogMu.Unlock()
 }
 
@@ -180,7 +227,21 @@ func ResetCatalog() {
 	dhtPeers = nil
 	unreachableSet = map[string]struct{}{}
 	localSource = nil
+	pendingDHT = map[string]struct{}{}
 	catalogMu.Unlock()
+}
+
+func removePeer(peers []Peer, id string) []Peer {
+	if id == "" {
+		return peers
+	}
+	out := make([]Peer, 0, len(peers))
+	for _, peer := range peers {
+		if peer.ID != id {
+			out = append(out, peer)
+		}
+	}
+	return out
 }
 
 func addressesOf(peers []Peer, id string) []string {

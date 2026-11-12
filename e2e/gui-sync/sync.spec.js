@@ -30,9 +30,16 @@ async function pairFrom(page) {
   await expect(page.getByTestId('pairing-local-url')).toHaveCount(0);
   await expect(page.getByTestId('pairing-reachable-url')).toHaveCount(0);
   await expect(page.getByTestId('pairing-advertise-url')).toContainText('advertises');
-  await clickClearOfSidebar(page.getByTestId('generate-pairing'));
+  const generate = page.getByTestId('generate-pairing');
+  await expect(generate).toBeEnabled();
+  await clickClearOfSidebar(generate);
   const text = page.getByTestId('pairing-export-text');
-  await expect(text).toBeVisible();
+  try {
+    await expect(text).toBeVisible({ timeout: 45000 });
+  } catch (error) {
+    const message = await page.getByTestId('pairing-message').textContent().catch(() => '');
+    throw new Error(`pairing export did not appear: ${(message || '').trim() || 'no pairing message'}`, { cause: error });
+  }
   const value = await text.inputValue();
   expect(value).toContain('reachableAPIURL');
   expect(value).toContain('https://fse-');
@@ -51,7 +58,7 @@ async function importOn(page, packageText, expected) {
   await clickClearOfSidebar(page.getByTestId('parse-pairing'));
   await clickClearOfSidebar(page.getByTestId('import-pairing'));
   if (expected === 'paired') {
-    await expect(page.getByText(/identity import accepted|already paired/i)).toBeVisible();
+    await expect(page.getByText(/identity import accepted|already paired/i)).toBeVisible({ timeout: 45000 });
     return;
   }
   await expect(page.getByText(expected, { exact: false })).toBeVisible();

@@ -16,9 +16,10 @@ import (
 	"time"
 
 	libp2p "github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	ma "github.com/multiformats/go-multiaddr"
 
@@ -44,9 +45,19 @@ type leftInfo struct {
 	Direct  string `json:"direct"`
 }
 
+// natNamespace is the DHT record both engines advertise. Neither side is given
+// the relay address in its peer config.
+const natNamespace = "filesyncengine/nat-lab"
+
 // TestNATNamespaceEnginesSync puts two engines behind separate NAT namespaces
-// with no port forwards. A public relay is the only path between them, and a
-// file must still sync.
+// with no port forwards and no shared Docker network. The only shared host is
+// a lab DHT bootstrap that also serves circuit relay v2. Each engine must
+// discover that relay, reserve it, and sync. The relay is not written into
+// peer.Relays.
+//
+// This is not the public internet. bootstrap.libp2p.io is not contacted, and
+// a passing run does not prove those public nodes will relay a reservation.
+// A two-home test is still what proves that path.
 func TestNATNamespaceEnginesSync(t *testing.T) {
 	if role := os.Getenv("FSE_NATNS_ROLE"); role != "" {
 		runNATRole(t, role)
@@ -72,17 +83,16 @@ func TestNATNamespaceEnginesSync(t *testing.T) {
 
 	runCmd(t, "sysctl", "-w", "net.ipv4.ip_forward=1")
 	runCmd(t, "ip", "link", "add", wan, "type", "bridge")
-	runCmd(t, "ip", "addr", "add", "10.200.0.1/24", "dev", wan)
+	// AutoRelay keeps a circuit only when the relay address is public.
+	// 203.0.113.0/24 is unroutable to libp2p, so this lab uses 1.2.3.4 on
+	// the bridge. The address is local to this host and is not routed out.
+	runCmd(t, "ip", "addr", "add", "1.2.3.4/24", "dev", wan)
 	runCmd(t, "ip", "link", "set", wan, "up")
 	addNAT(t, nsA, aHost, aNS, "10.201.0.1/24", "10.201.0.2/24")
 	addNAT(t, nsB, bHost, bNS, "10.202.0.1/24", "10.202.0.2/24")
 	runCmd(t, "iptables", "-I", "FORWARD", "1", "-s", "10.201.0.0/24", "-d", "10.202.0.0/24", "-j", "DROP")
 	runCmd(t, "iptables", "-I", "FORWARD", "1", "-s", "10.202.0.0/24", "-d", "10.201.0.0/24", "-j", "DROP")
-	runCmd(t, "iptables", "-t", "nat", "-A", "POSTROUTING", "-s", "10.201.0.0/24", "-d", "10.200.0.0/24", "-j", "MASQUERADE")
-	runCmd(t, "iptables", "-t", "nat", "-A", "POSTROUTING", "-s", "10.202.0.0/24", "-d", "10.200.0.0/24", "-j", "MASQUERADE")
 	t.Cleanup(func() {
-		_ = exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "10.201.0.0/24", "-d", "10.200.0.0/24", "-j", "MASQUERADE").Run()
-		_ = exec.Command("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "10.202.0.0/24", "-d", "10.200.0.0/24", "-j", "MASQUERADE").Run()
 		_ = exec.Command("iptables", "-D", "FORWARD", "-s", "10.201.0.0/24", "-d", "10.202.0.0/24", "-j", "DROP").Run()
 		_ = exec.Command("iptables", "-D", "FORWARD", "-s", "10.202.0.0/24", "-d", "10.201.0.0/24", "-j", "DROP").Run()
 		_ = exec.Command("ip", "netns", "del", nsA).Run()
@@ -95,19 +105,27 @@ func TestNATNamespaceEnginesSync(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	relayHost, err := libp2p.New(
-		libp2p.ListenAddrStrings("/ip4/10.200.0.1/tcp/0"),
+		libp2p.ListenAddrStrings("/ip4/1.2.3.4/tcp/0"),
 		libp2p.ForceReachabilityPublic(),
-		libp2p.EnableRelayService(relayv2.WithACL(relayAllowAll{})),
+		libp2p.ResourceManager(&network.NullResourceManager{}),
+		libp2p.EnableRelayService(relayv2.WithACL(relayAllowAll{}), relayv2.WithInfiniteLimits()),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = relayHost.Close() })
+	kad, err := dht.New(ctx, relayHost, dht.Mode(dht.ModeServer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = kad.Close() })
+	if err := kad.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
 	relayAddr := tcpMultiaddr(t, relayHost)
 	if err := writeJSON(filepath.Join(dir, "relay.json"), relayInfo{Addr: relayAddr, Peer: relayHost.ID().String()}); err != nil {
 		t.Fatal(err)
 	}
-	_ = ctx
 
 	leftCmd := namespaceTest(nsA, dir, "left")
 	rightCmd := namespaceTest(nsB, dir, "right")
@@ -121,7 +139,7 @@ func TestNATNamespaceEnginesSync(t *testing.T) {
 	rightDone := make(chan error, 1)
 	go func() { leftDone <- leftCmd.Wait() }()
 	go func() { rightDone <- rightCmd.Wait() }()
-	timeout := time.After(90 * time.Second)
+	timeout := time.After(150 * time.Second)
 	select {
 	case err := <-rightDone:
 		if err != nil {
@@ -188,23 +206,7 @@ func runNATRole(t *testing.T, role string) {
 
 func runLeft(t *testing.T, dir string) {
 	info := waitJSON[relayInfo](t, filepath.Join(dir, "relay.json"), 20*time.Second)
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-	defer cancel()
-	h := privateHost(t, "/ip4/10.201.0.2/tcp/0")
-	relayAddr, err := ma.NewMultiaddr(info.Addr + "/p2p/" + info.Peer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	relayPeer, err := peer.Decode(info.Peer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Connect(ctx, peer.AddrInfo{ID: relayPeer, Addrs: []ma.Multiaddr{relayAddr}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Reserve(ctx, h, peer.AddrInfo{ID: relayPeer, Addrs: []ma.Multiaddr{relayAddr}}); err != nil {
-		t.Fatal(err)
-	}
+	bootstrap := info.Addr + "/p2p/" + info.Peer
 	root := filepath.Join(dir, "left-folder")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -231,20 +233,27 @@ func runLeft(t *testing.T, dir string) {
 			http.NotFound(w, r)
 		}
 	}))
-	discovery.SetAPIHost(h)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	defer cancel()
+	router := natRouter(t, bootstrap)
+	if !waitForCircuit(router, 50*time.Second) {
+		t.Fatalf("sender did not reserve the public relay: %v", router.Addrs())
+	}
+	if _, err := router.FindPeers(ctx, natNamespace); err != nil {
+		t.Fatalf("sender did not advertise on the DHT: %v", err)
+	}
 	ln, err := net.Listen("tcp", "10.201.0.2:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
 	if err := writeJSON(filepath.Join(dir, "left.json"), leftInfo{
-		Peer:    h.ID().String(),
-		Circuit: info.Addr + "/p2p/" + info.Peer + "/p2p-circuit",
-		Direct:  ln.Addr().String(),
+		Peer:   router.PeerID(),
+		Direct: ln.Addr().String(),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(70 * time.Second)
+	deadline := time.Now().Add(110 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(filepath.Join(dir, "right.done")); err == nil {
 			return
@@ -255,21 +264,54 @@ func runLeft(t *testing.T, dir string) {
 }
 
 func runRight(t *testing.T, dir string) {
-	info := waitJSON[leftInfo](t, filepath.Join(dir, "left.json"), 40*time.Second)
+	relay := waitJSON[relayInfo](t, filepath.Join(dir, "relay.json"), 20*time.Second)
+	info := waitJSON[leftInfo](t, filepath.Join(dir, "left.json"), 70*time.Second)
+	if info.Circuit != "" {
+		t.Fatalf("sender handed out a relay address %s", info.Circuit)
+	}
 	dialer := net.Dialer{Timeout: 1500 * time.Millisecond}
 	if conn, err := dialer.Dial("tcp", info.Direct); err == nil {
 		_ = conn.Close()
 		t.Fatalf("direct dial to %s succeeded; the NAT drop is not in place", info.Direct)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Second)
 	defer cancel()
-	h := privateHost(t, "/ip4/10.202.0.2/tcp/0")
-	discovery.SetAPIHost(h)
+	router := natRouter(t, relay.Addr+"/p2p/"+relay.Peer)
 	logFile, err := os.Create(filepath.Join(dir, "right.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+	var found discovery.Peer
+	lookupDeadline := time.Now().Add(40 * time.Second)
+	for time.Now().Before(lookupDeadline) && found.ID == "" {
+		peers, findErr := router.FindPeers(ctx, natNamespace)
+		if findErr != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		for _, candidate := range peers {
+			if candidate.ID == info.Peer && len(candidate.Addresses) > 0 {
+				found = candidate
+				break
+			}
+		}
+		if found.ID == "" {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	if found.ID == "" {
+		t.Fatalf("DHT lookup did not find %s; router addrs %v", info.Peer, router.Addrs())
+	}
+	hasCircuit := false
+	for _, addr := range found.Addresses {
+		if strings.Contains(addr, "p2p-circuit") {
+			hasCircuit = true
+		}
+	}
+	if !hasCircuit {
+		t.Fatalf("DHT record has no relay circuit: %v", found.Addresses)
+	}
 	root := filepath.Join(dir, "right-folder")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -279,10 +321,13 @@ func runRight(t *testing.T, dir string) {
 		ID:        "left-peer",
 		APIKey:    "secret",
 		DHTPeerID: info.Peer,
-		Relays:    []string{info.Circuit},
+		Addresses: found.Addresses,
 		Endpoints: []config.EndpointConfig{{
 			Kind: "manual", Address: "http://203.0.113.50:22420", NetworkHint: "wan",
 		}},
+	}
+	if len(peer.Relays) != 0 {
+		t.Fatal("peer.Relays was configured")
 	}
 	used, err := link.Dial(ctx, peer, func(ctx context.Context, base string, client *http.Client) error {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/sync-journal?folder=shared", nil)
@@ -330,18 +375,33 @@ func runRight(t *testing.T, dir string) {
 	}
 }
 
-func privateHost(t *testing.T, listen string) host.Host {
+func natRouter(t *testing.T, bootstrap string) *discovery.Libp2pDHTRouter {
 	t.Helper()
-	h, err := libp2p.New(
-		libp2p.ListenAddrStrings(listen),
-		libp2p.ForceReachabilityPrivate(),
-		libp2p.EnableRelay(),
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+	router, err := discovery.NewLibp2pDHTRouter(ctx, discovery.Libp2pDHTRouterOptions{DHTMode: "auto"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = h.Close() })
-	return h
+	t.Cleanup(func() { _ = router.Close() })
+	router.SetBootstrapPeers([]string{bootstrap})
+	if err := router.Bootstrap(ctx, []string{bootstrap}); err != nil {
+		t.Fatal(err)
+	}
+	return router
+}
+
+func waitForCircuit(router *discovery.Libp2pDHTRouter, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		for _, addr := range router.Addrs() {
+			if strings.Contains(addr, "p2p-circuit") {
+				return true
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return false
 }
 
 func tcpMultiaddr(t *testing.T, h host.Host) string {

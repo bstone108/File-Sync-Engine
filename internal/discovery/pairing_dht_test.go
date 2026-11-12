@@ -25,13 +25,13 @@ func TestAcceptedBootstrapRequiresAConnectedPeer(t *testing.T) {
 	}
 }
 
-func TestSelectLibp2pDHTModeUsesThePublishedPortByDefault(t *testing.T) {
+func TestSelectLibp2pDHTModeStaysAutoBehindNAT(t *testing.T) {
 	mode, reason, err := selectLibp2pDHTMode("", true, false)
-	if err != nil || mode != dht.ModeServer || reason != "published-port" {
+	if err != nil || mode != dht.ModeAuto || reason != "auto" {
 		t.Fatalf("published port: mode %v reason %s err %v", mode, reason, err)
 	}
 	mode, reason, err = selectLibp2pDHTMode("", false, true)
-	if err != nil || mode != dht.ModeServer || reason != "advertise-address" {
+	if err != nil || mode != dht.ModeAuto || reason != "auto" {
 		t.Fatalf("advertise address: mode %v reason %s err %v", mode, reason, err)
 	}
 	mode, reason, err = selectLibp2pDHTMode("", false, false)
@@ -44,7 +44,7 @@ func TestSelectLibp2pDHTModeUsesThePublishedPortByDefault(t *testing.T) {
 	}
 }
 
-func TestPublishedPortBecomesAServerWithoutAModeOverride(t *testing.T) {
+func TestPublishedPortStaysAutoAndCanBootstrap(t *testing.T) {
 	t.Setenv("FSE_LIBP2P_DHT_MODE", "")
 	t.Setenv(EnvPublishedLibp2pPort, "22421")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -54,12 +54,12 @@ func TestPublishedPortBecomesAServerWithoutAModeOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = left.Close() })
-	right, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "right"})
+	right, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "right", DHTMode: "server"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = right.Close() })
-	if left.modeReason != "published-port" || left.dht.Mode() != dht.ModeServer {
+	if left.modeReason != "auto" || left.dht.Mode() == dht.ModeServer {
 		t.Fatalf("left mode %v reason %s", left.dht.Mode(), left.modeReason)
 	}
 	dial := loopbackDial(right)
@@ -119,6 +119,46 @@ func TestClientLookupDoesNotRequireBeingAServer(t *testing.T) {
 	}
 }
 
+func TestPrivateClientsPairOverTheConnectedPeer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	left, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "pair-left", DHTMode: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = left.Close() })
+	right, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "pair-right", DHTMode: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = right.Close() })
+	leftDial := loopbackDial(left)
+	rightDial := loopbackDial(right)
+	if leftDial == "" || rightDial == "" {
+		t.Fatal("missing loopback address")
+	}
+	left.SetBootstrapPeers([]string{rightDial})
+	right.SetBootstrapPeers([]string{leftDial})
+	namespace := "filesyncengine/pair/v1/private-clients"
+	payload := []byte("sealed-record")
+	if err := left.PublishPairing(ctx, namespace, payload); err != nil {
+		t.Fatal(err)
+	}
+	if servesKad(left) || servesKad(right) {
+		t.Fatal("a private peer connection promoted a DHT server")
+	}
+	got, err := right.LookupPairing(ctx, namespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || string(got[0]) != string(payload) {
+		t.Fatalf("lookup = %q err %v", got, err)
+	}
+	if servesKad(left) || servesKad(right) {
+		t.Fatal("lookup promoted a private node")
+	}
+}
+
 func TestReachableAddressPromotesAutoModeToServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -130,7 +170,7 @@ func TestReachableAddressPromotesAutoModeToServer(t *testing.T) {
 	if servesKad(router) {
 		t.Fatal("auto mode started as a server")
 	}
-	router.notePublicReachability()
+	router.notePublicReachability("autonat-v2")
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && !servesKad(router) {
 		time.Sleep(20 * time.Millisecond)

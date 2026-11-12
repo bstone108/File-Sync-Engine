@@ -147,6 +147,7 @@ func (s *Server) Serve(ctx context.Context, stream io.ReadWriter) error {
 			sendLimiter = ratelimit.NewLimiter(negotiated.SendBytesPerSecond)
 		case protocol.MessagePeerExchange:
 			plan := discovery.PlanPeerExchange(s.cfg.NodeID, s.cfg.KnownPeers, remotePeer, peersFromProtocol(msg.PeerExchange.Peers))
+			discovery.RememberMesh(s.cfg.NodeID, meshNode(remotePeer), meshNodes(plan.Learned))
 			groups := planIdentityGroupResponses(s.cfg.NodeID, identityGroupsWithSnapshots(s.cfg.IdentityGroups, s.cfg.SnapshotStore, s.cfg.SnapshotArchiveRoot, s.cfg.SnapshotCheckpointRoot), remotePeer.ID, groupsFromProtocol(msg.PeerExchange.IdentityGroups))
 			if err := codec.Write(protocol.Message{Type: protocol.MessagePeerExchange, PeerExchange: &protocol.PeerExchange{Peers: peersToProtocol(plan.ShareWithRemote), IdentityGroups: groupsToProtocol(groups)}}); err != nil {
 				return err
@@ -574,6 +575,7 @@ func PullFolder(ctx context.Context, stream io.ReadWriter, opts PullOptions) (Pu
 		plan := discovery.PlanPeerExchange(opts.NodeID, opts.KnownPeers, remote, peersFromProtocol(peerMsg.PeerExchange.Peers))
 		result.LearnedPeers = plan.Learned
 		discovery.NoteExchangedPeers(plan.Learned)
+		discovery.RememberMesh(opts.NodeID, meshNode(remote), meshNodes(plan.Learned))
 		remoteGroups := groupsFromProtocol(peerMsg.PeerExchange.IdentityGroups)
 		result.LearnedFolders = planIdentityGroupLearnedFolders(opts.NodeID, opts.IdentityGroups, remote.ID, remoteGroups)
 		learnedSnapshots, err := saveIdentitySnapshotMarkers(opts.SnapshotStore, opts.IdentityGroups, remoteGroups)
@@ -836,6 +838,18 @@ func peersToProtocol(peers []discovery.Peer) []protocol.PeerInfo {
 	out := make([]protocol.PeerInfo, 0, len(peers))
 	for _, peer := range peers {
 		out = append(out, protocol.PeerInfo{ID: peer.ID, Addresses: append([]string(nil), peer.Addresses...)})
+	}
+	return out
+}
+
+func meshNode(peer discovery.Peer) discovery.MeshNode {
+	return discovery.MeshNode{ID: peer.ID, Addrs: append([]string(nil), peer.Addresses...)}
+}
+
+func meshNodes(peers []discovery.Peer) []discovery.MeshNode {
+	out := make([]discovery.MeshNode, 0, len(peers))
+	for _, peer := range peers {
+		out = append(out, meshNode(peer))
 	}
 	return out
 }

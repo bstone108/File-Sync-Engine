@@ -120,22 +120,6 @@ func SetAnnounceAPIURL(raw string) {
 	announceMu.Lock()
 	announceAPIURL = strings.TrimSpace(raw)
 	announceMu.Unlock()
-	promoteSharedRouterIfReachable()
-}
-
-// promoteSharedRouterIfReachable starts DHT server behavior when a reachable
-// address shows up after startup. A client can look records up either way.
-func promoteSharedRouterIfReachable() {
-	if !publishedLibp2pPortConfigured() && len(announceHosts()) == 0 {
-		return
-	}
-	sharedMu.Lock()
-	router := sharedRouter
-	sharedMu.Unlock()
-	if router == nil {
-		return
-	}
-	router.notePublicReachability()
 }
 
 func currentAnnounceAPIURL() string {
@@ -176,9 +160,10 @@ func portFromEnv(name string, fallback int) int {
 // A second host would bind the same published port and fail.
 func ProductionRouter(ctx context.Context, nodeID string) (*Libp2pDHTRouter, error) {
 	sharedMu.Lock()
-	defer sharedMu.Unlock()
 	if sharedRouter != nil {
-		return sharedRouter, nil
+		router := sharedRouter
+		sharedMu.Unlock()
+		return router, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -190,10 +175,24 @@ func ProductionRouter(ctx context.Context, nodeID string) (*Libp2pDHTRouter, err
 		Announce:   true,
 	})
 	if err != nil {
+		sharedMu.Unlock()
 		return nil, err
 	}
 	sharedRouter = router
+	sharedMu.Unlock()
 	return router, nil
+}
+
+// LookupPeerAddrs asks the process DHT for a paired peer's addresses.
+// An empty result means there is no router or the peer was not found.
+func LookupPeerAddrs(ctx context.Context, peerID string) []string {
+	sharedMu.Lock()
+	router := sharedRouter
+	sharedMu.Unlock()
+	if router == nil {
+		return nil
+	}
+	return router.LookupPeerAddrs(ctx, peerID)
 }
 
 // SharedPeerID is the libp2p peer id of the process router, when it is up.
@@ -207,13 +206,16 @@ func SharedPeerID() string {
 }
 
 // SharedListenAddrs are the addresses the process router is advertising.
+// host.Addrs dials public candidates back, so the router lock is not held
+// across that call.
 func SharedListenAddrs() []string {
 	sharedMu.Lock()
-	defer sharedMu.Unlock()
-	if sharedRouter == nil || sharedRouter.host == nil {
+	router := sharedRouter
+	sharedMu.Unlock()
+	if router == nil || router.host == nil {
 		return nil
 	}
-	return multiaddrStrings(sharedRouter.host.Addrs())
+	return multiaddrStrings(router.host.Addrs())
 }
 
 // ResetSharedRouter closes the process router. Tests use it between cases.
@@ -232,6 +234,7 @@ func announcedAddrs(existing []ma.Multiaddr) []ma.Multiaddr {
 		apiURL = ""
 	}
 	announced := announcedMultiaddrs(announceHosts(), apiURL, PublishedLibp2pPort(Libp2pListenPort()))
+	announced = appendUniqueMultiaddr(announced, libp2pSTUNCandidate())
 	var circuits []ma.Multiaddr
 	for _, addr := range existing {
 		if addr != nil && strings.Contains(addr.String(), "p2p-circuit") {
@@ -246,7 +249,52 @@ func announcedAddrs(existing []ma.Multiaddr) []ma.Multiaddr {
 	return append(announced, circuits...)
 }
 
+// libp2pSTUNCandidate is the QUIC address STUN observed for this socket.
+// Symmetric mappings are not candidates: a third party would see a different port.
+func libp2pSTUNCandidate() ma.Multiaddr {
+	status := advertise.CurrentNATStatus()
+	if !status.Advertise || status.IP == "" || status.Port < 1 || status.Port > 65535 {
+		return nil
+	}
+	ip := net.ParseIP(status.IP)
+	if ip == nil {
+		return nil
+	}
+	var raw string
+	if v4 := ip.To4(); v4 != nil {
+		raw = fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", v4.String(), status.Port)
+	} else {
+		raw = fmt.Sprintf("/ip6/%s/udp/%d/quic-v1", ip.String(), status.Port)
+	}
+	addr, err := ma.NewMultiaddr(raw)
+	if err != nil {
+		return nil
+	}
+	return addr
+}
+
+func appendUniqueMultiaddr(base []ma.Multiaddr, extra ma.Multiaddr) []ma.Multiaddr {
+	if extra == nil {
+		return base
+	}
+	needle := extra.String()
+	for _, addr := range base {
+		if addr != nil && addr.String() == needle {
+			return base
+		}
+	}
+	return append(base, extra)
+}
+
+// verifiedPublicLibp2p is always false. A dial this process places to its own
+// address, including NAT hairpin to its public IP, only proves the socket is
+// open. Another network has to dial it.
+func verifiedPublicLibp2p() bool {
+	return false
+}
+
 func announceHosts() []string {
+	port := PublishedLibp2pPort(Libp2pListenPort())
 	seen := map[string]struct{}{}
 	var hosts []string
 	add := func(raw string) {
@@ -257,7 +305,7 @@ func announceHosts() []string {
 		if advertise.ExcludeTailscale() && advertise.IsTailscaleHost(host) {
 			return
 		}
-		if !advertise.HostReachable(host) {
+		if !advertise.MayAnnounceLibp2p(host, port) {
 			return
 		}
 		if _, ok := seen[host]; ok {

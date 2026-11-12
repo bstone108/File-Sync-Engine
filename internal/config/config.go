@@ -368,6 +368,10 @@ type EndpointConfig struct {
 	Kind        string `json:"kind"`
 	Address     string `json:"address"`
 	NetworkHint string `json:"networkHint,omitempty"`
+	// Authenticated is set when this address was presented by the paired peer
+	// and a later dial authenticated that peer's ID and certificate pin.
+	// Every endpoint without it is removed on startup.
+	Authenticated bool `json:"authenticated,omitempty"`
 }
 
 type FolderConfig struct {

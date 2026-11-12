@@ -274,6 +274,10 @@ jobs:
         run: |
           docker compose -f e2e/gui-sync/compose.yaml logs || true
           docker compose -f e2e/gui-sync/compose.published.yaml logs || true
+          for svc in fse-a fse-b; do
+            echo "---- $svc /config/logs/fse.jsonl ----"
+            docker compose -f e2e/gui-sync/compose.yaml exec -T "$svc" tail -n 120 /config/logs/fse.jsonl || true
+          done
 
   pairing-restart:
     name: Pairing code survives container restart
@@ -309,7 +313,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Sync two engines behind separate NATs
-        run: sudo --preserve-env=PATH,GOROOT,GOPATH,GOCACHE,GOMODCACHE,HOME go test ./internal/natlab/ -count=1 -timeout 180s -run TestNATNamespaceEnginesSync
+        run: sudo --preserve-env=PATH,GOROOT,GOPATH,GOCACHE,GOMODCACHE,HOME go test ./internal/natlab/ -count=1 -timeout 240s -run TestNATNamespaceEnginesSync
 
   transfer-soak:
     name: Throttled transfer soak

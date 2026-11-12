@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"filesyncengine/internal/advertise"
@@ -89,7 +90,7 @@ func Gather(cfg config.Config, extras Extras) Profile {
 		if !strings.Contains(raw, "://") {
 			normalized = scheme + "://" + net.JoinHostPort(raw, port)
 		}
-		if !keepReachableAddress(normalized) || skipTailscaleAddress(normalized) {
+		if !keepReachableAddress(normalized) || skipTailscaleAddress(normalized) || skipUnverifiedPublic(normalized) || gatewayAddress(normalized) {
 			return
 		}
 		if _, ok := seen[normalized]; ok {
@@ -116,6 +117,10 @@ func Gather(cfg config.Config, extras Extras) Profile {
 			continue
 		}
 		relays = append(relays, relay)
+		// A relay multiaddr or a public relay IP is not this peer's API.
+		if strings.HasPrefix(relay, "/") || skipUnverifiedPublic(relay) {
+			continue
+		}
 		if _, ok := seen[relay]; ok {
 			continue
 		}
@@ -161,14 +166,14 @@ func (p Profile) Endpoints(primary string) []config.EndpointConfig {
 		if kind == "manual" && hint == string(routing.VPNNetwork) {
 			kind = "vpn"
 		}
-		out = append(out, config.EndpointConfig{Kind: kind, Address: address, NetworkHint: hint})
+		out = append(out, config.EndpointConfig{Kind: kind, Address: address, NetworkHint: hint, Authenticated: true})
 	}
 	add("manual", primary, "")
 	for _, address := range p.Addresses {
+		if address.Kind == "relay" {
+			continue
+		}
 		add(address.Kind, address.Address, address.NetworkHint)
-	}
-	for _, relay := range p.Relays {
-		add("relay", relay, "")
 	}
 	return out
 }
@@ -268,4 +273,45 @@ func keepReachableAddress(address string) bool {
 
 func skipTailscaleAddress(address string) bool {
 	return advertise.ExcludeTailscale() && advertise.IsTailscaleHost(address)
+}
+
+// skipUnverifiedPublic drops a literal public IP that has not answered a
+// dial-back. Hostnames stay. Relay and observed addresses are not endpoints
+// until the peer proves it serves the API there.
+func skipUnverifiedPublic(address string) bool {
+	host := endpointHost(address)
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || advertise.IsTailscaleHost(host) {
+		return false
+	}
+	if !ip.IsGlobalUnicast() {
+		return false
+	}
+	port := 22420
+	if parsed, err := url.Parse(address); err == nil && parsed.Port() != "" {
+		if n, convErr := strconv.Atoi(parsed.Port()); convErr == nil {
+			port = n
+		}
+	}
+	return !advertise.PublicDialbackOK(host, port)
+}
+
+func gatewayAddress(address string) bool {
+	ip := net.ParseIP(endpointHost(address))
+	return ip != nil && advertise.IsDefaultGateway(ip)
+}
+
+func endpointHost(address string) string {
+	address = strings.TrimSpace(address)
+	if strings.Contains(address, "://") {
+		parsed, err := url.Parse(address)
+		if err != nil {
+			return ""
+		}
+		return parsed.Hostname()
+	}
+	if host, _, err := net.SplitHostPort(address); err == nil {
+		return host
+	}
+	return strings.Trim(address, "[]")
 }
