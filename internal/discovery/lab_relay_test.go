@@ -8,6 +8,15 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
+func TestStaticRelayIsTheFirstReservationCandidate(t *testing.T) {
+	const relay = "12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X"
+	t.Setenv("FSE_STATIC_RELAYS", "/ip4/172.30.72.10/tcp/22421/p2p/"+relay)
+	infos := preferredRelayInfos()
+	if len(infos) == 0 || infos[0].ID.String() != relay {
+		t.Fatalf("candidates = %+v", infos)
+	}
+}
+
 func TestLabPublicRelayRegistersTheHopProtocol(t *testing.T) {
 	t.Setenv("FSE_LAB_PUBLIC_RELAY", "1")
 	port := freeUDPPort(t)

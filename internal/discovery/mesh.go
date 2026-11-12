@@ -548,10 +548,21 @@ func watchReachability(h host.Host) {
 	}
 }
 
+func staticRelayAddrs() []string {
+	raw := strings.TrimSpace(os.Getenv("FSE_STATIC_RELAYS"))
+	if raw == "" {
+		return nil
+	}
+	return strings.Fields(strings.ReplaceAll(raw, ",", " "))
+}
+
 func preferredRelayInfos() []peer.AddrInfo {
 	var out []peer.AddrInfo
 	seen := map[string]struct{}{}
-	for _, raw := range OrderedRelays() {
+	// A configured relay is reserved first so both peers punch through the
+	// same hop. Random DHT peers are not a shared reservation.
+	candidates := append(staticRelayAddrs(), OrderedRelays()...)
+	for _, raw := range candidates {
 		addr, err := ma.NewMultiaddr(raw)
 		if err != nil {
 			continue
