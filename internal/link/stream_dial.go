@@ -215,6 +215,13 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 	live := HasSession(peer.ID) || HasSession(id)
 	mode := nat.DialMode(localClass, remoteClass, live)
 	if !nat.ShouldDialNow(localClass, remoteClass, live) {
+		if live {
+			if used, err := useOpenSession(ctx, peer, id, do); err == nil {
+				return used, nil
+			} else if err != nil && !errors.Is(err, errDialDeferred) {
+				return "", err
+			}
+		}
 		logAccept(peer.ID, mode, localClass, remoteClass)
 		return "", errDialDeferred
 	}
@@ -357,6 +364,31 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 		return "", answered
 	}
 	return "", last
+}
+
+func useOpenSession(ctx context.Context, peer config.PeerConfig, id string, do func(context.Context, string, *http.Client) error) (string, error) {
+	if id == "" {
+		return "", errDialDeferred
+	}
+	session, err := discovery.OpenSession(id)
+	if err != nil {
+		return "", errDialDeferred
+	}
+	if err := do(ctx, discovery.StreamBaseURL, session.Client); err != nil {
+		return "", err
+	}
+	rememberDial(peer.ID, discovery.StreamBaseURL, session.Client)
+	if remote := session.CurrentRemote(); remote != "" {
+		NoteLiveSession(peer.ID, remote, false)
+		if peer.DHTPeerID != "" {
+			NoteLiveSession(peer.DHTPeerID, remote, false)
+		}
+		nat.DefaultPaths.Touch(peer.ID)
+		if peer.DHTPeerID != "" {
+			nat.DefaultPaths.Touch(peer.DHTPeerID)
+		}
+	}
+	return discovery.StreamBaseURL, nil
 }
 
 func dialStreamAddrs(parent, dialCtx context.Context, peer config.PeerConfig, id string, addrs []string, do func(context.Context, string, *http.Client) error) (string, error) {
