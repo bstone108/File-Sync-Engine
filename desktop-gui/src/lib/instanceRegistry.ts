@@ -363,6 +363,9 @@ type LocalPeerSnapshot = {
 };
 
 function isDiscoveredPeer(peer: LocalPeerSnapshot): boolean {
+  if (peer.status === 'configured' || peer.status === 'connected' || peer.status === 'paired') {
+    return false;
+  }
   if (peer.status === 'discovered') {
     return true;
   }

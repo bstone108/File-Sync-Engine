@@ -23,7 +23,7 @@ func (r *Libp2pDHTRouter) runRemoteDialback() {
 	if r == nil || r.closed == nil {
 		return
 	}
-	timer := time.NewTimer(dialbackInterval())
+	timer := time.NewTimer(r.dialbackInterval())
 	defer timer.Stop()
 	for {
 		select {
@@ -34,19 +34,26 @@ func (r *Libp2pDHTRouter) runRemoteDialback() {
 				return
 			}
 			r.scheduleRemoteDialback()
-			timer.Reset(dialbackInterval())
+			timer.Reset(r.dialbackInterval())
 		}
 	}
 }
 
-// dialbackInterval is short for our own peers and slow for public fallback.
-// A public probe on a 2s loop punched the public swarm often enough to stall
-// the folder sync loop.
-func dialbackInterval() time.Duration {
-	if PublicRelayFallback() {
-		return 30 * time.Second
+// dialbackInterval is 5s while a connected peer is being verified, and 60s
+// when every candidate is offline. Own peers and public fallback use the same
+// cadence. A 2s loop is not used.
+func (r *Libp2pDHTRouter) dialbackInterval() time.Duration {
+	return probeInterval(r.dialbackCandidateLive())
+}
+
+func (r *Libp2pDHTRouter) dialbackCandidateLive() bool {
+	if r == nil || r.host == nil {
+		return false
 	}
-	return 2 * time.Second
+	if !PublicRelayFallback() {
+		return r.hasAuthenticatedAutoNATPeer()
+	}
+	return r.hasRemoteAutoNATPeer()
 }
 
 // scheduleRemoteDialback starts one dial-back check. A self-dial is never

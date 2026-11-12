@@ -115,7 +115,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			libp2p.EnableRelayService(helperRelayOptions()...),
 			libp2p.EnableAutoRelayWithPeerSource(func(relayCtx context.Context, num int) <-chan peer.AddrInfo {
 				return relayCandidates(relayCtx, num, &hostBox, &dhtBox)
-			}, autorelay.WithMinCandidates(1), autorelay.WithBootDelay(5*time.Second), autorelay.WithBackoff(30*time.Second), autorelay.WithMinInterval(2*time.Second)),
+			}, autorelay.WithMinCandidates(1), autorelay.WithBootDelay(LiveProbeInterval), autorelay.WithBackoff(OfflineProbeInterval), autorelay.WithMinInterval(LiveProbeInterval)),
 			libp2p.ForceReachabilityPrivate(),
 		)
 	}

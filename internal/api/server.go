@@ -1327,7 +1327,19 @@ func peersVisibleToGUI(state State) []PeerState {
 				if current.Status == "" || current.Status == "discovered" {
 					current.Status = "configured"
 				}
-				current.ConnectionPath = activeConnectionPath(peer.ID)
+				if strings.HasPrefix(current.Endpoint, "discovered") {
+					current.Endpoint = ""
+					current.Endpoints = nil
+				}
+				if current.Endpoint == "" {
+					for _, endpoint := range peer.Endpoints {
+						if strings.TrimSpace(endpoint.Address) != "" {
+							current.Endpoint = endpoint.Address
+							break
+						}
+					}
+				}
+				current.ConnectionPath = activeConnectionPath(peer.ID, peer.DHTPeerID)
 				out = append(out, annotateLimitedRelay(current))
 			}
 			return out
@@ -1347,9 +1359,11 @@ func peersVisibleToGUI(state State) []PeerState {
 	return out
 }
 
-func activeConnectionPath(peerID string) string {
-	if obs, ok := nat.DefaultPaths.Active(peerID); ok {
-		return string(obs.Path)
+func activeConnectionPath(ids ...string) string {
+	for _, id := range ids {
+		if obs, ok := nat.DefaultPaths.Active(strings.TrimSpace(id)); ok {
+			return string(obs.Path)
+		}
 	}
 	return ""
 }

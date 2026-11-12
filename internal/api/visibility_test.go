@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,52 @@ func TestPeersRouteOmitsSelfStaleAndRemoved(t *testing.T) {
 	}
 	if len(peers) != 1 || peers[0].ID != "neko" || peers[0].ConnectionPath != "" {
 		t.Fatalf("peers = %+v body=%s", peers, w.Body.String())
+	}
+}
+
+func TestConfiguredPeerKeepsDHTPathWhenDiscoveryTaggedTheEndpoint(t *testing.T) {
+	nat.DefaultPaths.Reset()
+	t.Cleanup(nat.DefaultPaths.Reset)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	const dhtID = "12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X"
+	cfg := config.Config{
+		NodeName: "kiki",
+		API:      config.APIConfig{Listen: "127.0.0.1:22420", Key: "secret"},
+		Peers: []config.PeerConfig{{
+			ID:        "neko",
+			DHTPeerID: dhtID,
+			Endpoints: []config.EndpointConfig{{Kind: "manual", Address: "https://neko.local:22420", Authenticated: true}},
+		}},
+	}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	nat.DefaultPaths.Observe(dhtID, "https://neko.local:22420", nat.PathDirect)
+	server := NewServer(State{
+		NodeName:   "kiki",
+		ConfigPath: configPath,
+		PeersState: []PeerState{{
+			ID: "neko", Status: "discovered", Endpoint: "discovered:https://neko.local:22420",
+		}},
+	}, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/v1/peers", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	w := httptest.NewRecorder()
+	server.Router().ServeHTTP(w, req)
+	var peers []PeerState
+	if err := json.Unmarshal(w.Body.Bytes(), &peers); err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 1 || peers[0].ID != "neko" || peers[0].Status != "configured" {
+		t.Fatalf("peers = %+v", peers)
+	}
+	if peers[0].ConnectionPath != "direct" || strings.HasPrefix(peers[0].Endpoint, "discovered") {
+		t.Fatalf("configured peer stayed hidden: %+v", peers[0])
 	}
 }
 
