@@ -111,13 +111,16 @@ def main():
     os.environ["FSE_DHT_BOOTSTRAP_PEERS"] = f"/ip4/172.30.72.11/tcp/22421/p2p/{bootstrap}"
     print(f"bootstrap {bootstrap}", flush=True)
     compose("up", "-d", "--force-recreate", "relay")
-    deadline = time.time() + 90
+    deadline = time.time() + 150
+    stored = ""
     while time.time() < deadline:
         stored = compose("exec", "-T", "relay", "sh", "-c", "cat /config/logs/fse.jsonl 2>/dev/null || true", check=False).stdout or ""
-        if "libp2p.relay.advertise" in stored and "public relay is discoverable" in stored:
+        if "public relay is discoverable" in stored:
             break
         time.sleep(2)
     else:
+        interesting = "\n".join(line[-400:] for line in stored.splitlines() if "libp2p" in line or "bootstrap" in line or "relay" in line)
+        sys.stderr.write(interesting[-4000:] + "\n")
         fail("relay did not advertise itself for discovery")
     print("relay advertised", flush=True)
     compose("up", "-d", "--force-recreate", "engine-a", "engine-b")

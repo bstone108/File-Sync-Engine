@@ -530,12 +530,6 @@ func watchConnections(n network.Network) {
 			if conn.RemoteMultiaddr() != nil {
 				addr = conn.RemoteMultiaddr().String()
 			}
-			if strings.Contains(addr, "p2p-circuit") && !authenticatedDialbackPeer(conn.RemotePeer()) {
-				// A relayed connection to a stranger starts DCUtR. Only a
-				// configured identity peer is punched.
-				_ = conn.Close()
-				return
-			}
 			stat := conn.Stat()
 			source := remoteReachabilitySource(0, conn.RemotePeer(), conn.LocalPeer(), stat.Direction == network.DirInbound, strings.Contains(addr, "p2p-circuit"), authenticatedDialbackPeer(conn.RemotePeer()))
 			if router := routerFor(conn.LocalPeer()); router != nil {
