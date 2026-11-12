@@ -64,7 +64,7 @@ func (r *Libp2pDHTRouter) watchPublicRelays() {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		if labPublicRelay() {
 			r.advertisePublicRelay(ctx)
 		} else {

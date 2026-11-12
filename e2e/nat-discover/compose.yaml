@@ -24,6 +24,9 @@ services:
       FSE_DISCOVERY_DHT: "true"
       FSE_DISCOVERY_LOCAL: "false"
       FSE_LIBP2P_DHT_MODE: server
+      # A dead peer keeps this node off the public DHT. The relay and the
+      # engines dial in, so the records stay on this private table.
+      FSE_DHT_BOOTSTRAP_PEERS: /ip4/127.0.0.1/tcp/1/p2p/12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X
     extra_hosts:
       - "bootstrap.nat.test:172.30.72.11"
     networks:

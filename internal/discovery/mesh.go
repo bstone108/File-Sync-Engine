@@ -205,18 +205,27 @@ func NoteDiscoveredRelay(addr string) {
 	}
 	mesh.mu.Lock()
 	defer mesh.mu.Unlock()
-	next := []string{addr}
-	for _, existing := range mesh.discoveredRelays {
-		if existing == addr {
+	byID := map[string]string{}
+	for _, existing := range append(mesh.discoveredRelays, addr) {
+		id := relayPeerID(existing)
+		if id == "" {
 			continue
 		}
-		next = append(next, existing)
-		if len(next) >= maxReservedRelays {
-			break
+		if _, ok := byID[id]; !ok {
+			byID[id] = existing
 		}
 	}
-	if len(next) > maxReservedRelays {
-		next = next[:maxReservedRelays]
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sortStrings(ids)
+	if len(ids) > 4 {
+		ids = ids[:4]
+	}
+	next := make([]string, 0, len(ids))
+	for _, id := range ids {
+		next = append(next, byID[id])
 	}
 	mesh.discoveredRelays = next
 }
