@@ -9,6 +9,7 @@ import (
 
 	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/routing"
 )
 
@@ -24,12 +25,14 @@ type Address struct {
 // It carries addresses, the DHT identity, relays, and the API certificate pin.
 // It does not carry API keys or private identity keys.
 type Profile struct {
-	DiscoveryID       string    `json:"discoveryId,omitempty"`
-	NodeName          string    `json:"nodeName,omitempty"`
-	DHTPeerID         string    `json:"dhtPeerId,omitempty"`
-	CertificateSHA256 string    `json:"certificateSha256,omitempty"`
-	Addresses         []Address `json:"addresses,omitempty"`
-	Relays            []string  `json:"relays,omitempty"`
+	DiscoveryID       string            `json:"discoveryId,omitempty"`
+	NodeName          string            `json:"nodeName,omitempty"`
+	DHTPeerID         string            `json:"dhtPeerId,omitempty"`
+	CertificateSHA256 string            `json:"certificateSha256,omitempty"`
+	Addresses         []Address         `json:"addresses,omitempty"`
+	Relays            []string          `json:"relays,omitempty"`
+	InboundClass      string            `json:"inboundClass,omitempty"`
+	Transports        map[string]string `json:"transports,omitempty"`
 }
 
 // Extras are observations supplied by the caller. Empty IPs means the
@@ -133,6 +136,10 @@ func Gather(cfg config.Config, extras Extras) Profile {
 		}
 		return addresses[i].Kind < addresses[j].Kind
 	})
+	class := string(nat.LocalClass())
+	if class == string(nat.ClassUnknown) {
+		class = ""
+	}
 	return Profile{
 		DiscoveryID:       cfg.Identity.PublicKey,
 		NodeName:          cfg.NodeName,
@@ -140,6 +147,8 @@ func Gather(cfg config.Config, extras Extras) Profile {
 		CertificateSHA256: strings.ToLower(strings.TrimSpace(extras.CertificateSHA256)),
 		Addresses:         addresses,
 		Relays:            relays,
+		InboundClass:      class,
+		Transports:        nat.LocalTransports(),
 	}
 }
 
@@ -206,6 +215,12 @@ func MergeProfiles(current, observed Profile) Profile {
 	}
 	current.Addresses = merged
 	current.Relays = unionStrings(current.Relays, observed.Relays)
+	if observed.InboundClass != "" {
+		current.InboundClass = observed.InboundClass
+	}
+	if len(observed.Transports) > 0 {
+		current.Transports = observed.Transports
+	}
 	return current
 }
 

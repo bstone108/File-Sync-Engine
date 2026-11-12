@@ -23,6 +23,7 @@ func TestFolderProgressLabelsPausedUnscannedAndVerifiedShare(t *testing.T) {
 	}{
 		{name: "paused", enabled: false, index: api.FolderIndexState{TotalFiles: 2, VerifiedFiles: 2}, bytes: 10, label: "Paused"},
 		{name: "unscanned", enabled: true, label: "Not scanned"},
+		{name: "empty scanned", enabled: true, index: api.FolderIndexState{Scanned: true}, percent: 100, label: "Up to date"},
 		{name: "current", enabled: true, index: api.FolderIndexState{TotalFiles: 4, VerifiedFiles: 4}, bytes: 100, percent: 100, label: "Up to date"},
 		{name: "half", enabled: true, index: api.FolderIndexState{TotalFiles: 4, VerifiedFiles: 2}, bytes: 100, percent: 50, label: "50%"},
 		{name: "pending cap", enabled: true, index: api.FolderIndexState{TotalFiles: 4, VerifiedFiles: 4, UnknownFiles: 1}, bytes: 100, percent: 99, label: "99%"},

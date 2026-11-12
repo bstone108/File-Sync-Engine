@@ -19,9 +19,12 @@ import (
 )
 
 type dialCacheEntry struct {
-	base   string
-	client *http.Client
-	at     time.Time
+	base      string
+	client    *http.Client
+	at        time.Time
+	stream    bool
+	remote    string
+	initiator string
 }
 
 var (
@@ -29,11 +32,96 @@ var (
 	dialCache   = map[string]dialCacheEntry{}
 )
 
-// HasSession reports a dial that authenticated recently. Status stays
-// configured, and connectionPath stays empty, until this is true.
+// HasSession reports an authenticated session that is still up.
+// A libp2p session counts only while that peer's connection is open, so one
+// side cannot stay "connected" after the other side is gone.
 func HasSession(peerID string) bool {
-	_, _, ok := cachedDial(peerID)
-	return ok
+	if _, _, ok := cachedDial(peerID); ok {
+		return true
+	}
+	peerID = strings.TrimSpace(peerID)
+	if peerID == "" {
+		return false
+	}
+	dialCacheMu.Lock()
+	entry, ok := dialCache[peerID]
+	dialCacheMu.Unlock()
+	return ok && entry.stream && discovery.StreamConnected(peerID)
+}
+
+// SessionRemote is the live multiaddr for an authenticated session.
+func SessionRemote(ids ...string) string {
+	dialCacheMu.Lock()
+	defer dialCacheMu.Unlock()
+	for _, id := range ids {
+		entry, ok := dialCache[strings.TrimSpace(id)]
+		if ok && entry.remote != "" {
+			return entry.remote
+		}
+	}
+	return ""
+}
+
+// SessionInitiator is local or remote for the authenticated session.
+func SessionInitiator(ids ...string) string {
+	for _, id := range ids {
+		if who := nat.Initiator(id); who != "" {
+			return who
+		}
+	}
+	return ""
+}
+
+// NoteLiveSession records a session the other side opened, or refreshes the
+// address of one this side opened. The HTTP client from a dial is kept.
+func NoteLiveSession(peerID, remote string, localInitiated bool) {
+	peerID = strings.TrimSpace(peerID)
+	if peerID == "" {
+		return
+	}
+	who := "remote"
+	if localInitiated {
+		who = "local"
+	}
+	dialCacheMu.Lock()
+	entry := dialCache[peerID]
+	entry.base = discovery.StreamBaseURL
+	entry.at = time.Now()
+	entry.stream = true
+	if remote != "" {
+		entry.remote = remote
+	}
+	entry.initiator = who
+	dialCache[peerID] = entry
+	dialCacheMu.Unlock()
+	nat.SetInitiator(peerID, who)
+}
+
+// ForgetStreamSession drops a libp2p session after its connection closes.
+func ForgetStreamSession(peerID string) {
+	peerID = strings.TrimSpace(peerID)
+	if peerID == "" {
+		return
+	}
+	dialCacheMu.Lock()
+	entry, ok := dialCache[peerID]
+	if ok && entry.stream {
+		delete(dialCache, peerID)
+	}
+	dialCacheMu.Unlock()
+	nat.ForgetPeer(peerID)
+}
+
+// ReleasePeer lets the next pass dial immediately. A disconnect uses it so
+// the offline interval does not keep a dead peer quiet.
+func ReleasePeer(peerID string) {
+	peerID = strings.TrimSpace(peerID)
+	if peerID == "" {
+		return
+	}
+	peerDialMu.Lock()
+	delete(peerDialNext, peerID)
+	peerDialMu.Unlock()
 }
 
 func cachedDial(peerID string) (string, *http.Client, bool) {
@@ -46,6 +134,9 @@ func cachedDial(peerID string) (string, *http.Client, bool) {
 	if !ok || entry.client == nil || time.Since(entry.at) > 45*time.Second {
 		return "", nil, false
 	}
+	if entry.stream && !discovery.StreamConnected(peerID) {
+		return "", nil, false
+	}
 	return entry.base, entry.client, true
 }
 
@@ -54,8 +145,19 @@ func rememberDial(peerID, base string, client *http.Client) {
 		return
 	}
 	dialCacheMu.Lock()
-	dialCache[peerID] = dialCacheEntry{base: base, client: client, at: time.Now()}
+	entry := dialCache[peerID]
+	entry.base = base
+	entry.client = client
+	entry.at = time.Now()
+	entry.stream = base == discovery.StreamBaseURL
+	if entry.initiator == "" && entry.stream {
+		entry.initiator = "local"
+	}
+	dialCache[peerID] = entry
 	dialCacheMu.Unlock()
+	if entry.stream {
+		nat.SetInitiator(peerID, "local")
+	}
 }
 
 func forgetDial(peerID string) {
@@ -83,19 +185,61 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 		}
 	}
 	if id != "" {
-		// A reserved public relay is a dial path even when the DHT has not
-		// published an address for this peer. Direct and own relays are still
-		// tried first.
+		// A reserved relay is a dial path even when the DHT has not published
+		// an address yet. It is tried after the direct attempt, not after a
+		// DHT walk.
 		circuits = appendUniqueAddrs(circuits, discovery.ReservedRelayCircuits(id))
 	}
-	lookedUp := false
-	if len(direct) == 0 && id != "" {
-		// Relays are not a reason to skip the DHT. A direct address has to be
-		// tried before a public circuit can use the budget.
-		lookedDirect, lookedCircuits := noteLookupAddrs(ctx, id)
-		direct = appendUniqueAddrs(direct, lookedDirect)
-		circuits = appendUniqueAddrs(circuits, lookedCircuits)
-		lookedUp = true
+	localClass := nat.LocalClass()
+	remoteClass := nat.PeerClass(peer.DHTPeerID)
+	if remoteClass == nat.ClassUnknown {
+		remoteClass = nat.PeerClass(peer.ID)
+	}
+	live := HasSession(peer.ID) || HasSession(id)
+	mode := nat.DialMode(localClass, remoteClass, live)
+	if !nat.ShouldDialNow(localClass, remoteClass, live) {
+		structuredlog.Event("info", "libp2p.dial.role", "this side accepts; the peer keeps the outbound session", map[string]any{
+			"peer": peer.ID, "mode": mode, "local": string(localClass), "remote": string(remoteClass),
+		})
+		return "", errDialDeferred
+	}
+	// Known addresses are dialed immediately. The DHT lookup runs beside them
+	// and cannot postpone the relay fallback.
+	type lookupResult struct {
+		direct   []string
+		circuits []string
+	}
+	lookupCh := make(chan lookupResult, 1)
+	hadDirect := len(direct) > 0
+	if id != "" {
+		go func() {
+			lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			lookedDirect, lookedCircuits := noteLookupAddrs(lookupCtx, id)
+			select {
+			case lookupCh <- lookupResult{direct: lookedDirect, circuits: lookedCircuits}:
+			default:
+			}
+			if !hadDirect && len(lookedDirect) > 0 {
+				nat.NotifyNewDialAddrs()
+			}
+		}()
+	} else {
+		close(lookupCh)
+	}
+	if len(direct) == 0 && len(circuits) == 0 {
+		// Nothing is known yet. Wait briefly for the DHT, then give up this
+		// pass instead of holding the dial loop.
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case found := <-lookupCh:
+			direct = appendUniqueAddrs(direct, found.direct)
+			circuits = appendUniqueAddrs(circuits, found.circuits)
+			timer.Stop()
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+		}
 	}
 	if len(direct) == 0 && len(circuits) == 0 {
 		structuredlog.Event("info", "libp2p.stream.skip", "libp2p stream was not dialed", map[string]any{
@@ -108,6 +252,9 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 	if !allowPeerDial(peer.ID, nat.DefaultPaths) {
 		return "", errDialDeferred
 	}
+	structuredlog.Event("info", "libp2p.dial.role", "dialing with the current reachability roles", map[string]any{
+		"peer": peer.ID, "mode": mode, "local": string(localClass), "remote": string(remoteClass),
+	})
 	var last error
 	try := func(kind string, addrs []string, limit time.Duration) (string, bool) {
 		if len(addrs) == 0 || ctx.Err() != nil {
@@ -153,25 +300,26 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 		}
 		return used, nil, true
 	}
-	if used, stop := try("direct", direct, 6*time.Second); stop {
+	if used, stop := try("direct", direct, 5*time.Second); stop {
 		if base, err, done := finish(used, stop); done {
 			return base, err
 		}
 	}
-	// The guessed hostname port can be wrong. Ask the DHT for the peer's own
-	// addresses before a public relay uses the rest of the budget.
-	if !lookedUp && ctx.Err() == nil && id != "" && len(direct) > 0 {
-		lookedDirect, lookedCircuits := noteLookupAddrs(ctx, id)
-		circuits = appendUniqueAddrs(circuits, lookedCircuits)
-		if used, stop := try("direct", lookedDirect, 4*time.Second); stop {
+	// A lookup that has already answered can add a STUN address before the
+	// relay. One that is still walking the DHT must not delay the relay.
+	select {
+	case found := <-lookupCh:
+		circuits = appendUniqueAddrs(circuits, found.circuits)
+		if used, stop := try("direct", found.direct, 3*time.Second); stop {
 			if base, err, done := finish(used, stop); done {
 				return base, err
 			}
 		}
+	default:
 	}
 	circuits = discovery.PreferRoutableCircuits(circuits)
 	own, publicCircuits := partitionCircuits(id, circuits)
-	if used, stop := try("relay", own, 12*time.Second); stop {
+	if used, stop := try("relay", own, 6*time.Second); stop {
 		if base, err, done := finish(used, stop); done {
 			return base, err
 		}
@@ -180,7 +328,7 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 	// budget is long enough for a live circuit and short enough that a dead
 	// public relay cannot hold the folder sync loop.
 	if !relayRateLimited() {
-		if used, stop := try("relay", publicCircuits, 12*time.Second); stop {
+		if used, stop := try("relay", publicCircuits, 6*time.Second); stop {
 			if base, err, done := finish(used, stop); done {
 				return base, err
 			}
@@ -211,6 +359,12 @@ func dialStreamAddrs(parent, dialCtx context.Context, peer config.PeerConfig, id
 			discovery.MarkAddressAuthenticated(remote)
 		}
 		rememberDial(peer.ID, discovery.StreamBaseURL, session.Client)
+		if remote := session.CurrentRemote(); remote != "" {
+			NoteLiveSession(peer.ID, remote, true)
+			if peer.DHTPeerID != "" {
+				NoteLiveSession(peer.DHTPeerID, remote, true)
+			}
+		}
 		nat.DefaultPaths.Observe(peer.ID, session.CurrentRemote(), path)
 		if peer.DHTPeerID != "" {
 			nat.DefaultPaths.Observe(peer.DHTPeerID, session.CurrentRemote(), path)

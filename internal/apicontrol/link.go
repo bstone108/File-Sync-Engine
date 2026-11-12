@@ -17,6 +17,7 @@ import (
 	"filesyncengine/internal/configops"
 	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/link"
+	"filesyncengine/internal/nat"
 	"filesyncengine/internal/peeridentity"
 	"filesyncengine/internal/structuredlog"
 )
@@ -299,6 +300,8 @@ func HandleLinkProfilePush(configPath string, push link.LinkPush) (link.Profile,
 	if err := link.VerifyPush(push); err != nil {
 		return link.Profile{}, err
 	}
+	nat.SetPeerClass(push.Profile.DHTPeerID, nat.ParseClass(push.Profile.InboundClass))
+	nat.SetPeerClass(push.DiscoveryID, nat.ParseClass(push.Profile.InboundClass))
 	cfg, err := config.LoadFile(configPath)
 	if err != nil {
 		return link.Profile{}, err

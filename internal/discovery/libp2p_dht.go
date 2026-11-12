@@ -112,7 +112,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			libp2p.EnableRelay(),
 			libp2p.EnableNATService(),
 			libp2p.EnableAutoNATv2(),
-			libp2p.EnableHolePunching(holepunch.WithTracer(holepunchTracer{})),
+			libp2p.EnableHolePunching(holepunch.WithTracer(holepunchTracer{}), holepunch.WithAddrFilter(punchFilter{})),
 			libp2p.EnableRelayService(helperRelayOptions()...),
 			libp2p.EnableAutoRelayWithPeerSource(func(relayCtx context.Context, num int) <-chan peer.AddrInfo {
 				return relayCandidates(relayCtx, num, &hostBox, &dhtBox)
@@ -151,6 +151,8 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	go watchReachability(h)
 	go watchAutoRelay(h)
 	go router.watchAutoNAT()
+	go router.keepIdentitySessions()
+	watchInboundClass()
 	go router.republishWhenRelayReserved()
 	go router.watchPublicRelays()
 	go router.watchIdentifiedRelays()
@@ -507,7 +509,7 @@ func (r *Libp2pDHTRouter) LookupPeerAddrs(ctx context.Context, peerID string) []
 	}
 	var addrs []ma.Multiaddr
 	if r.dht != nil {
-		findCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		findCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		info, findErr := r.dht.FindPeer(findCtx, pid)
 		cancel()
 		if findErr == nil {
@@ -515,14 +517,10 @@ func (r *Libp2pDHTRouter) LookupPeerAddrs(ctx context.Context, peerID string) []
 		}
 	}
 	if rv := currentRendezvous(); rv != "" && r.discovery != nil {
-		findCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		findCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		peers, findErr := r.discovery.FindPeers(findCtx, rv)
 		if findErr == nil {
-			for found := range peers {
-				if found.ID == pid {
-					addrs = append(addrs, found.Addrs...)
-				}
-			}
+			addrs = append(addrs, collectPeerAddrs(findCtx, peers, pid)...)
 		}
 		cancel()
 	}
@@ -546,6 +544,28 @@ func (r *Libp2pDHTRouter) LookupPeerAddrs(ctx context.Context, peerID string) []
 		out = append(out, text)
 	}
 	return PreferRoutableCircuits(out)
+}
+
+// collectPeerAddrs reads a discovery channel until it closes or ctx ends.
+// Cancelling ctx must not wait for a public DHT walk to finish.
+func collectPeerAddrs(ctx context.Context, peers <-chan peer.AddrInfo, want peer.ID) []ma.Multiaddr {
+	if peers == nil {
+		return nil
+	}
+	var addrs []ma.Multiaddr
+	for {
+		select {
+		case <-ctx.Done():
+			return addrs
+		case found, ok := <-peers:
+			if !ok {
+				return addrs
+			}
+			if found.ID == want {
+				addrs = append(addrs, found.Addrs...)
+			}
+		}
+	}
 }
 
 func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value) <-chan peer.AddrInfo {

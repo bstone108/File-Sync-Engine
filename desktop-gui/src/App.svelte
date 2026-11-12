@@ -125,6 +125,21 @@
     }
   }
 
+  function inboundLabel(inboundClass: string | undefined): string {
+    switch (inboundClass) {
+      case 'public':
+        return 'public';
+      case 'cone':
+        return 'cone NAT';
+      case 'symmetric':
+        return 'symmetric NAT';
+      case 'no-inbound':
+        return 'no inbound';
+      default:
+        return '';
+    }
+  }
+
   function limitedRelayGuidance(peer: DaemonPeer): string {
     const diagnostics = peer.networkDiagnostics;
     if (Array.isArray(diagnostics)) {
@@ -2096,7 +2111,7 @@
         <dt>Identity</dt><dd>{status?.identityPublicKey ?? 'Loading'}</dd>
         <dt>Engine schema</dt><dd>{status?.engineSchemaVersion ?? '—'}</dd>
         <dt>Daemon</dt><dd>{status?.status ?? 'starting'}</dd>
-        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status?.natType)}{#if status?.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}</dd>
+        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status?.natType)}{#if status?.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}{#if inboundLabel(status?.inboundClass)} · <span data-testid="inbound-class">{inboundLabel(status?.inboundClass)}</span>{/if}</dd>
         <dt>Folders</dt><dd>{daemonFolders.length}</dd>
         <dt>Peers</dt><dd>{daemonPeers.length}</dd>
       </dl>
@@ -2124,7 +2139,7 @@
     {#if status}
       <dl class="host-status-grid" aria-label="Daemon operational summary">
         <dt>Daemon</dt><dd>{status.status ?? 'running'}</dd>
-        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status.natType)}{#if status.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}</dd>
+        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status.natType)}{#if status.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}{#if inboundLabel(status.inboundClass)} · <span data-testid="inbound-class">{inboundLabel(status.inboundClass)}</span>{/if}</dd>
         <dt>Folders</dt><dd>{daemonFolders.length}</dd>
         <dt>Peers</dt><dd>{daemonPeers.length}</dd>
         <dt>Started</dt><dd>{status.startedAt ?? 'unknown'}</dd>
@@ -2525,7 +2540,7 @@
         {:else}
           <ul aria-label="Configured peers">
             {#each daemonPeers as peer}
-              <li><strong>{peer.id}</strong> · {(peer.endpoints && peer.endpoints.length > 0) ? peer.endpoints.join(' · ') : (peer.endpoint ?? 'endpoint unavailable')} · {peer.status ?? 'configured'} · <span data-testid="peer-connection-path">{peer.connectionPath ? formatConnectionPath(peer.connectionPath) : (peer.status === 'discovered' || (peer.endpoint ?? '').startsWith('discovered') ? 'discovered' : 'unreachable')}</span>{#if limitedRelayGuidance(peer)} <span data-testid="peer-limited-relay">{limitedRelayGuidance(peer)}</span>{/if} · receive {peer.receiveRemainingBytes ?? 0} B left at {peer.averageReceiveBytesPerSecond ?? 0} B/s</li>
+              <li><strong>{peer.id}</strong> · {(peer.endpoints && peer.endpoints.length > 0) ? peer.endpoints.join(' · ') : (peer.endpoint ?? 'endpoint unavailable')} · {peer.status ?? 'configured'} · <span data-testid="peer-connection-path">{peer.connectionPath ? formatConnectionPath(peer.connectionPath) : (peer.status === 'discovered' || (peer.endpoint ?? '').startsWith('discovered') ? 'discovered' : 'unreachable')}</span>{#if inboundLabel(peer.inboundClass)} · <span data-testid="peer-inbound-class">{inboundLabel(peer.inboundClass)}</span>{/if}{#if peer.connectionInitiator} · <span data-testid="peer-initiator">{peer.connectionInitiator === 'local' ? 'we dialed' : 'they dialed'}</span>{/if}{#if limitedRelayGuidance(peer)} <span data-testid="peer-limited-relay">{limitedRelayGuidance(peer)}</span>{/if} · receive {peer.receiveRemainingBytes ?? 0} B left at {peer.averageReceiveBytesPerSecond ?? 0} B/s</li>
             {/each}
           </ul>
         {/if}

@@ -42,14 +42,37 @@ func startPeerSync(cfg config.Config, configPath string, folder config.FolderCon
 var (
 	scheduleOnce sync.Once
 	scheduleOn   atomic.Bool
-	passDeadline = 12 * time.Second
+	passDeadline = 22 * time.Second
 	// passOffline and passLive are the production intervals. Tests shorten them.
 	passOffline = discovery.OfflineProbeInterval
 	passLive    = discovery.LiveProbeInterval
 	passFn      = runPeerSync
+	peerWake    = make(chan struct{}, 1)
+	peerDue     atomic.Bool
 )
 
+func init() {
+	nat.SetNewAddrHook(WakePeerPass)
+	nat.SetSessionHooks(func(peerID string) {
+		link.ForgetStreamSession(peerID)
+		link.ReleasePeer(peerID)
+		WakePeerPass()
+	}, func(peerID, remote string, localInitiated bool) {
+		link.NoteLiveSession(peerID, remote, localInitiated)
+	})
+}
+
 func schedulerOn() bool { return scheduleOn.Load() }
+
+// WakePeerPass asks for a dial as soon as the current pass finishes.
+// A dropped connection and a new local file both use it.
+func WakePeerPass() {
+	peerDue.Store(true)
+	select {
+	case peerWake <- struct{}{}:
+	default:
+	}
+}
 
 // StartSchedulers scans on its own clock and dials on a clock that does not
 // slip when a dial is slow. The first dial pass starts immediately.
@@ -60,6 +83,13 @@ func StartSchedulers(ctx context.Context, configPath string, load func() config.
 	if load == nil {
 		load = func() config.Config { return config.Config{} }
 	}
+	nat.SetSessionHooks(func(peerID string) {
+		link.ForgetStreamSession(peerID)
+		link.ReleasePeer(peerID)
+		WakePeerPass()
+	}, func(peerID, remote string, localInitiated bool) {
+		link.NoteLiveSession(peerID, remote, localInitiated)
+	})
 	scheduleOnce.Do(func() {
 		scheduleOn.Store(true)
 		go scanLoop(ctx, configPath, load)
@@ -91,18 +121,21 @@ func peerLoop(ctx context.Context, configPath string, load func() config.Config)
 	interval := passOffline
 	var next time.Time
 	for {
-		if wait := time.Until(next); wait > 0 {
+		if wait := time.Until(next); wait > 0 && !peerDue.Load() {
 			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
 				return
 			case <-timer.C:
+			case <-peerWake:
+				timer.Stop()
 			}
 		}
 		if ctx.Err() != nil {
 			return
 		}
+		peerDue.Store(false)
 		started := time.Now()
 		cfg := load()
 		passCtx, cancel := context.WithTimeout(ctx, passDeadline)
@@ -120,6 +153,10 @@ func peerLoop(ctx context.Context, configPath string, load func() config.Config)
 			interval = passLive
 		} else {
 			interval = passOffline
+		}
+		if peerDue.Swap(false) {
+			next = time.Time{}
+			continue
 		}
 		next = started.Add(interval)
 	}

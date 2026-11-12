@@ -158,6 +158,9 @@ func FolderProgress(enabled bool, index api.FolderIndexState, syncState api.Fold
 		return 0, "Paused"
 	}
 	if index.TotalFiles == 0 && localBytes == 0 {
+		if index.Scanned {
+			return 100, "Up to date"
+		}
 		return 0, "Not scanned"
 	}
 	pending := index.UnknownFiles > 0 || index.UnverifiedSeedFiles > 0 || syncState.MetadataCatchupPending || syncState.DeferredDeletes > 0

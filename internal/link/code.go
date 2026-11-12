@@ -35,17 +35,19 @@ const codeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 // DHT key. The secret half decrypts and authenticates the envelope and is
 // never published.
 type Record struct {
-	Version           string    `json:"version"`
-	DiscoveryID       string    `json:"discoveryId"`
-	NodeName          string    `json:"nodeName"`
-	CertificateSHA256 string    `json:"certificateSha256,omitempty"`
-	Addresses         []Address `json:"addresses"`
-	DHTPeerID         string    `json:"dhtPeerId,omitempty"`
-	Relays            []string  `json:"relays,omitempty"`
-	ExpiresAt         time.Time `json:"expiresAt"`
-	Nonce             string    `json:"nonce"`
-	Signature         string    `json:"signature"`
-	MAC               string    `json:"mac"`
+	Version           string            `json:"version"`
+	DiscoveryID       string            `json:"discoveryId"`
+	NodeName          string            `json:"nodeName"`
+	CertificateSHA256 string            `json:"certificateSha256,omitempty"`
+	Addresses         []Address         `json:"addresses"`
+	DHTPeerID         string            `json:"dhtPeerId,omitempty"`
+	Relays            []string          `json:"relays,omitempty"`
+	InboundClass      string            `json:"inboundClass,omitempty"`
+	Transports        map[string]string `json:"transports,omitempty"`
+	ExpiresAt         time.Time         `json:"expiresAt"`
+	Nonce             string            `json:"nonce"`
+	Signature         string            `json:"signature"`
+	MAC               string            `json:"mac"`
 }
 
 // Profile returns the reconnect profile carried by a verified record.
@@ -57,6 +59,8 @@ func (r Record) Profile() Profile {
 		CertificateSHA256: r.CertificateSHA256,
 		Addresses:         append([]Address(nil), r.Addresses...),
 		Relays:            append([]string(nil), r.Relays...),
+		InboundClass:      r.InboundClass,
+		Transports:        r.Transports,
 	}
 }
 
@@ -318,15 +322,17 @@ func verifyMAC(record Record, code string) error {
 
 func (r Record) signedBody() ([]byte, error) {
 	payload := struct {
-		Version           string    `json:"version"`
-		DiscoveryID       string    `json:"discoveryId"`
-		NodeName          string    `json:"nodeName"`
-		CertificateSHA256 string    `json:"certificateSha256"`
-		Addresses         []Address `json:"addresses"`
-		DHTPeerID         string    `json:"dhtPeerId"`
-		Relays            []string  `json:"relays"`
-		ExpiresAt         string    `json:"expiresAt"`
-		Nonce             string    `json:"nonce"`
+		Version           string            `json:"version"`
+		DiscoveryID       string            `json:"discoveryId"`
+		NodeName          string            `json:"nodeName"`
+		CertificateSHA256 string            `json:"certificateSha256"`
+		Addresses         []Address         `json:"addresses"`
+		DHTPeerID         string            `json:"dhtPeerId"`
+		Relays            []string          `json:"relays"`
+		InboundClass      string            `json:"inboundClass,omitempty"`
+		Transports        map[string]string `json:"transports,omitempty"`
+		ExpiresAt         string            `json:"expiresAt"`
+		Nonce             string            `json:"nonce"`
 	}{
 		Version:           r.Version,
 		DiscoveryID:       r.DiscoveryID,
@@ -335,6 +341,8 @@ func (r Record) signedBody() ([]byte, error) {
 		Addresses:         r.Addresses,
 		DHTPeerID:         r.DHTPeerID,
 		Relays:            r.Relays,
+		InboundClass:      r.InboundClass,
+		Transports:        r.Transports,
 		ExpiresAt:         r.ExpiresAt.UTC().Format(time.RFC3339),
 		Nonce:             r.Nonce,
 	}

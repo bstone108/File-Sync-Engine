@@ -31,25 +31,27 @@ import (
 )
 
 type State struct {
-	NodeName            string           `json:"nodeName"`
-	EngineSchemaVersion int              `json:"engineSchemaVersion,omitempty"`
-	IdentityPublicKey   string           `json:"identityPublicKey,omitempty"`
-	AdvertiseURL        string           `json:"advertiseURL,omitempty"`
-	APIListen           string           `json:"apiListen,omitempty"`
-	PublishedAPIPort    int              `json:"publishedAPIPort,omitempty"`
-	StartedAt           time.Time        `json:"startedAt"`
-	ConfigPath          string           `json:"configPath"`
-	ConfigVersion       uint64           `json:"configVersion"`
-	Folders             int              `json:"folders"`
-	Peers               int              `json:"peers"`
-	Status              string           `json:"status"`
-	Maintenance         MaintenanceState `json:"maintenance"`
-	Backup              BackupState      `json:"backup"`
-	WebGUI              WebGUIState      `json:"webGUI,omitempty"`
-	NATType             string           `json:"natType,omitempty"`
-	STUNMappedAddress   string           `json:"stunMappedAddress,omitempty"`
-	FoldersState        []FolderState    `json:"-"`
-	PeersState          []PeerState      `json:"-"`
+	NodeName            string            `json:"nodeName"`
+	EngineSchemaVersion int               `json:"engineSchemaVersion,omitempty"`
+	IdentityPublicKey   string            `json:"identityPublicKey,omitempty"`
+	AdvertiseURL        string            `json:"advertiseURL,omitempty"`
+	APIListen           string            `json:"apiListen,omitempty"`
+	PublishedAPIPort    int               `json:"publishedAPIPort,omitempty"`
+	StartedAt           time.Time         `json:"startedAt"`
+	ConfigPath          string            `json:"configPath"`
+	ConfigVersion       uint64            `json:"configVersion"`
+	Folders             int               `json:"folders"`
+	Peers               int               `json:"peers"`
+	Status              string            `json:"status"`
+	Maintenance         MaintenanceState  `json:"maintenance"`
+	Backup              BackupState       `json:"backup"`
+	WebGUI              WebGUIState       `json:"webGUI,omitempty"`
+	NATType             string            `json:"natType,omitempty"`
+	STUNMappedAddress   string            `json:"stunMappedAddress,omitempty"`
+	InboundClass        string            `json:"inboundClass,omitempty"`
+	InboundTransports   map[string]string `json:"inboundTransports,omitempty"`
+	FoldersState        []FolderState     `json:"-"`
+	PeersState          []PeerState       `json:"-"`
 }
 
 // WebGUIState is the running web GUI package and the latest auto-update check.
@@ -650,6 +652,7 @@ type FolderIndexState struct {
 	ActiveHashJobs         int    `json:"activeHashJobs"`
 	DateCorrectionsPending int    `json:"dateCorrectionsPending"`
 	ProvisionalReadOnly    bool   `json:"provisionalReadOnly"`
+	Scanned                bool   `json:"scanned,omitempty"`
 }
 
 type FolderSyncState struct {
@@ -687,6 +690,8 @@ type PeerState struct {
 	Endpoint                     string                  `json:"endpoint,omitempty"`
 	Endpoints                    []string                `json:"endpoints,omitempty"`
 	ConnectionPath               string                  `json:"connectionPath,omitempty"`
+	InboundClass                 string                  `json:"inboundClass,omitempty"`
+	ConnectionInitiator          string                  `json:"connectionInitiator,omitempty"`
 	ReceiveRemainingBytes        int64                   `json:"receiveRemainingBytes,omitempty"`
 	SendRemainingBytes           int64                   `json:"sendRemainingBytes,omitempty"`
 	AverageReceiveBytesPerSecond int64                   `json:"averageReceiveBytesPerSecond,omitempty"`
@@ -1233,6 +1238,8 @@ func withNATStatus(state State) State {
 	natType, mapped := advertise.ReportedNAT()
 	state.NATType = natType
 	state.STUNMappedAddress = mapped
+	state.InboundClass = string(nat.LocalClass())
+	state.InboundTransports = nat.LocalTransports()
 	return state
 }
 
@@ -1360,6 +1367,13 @@ func foldersVisibleToGUI(state State) []FolderState {
 					current.ProgressLabel = "Syncing"
 				}
 			}
+			if foldershare.JournalScanned(state.ConfigPath, folder.ID) {
+				current.Index.Scanned = true
+				if current.Index.TotalFiles == 0 && current.LocalBytes == 0 && current.Enabled {
+					current.ProgressLabel = "Up to date"
+					current.SyncPercent = 100
+				}
+			}
 		}
 		if !current.Enabled {
 			current.Status = "paused"
@@ -1415,13 +1429,24 @@ func peersVisibleToGUI(state State) []PeerState {
 				if current.Endpoint == "" {
 					for _, endpoint := range peer.Endpoints {
 						address := strings.TrimSpace(endpoint.Address)
-						if address == "" || strings.Contains(address, "p2p-circuit") || (foreignPrivateEndpoint(address) && !endpoint.Authenticated) {
+						if address == "" || strings.Contains(address, "p2p-circuit") || foreignPrivateEndpoint(address) {
 							continue
 						}
 						current.Endpoint = address
 						break
 					}
 				}
+				if remote := link.SessionRemote(peer.ID, peer.DHTPeerID); remote != "" && (link.HasSession(peer.ID) || link.HasSession(peer.DHTPeerID)) {
+					current.Endpoint = remote
+				}
+				current.InboundClass = string(nat.PeerClass(peer.DHTPeerID))
+				if current.InboundClass == "" || current.InboundClass == string(nat.ClassUnknown) {
+					current.InboundClass = string(nat.PeerClass(peer.ID))
+				}
+				if current.InboundClass == string(nat.ClassUnknown) {
+					current.InboundClass = ""
+				}
+				current.ConnectionInitiator = link.SessionInitiator(peer.ID, peer.DHTPeerID)
 				path := reportedConnectionPath(activeConnectionPath(peer.ID, peer.DHTPeerID), current.Endpoint)
 				if link.HasSession(peer.ID) || link.HasSession(peer.DHTPeerID) {
 					current.Status = "connected"

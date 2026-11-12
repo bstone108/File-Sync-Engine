@@ -1,0 +1,121 @@
+name: fse-nat-oneway
+services:
+  router:
+    image: alpine:3.20
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    command: ["sh", "-c", "apk add --no-cache iptables iproute2 >/tmp/apk.log && sh /router.sh"]
+    volumes:
+      - ./router.sh:/router.sh:ro
+    networks:
+      nata:
+        ipv4_address: 172.30.80.2
+      natb:
+        ipv4_address: 172.30.81.2
+      pub:
+        ipv4_address: 172.30.82.2
+  bootstrap:
+    image: file-sync-engine:e2e
+    hostname: bootstrap
+    environment:
+      FSE_NODE_NAME: bootstrap
+      FSE_ADVERTISE_URL: https://bootstrap.nat.test:22420
+      FSE_DISCOVERY_DHT: "true"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_LIBP2P_DHT_MODE: server
+      FSE_DHT_BOOTSTRAP_PEERS: /ip4/127.0.0.1/tcp/1/p2p/12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X
+    extra_hosts:
+      - "bootstrap.nat.test:172.30.82.11"
+    networks:
+      pub:
+        ipv4_address: 172.30.82.11
+  relay:
+    image: file-sync-engine:e2e
+    hostname: relay
+    environment:
+      FSE_NODE_NAME: relay
+      FSE_ADVERTISE_URL: https://relay.nat.test:22420
+      FSE_DISCOVERY_DHT: "true"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_LIBP2P_DHT_MODE: server
+      FSE_LAB_PUBLIC_RELAY: "1"
+      FSE_DHT_BOOTSTRAP_PEERS: ${FSE_DHT_BOOTSTRAP_PEERS:?set the bootstrap multiaddr}
+    extra_hosts:
+      - "bootstrap.nat.test:172.30.82.11"
+      - "relay.nat.test:172.30.82.10"
+    networks:
+      pub:
+        ipv4_address: 172.30.82.10
+  engine-a:
+    image: file-sync-engine:e2e
+    hostname: engine-a
+    cap_add:
+      - NET_ADMIN
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["apk add --no-cache iproute2 >/tmp/apk.log && ip route replace default via 172.30.80.2 && exec /usr/local/bin/fse-container-entrypoint start"]
+    environment:
+      FSE_NODE_NAME: engine-a
+      FSE_ADVERTISE_URL: https://engine-a.nat.test:22420
+      FSE_DISCOVERY_DHT: "true"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_INBOUND_CLASS: no-inbound
+      FSE_DHT_BOOTSTRAP_PEERS: ${FSE_DHT_BOOTSTRAP_PEERS:?set the bootstrap multiaddr}
+    extra_hosts:
+      - "engine-a.nat.test:172.30.80.10"
+      - "engine-b.nat.test:172.30.81.10"
+      - "bootstrap.nat.test:172.30.82.11"
+      - "relay.nat.test:172.30.82.10"
+    ports:
+      - "22821:22420"
+    volumes:
+      - engine-a-config:/config
+      - engine-a-data:/data
+    networks:
+      nata:
+        ipv4_address: 172.30.80.10
+  engine-b:
+    image: file-sync-engine:e2e
+    hostname: engine-b
+    cap_add:
+      - NET_ADMIN
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["apk add --no-cache iproute2 >/tmp/apk.log && ip route replace default via 172.30.81.2 && exec /usr/local/bin/fse-container-entrypoint start"]
+    environment:
+      FSE_NODE_NAME: engine-b
+      FSE_ADVERTISE_URL: https://engine-b.nat.test:22420
+      FSE_DISCOVERY_DHT: "true"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_INBOUND_CLASS: cone
+      FSE_DHT_BOOTSTRAP_PEERS: ${FSE_DHT_BOOTSTRAP_PEERS:?set the bootstrap multiaddr}
+    extra_hosts:
+      - "engine-a.nat.test:172.30.80.10"
+      - "engine-b.nat.test:172.30.81.10"
+      - "bootstrap.nat.test:172.30.82.11"
+      - "relay.nat.test:172.30.82.10"
+    ports:
+      - "22822:22420"
+    volumes:
+      - engine-b-config:/config
+      - engine-b-data:/data
+    networks:
+      natb:
+        ipv4_address: 172.30.81.10
+volumes:
+  engine-a-config:
+  engine-a-data:
+  engine-b-config:
+  engine-b-data:
+networks:
+  nata:
+    ipam:
+      config:
+        - subnet: 172.30.80.0/24
+  natb:
+    ipam:
+      config:
+        - subnet: 172.30.81.0/24
+  pub:
+    ipam:
+      config:
+        - subnet: 172.30.82.0/24
