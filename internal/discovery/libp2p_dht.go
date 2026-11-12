@@ -108,6 +108,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	// A dial this process makes to itself is not that confirmation.
 	if NATEnabled() {
 		libp2pOpts = append(libp2pOpts,
+			libp2p.ConnectionGater(identityRelayGater{}),
 			libp2p.EnableRelay(),
 			libp2p.EnableNATService(),
 			libp2p.EnableAutoNATv2(),
@@ -461,6 +462,9 @@ func (r *Libp2pDHTRouter) republishWhenRelayReserved() {
 			namespaces = append(namespaces, namespace)
 		}
 		r.mu.Unlock()
+		if rv := currentRendezvous(); rv != "" {
+			namespaces = append(namespaces, rv)
+		}
 		if len(namespaces) == 0 {
 			continue
 		}
@@ -487,7 +491,9 @@ func (r *Libp2pDHTRouter) Addrs() []string {
 	return multiaddrStrings(r.host.Addrs())
 }
 
-// LookupPeerAddrs asks the DHT for a paired peer when no relay address was stored.
+// LookupPeerAddrs asks the DHT for a paired peer's current addresses, including
+// the relay circuits it is reserved on. A cached peerstore record is used only
+// when the DHT lookup does not answer, so a restart does not leave stale hops.
 func (r *Libp2pDHTRouter) LookupPeerAddrs(ctx context.Context, peerID string) []string {
 	if r == nil || r.host == nil || strings.TrimSpace(peerID) == "" {
 		return nil
@@ -496,26 +502,50 @@ func (r *Libp2pDHTRouter) LookupPeerAddrs(ctx context.Context, peerID string) []
 	if err != nil {
 		return nil
 	}
-	addrs := r.host.Peerstore().Addrs(pid)
-	if len(addrs) == 0 && r.dht != nil {
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		findCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var addrs []ma.Multiaddr
+	if r.dht != nil {
+		findCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		info, findErr := r.dht.FindPeer(findCtx, pid)
 		cancel()
 		if findErr == nil {
 			addrs = info.Addrs
 		}
 	}
+	if rv := currentRendezvous(); rv != "" && r.discovery != nil {
+		findCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		peers, findErr := r.discovery.FindPeers(findCtx, rv)
+		if findErr == nil {
+			for found := range peers {
+				if found.ID == pid {
+					addrs = append(addrs, found.Addrs...)
+				}
+			}
+		}
+		cancel()
+	}
+	if len(addrs) == 0 {
+		addrs = r.host.Peerstore().Addrs(pid)
+	}
 	out := make([]string, 0, len(addrs))
+	seen := map[string]struct{}{}
 	for _, addr := range addrs {
 		if addr == nil {
 			continue
 		}
-		out = append(out, addr.Encapsulate(ma.StringCast("/p2p/"+pid.String())).String())
+		text := addr.String()
+		if !strings.Contains(text, "/p2p/"+pid.String()) {
+			text = addr.Encapsulate(ma.StringCast("/p2p/" + pid.String())).String()
+		}
+		if _, ok := seen[text]; ok {
+			continue
+		}
+		seen[text] = struct{}{}
+		out = append(out, text)
 	}
-	return out
+	return PreferRoutableCircuits(out)
 }
 
 func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value) <-chan peer.AddrInfo {

@@ -66,6 +66,10 @@ func keepDialEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
 	if discovery.PendingDHTAddress(endpoint.Address) && !endpoint.Authenticated {
 		return false
 	}
+	if parsed, err := url.Parse(endpoint.Address); err == nil && advertise.ForeignPrivateHost(parsed.Hostname()) {
+		// Another site's LAN is not a dial candidate from this WAN.
+		return false
+	}
 	if endpoint.Authenticated || !literalPublicHTTP(endpoint.Address) {
 		return true
 	}

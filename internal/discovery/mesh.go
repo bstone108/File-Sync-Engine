@@ -295,6 +295,20 @@ func RefreshIdentityMembers(cfg config.Config) {
 			enabled[group.ID] = struct{}{}
 		}
 	}
+	secret := ""
+	for _, group := range cfg.Identity.Groups {
+		if !group.Enabled {
+			continue
+		}
+		if group.Token != "" {
+			secret = group.Token
+			break
+		}
+		if secret == "" {
+			secret = group.ID
+		}
+	}
+	SetRendezvousSecret(secret)
 	var ids []string
 	var dialback []string
 	for _, peer := range cfg.Peers {

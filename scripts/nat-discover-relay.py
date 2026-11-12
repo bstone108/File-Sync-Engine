@@ -186,9 +186,21 @@ def main():
         got = compose("exec", "-T", "engine-b", "sh", "-c", "cat /data/shared/note.txt", check=False)
         if got.returncode == 0 and got.stdout.strip() == "nat-discovered":
             print("synced through a discovered public relay", flush=True)
-            return
+            break
         time.sleep(3)
-    fail("the file did not sync through a discovered relay")
+    else:
+        fail("the file did not sync through a discovered relay")
+    compose("restart", "engine-b", timeout=60)
+    wait_api("engine-b", infos["engine-b"]["key"])
+    compose("exec", "-T", "-u", "0", "engine-a", "sh", "-c", "printf after-restart > /data/shared/again.txt")
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        got = compose("exec", "-T", "engine-b", "sh", "-c", "cat /data/shared/again.txt", check=False)
+        if got.returncode == 0 and got.stdout.strip() == "after-restart":
+            print("reconnected within 60s after a restart", flush=True)
+            return
+        time.sleep(2)
+    fail("the engines did not reconnect within 60s after a restart")
 
 
 if __name__ == "__main__":

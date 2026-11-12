@@ -32,6 +32,25 @@ func TestReservedRelaysStayBoundedAndBuildACircuit(t *testing.T) {
 	}
 }
 
+func TestSelfCircuitIsRewrittenToTheIdentityPeer(t *testing.T) {
+	const (
+		self   = "12D3KooWSelfPeerSelfPeerSelfPeerSelfPeerSelf"
+		target = "12D3KooWIdentityPeerIdentityPeerIdentityPee"
+		relay  = "12D3KooWRelayPeerRelayPeerRelayPeerRelayPeerR"
+	)
+	got := circuitTo("/ip4/65.109.80.105/tcp/4001/p2p/"+relay+"/p2p-circuit/p2p/"+self, target)
+	if got != "/ip4/65.109.80.105/tcp/4001/p2p/"+relay+"/p2p-circuit/p2p/"+target {
+		t.Fatalf("circuit = %s", got)
+	}
+	private := PreferRoutableCircuits([]string{
+		"/ip4/10.0.10.35/tcp/4001/p2p/" + relay + "/p2p-circuit/p2p/" + target,
+		"/ip4/65.109.80.105/tcp/4001/p2p/" + relay + "/p2p-circuit/p2p/" + target,
+	})
+	if len(private) != 1 || strings.Contains(private[0], "10.0.10.35") {
+		t.Fatalf("circuits = %v", private)
+	}
+}
+
 func TestDiscoveredRelayIsSharedAndBootstrapIsNot(t *testing.T) {
 	mesh.mu.Lock()
 	prevDiscovered := append([]string(nil), mesh.discoveredRelays...)

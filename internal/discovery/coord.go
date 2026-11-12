@@ -318,7 +318,7 @@ func ReservedRelayCircuits(target string) []string {
 			out = append(out, circuit)
 		}
 	}
-	return cleanAddrs(out)
+	return PreferRoutableCircuits(cleanAddrs(out))
 }
 
 // OwnRelayCircuits builds circuits through our own relays to target.
@@ -347,9 +347,10 @@ func circuitTo(raw, target string) string {
 	if strings.HasSuffix(raw, "/p2p/"+target) {
 		return raw
 	}
-	parts := strings.SplitN(raw, "p2p-circuit", 2)
-	if len(parts) == 2 && strings.Contains(parts[1], "/p2p/") {
-		return ""
+	// A reservation is stored as a circuit to ourselves. Rewrite that hop so
+	// it dials the identity peer who must hold the reservation.
+	if idx := strings.LastIndex(raw, "/p2p/"); idx >= 0 && strings.Contains(raw[:idx], "p2p-circuit") {
+		return raw[:idx] + "/p2p/" + target
 	}
 	return strings.TrimRight(raw, "/") + "/p2p/" + target
 }

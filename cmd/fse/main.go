@@ -452,6 +452,13 @@ func run(configPath string) {
 	schedule := daemonloop.NewPollSchedule(time.Now(), time.Now())
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	loadCfg := func() config.Config {
+		if fresh, loadErr := config.LoadFile(configPath); loadErr == nil {
+			return fresh
+		}
+		return cfg
+	}
+	foldershare.StartSchedulers(detectCtx, configPath, loadCfg)
 	reconcile := func() {
 		if fresh, loadErr := config.LoadFile(configPath); loadErr == nil {
 			foldershare.Reconcile(fresh, configPath, func(folderID string) bool {
