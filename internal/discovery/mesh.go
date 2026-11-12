@@ -42,6 +42,7 @@ type meshState struct {
 	natEnabled        bool
 	maxReservations   int
 	publicRelays      []string
+	reservedRelays    []string
 	identityRelays    []string
 	selfID            string
 	punchNodes        []MeshNode
@@ -299,11 +300,16 @@ func (m *meshState) public() bool {
 type sameIdentityACL struct{}
 
 func (sameIdentityACL) AllowReserve(p peer.ID, _ ma.Multiaddr) bool {
-	return mesh.allows(p)
+	return labPublicRelay() || mesh.allows(p)
 }
 
 func (sameIdentityACL) AllowConnect(src peer.ID, _ ma.Multiaddr, dest peer.ID) bool {
-	return mesh.allows(src) && mesh.allows(dest)
+	return labPublicRelay() || (mesh.allows(src) && mesh.allows(dest))
+}
+
+func labPublicRelay() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("FSE_LAB_PUBLIC_RELAY")), "1") ||
+		strings.EqualFold(strings.TrimSpace(os.Getenv("FSE_LAB_PUBLIC_RELAY")), "true")
 }
 
 func helperResources() relayv2.Resources {
@@ -377,6 +383,7 @@ func watchAutoRelay(h host.Host) {
 				addrs = append(addrs, addr.String())
 			}
 		}
+		NoteReservedRelays(addrs)
 		structuredlog.Event("info", "libp2p.relay.reserved", "libp2p reserved a relay", map[string]any{"addresses": addrs})
 	}
 }
@@ -541,10 +548,21 @@ func watchReachability(h host.Host) {
 	}
 }
 
+func staticRelayAddrs() []string {
+	raw := strings.TrimSpace(os.Getenv("FSE_STATIC_RELAYS"))
+	if raw == "" {
+		return nil
+	}
+	return strings.Fields(strings.ReplaceAll(raw, ",", " "))
+}
+
 func preferredRelayInfos() []peer.AddrInfo {
 	var out []peer.AddrInfo
 	seen := map[string]struct{}{}
-	for _, raw := range OrderedRelays() {
+	// A configured relay is reserved first so both peers punch through the
+	// same hop. Random DHT peers are not a shared reservation.
+	candidates := append(staticRelayAddrs(), OrderedRelays()...)
+	for _, raw := range candidates {
 		addr, err := ma.NewMultiaddr(raw)
 		if err != nil {
 			continue

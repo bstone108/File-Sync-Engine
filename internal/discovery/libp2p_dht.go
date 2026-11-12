@@ -116,7 +116,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 			libp2p.EnableAutoRelayWithPeerSource(func(relayCtx context.Context, num int) <-chan peer.AddrInfo {
 				return relayCandidates(relayCtx, num, &hostBox, &dhtBox)
 			}, autorelay.WithMinCandidates(1), autorelay.WithBootDelay(LiveProbeInterval), autorelay.WithBackoff(OfflineProbeInterval), autorelay.WithMinInterval(LiveProbeInterval)),
-			libp2p.ForceReachabilityPrivate(),
+			reachabilityOption(),
 		)
 	}
 	h, err := libp2p.New(libp2pOpts...)
@@ -162,8 +162,16 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 		})
 	}
 	// Stay private so AutoRelay reserves a relay until a remote peer dials back.
+	// A lab public relay is the coordinator, so it has to speak the hop
+	// protocol immediately. ForceReachabilityPrivate would keep that service
+	// from ever registering.
 	if NATEnabled() {
-		router.notePrivateReachability()
+		if labPublicRelay() {
+			router.emitReachability(network.ReachabilityPublic)
+			structuredlog.Event("info", "libp2p.relay.lab", "lab public relay is accepting circuits", map[string]any{"peerId": h.ID().String()})
+		} else {
+			router.notePrivateReachability()
+		}
 		// Start before any peer connects so the AutoNAT client observes the
 		// identify event. A client started later never learns that peer.
 		router.remoteAutoNAT()
@@ -384,6 +392,28 @@ func (r *Libp2pDHTRouter) watchAutoNAT() {
 			continue
 		}
 		r.notePublicReachability(source)
+	}
+}
+
+func reachabilityOption() libp2p.Option {
+	if labPublicRelay() {
+		return libp2p.ForceReachabilityPublic()
+	}
+	return libp2p.ForceReachabilityPrivate()
+}
+
+func (r *Libp2pDHTRouter) emitReachability(reach network.Reachability) {
+	if r == nil || r.host == nil {
+		return
+	}
+	emitter, err := r.host.EventBus().Emitter(new(event.EvtLocalReachabilityChanged))
+	if err != nil {
+		structuredlog.Event("warn", "libp2p.reachability", "libp2p could not publish reachability", map[string]any{"error": err.Error(), "reachability": reach.String()})
+		return
+	}
+	defer emitter.Close()
+	if err := emitter.Emit(event.EvtLocalReachabilityChanged{Reachability: reach}); err != nil {
+		structuredlog.Event("warn", "libp2p.reachability", "libp2p could not publish reachability", map[string]any{"error": err.Error(), "reachability": reach.String()})
 	}
 }
 

@@ -155,6 +155,9 @@ func reconcileFolder(cfg config.Config, configPath string, folder config.FolderC
 	for _, peer := range peers {
 		remote, remoteCursor, err := fetchRemoteJournal(configPath, peer, folder.ID)
 		if err != nil {
+			if errors.Is(err, link.ErrDialDeferred) {
+				continue
+			}
 			structuredlog.Event("error", "folder.sync.journal_failed", "remote journal was not read", map[string]any{
 				"folder": folder.ID,
 				"peer":   peer.ID,
@@ -583,29 +586,15 @@ func noteLinkDial(peer config.PeerConfig, used string) {
 }
 
 func peersFor(cfg config.Config, folder config.FolderConfig) []config.PeerConfig {
-	allowed := map[string]struct{}{}
-	for _, id := range folder.SharedWith {
-		if id = strings.TrimSpace(id); id != "" {
-			allowed[id] = struct{}{}
-		}
-	}
 	groups := access.EnabledGroupIDs(cfg)
-	limited := len(groups) > 0
 	out := []config.PeerConfig{}
 	for _, peer := range cfg.Peers {
 		if peer.APIKey == "" && peer.PeerSecret == "" {
 			continue
 		}
-		if len(allowed) > 0 {
-			if _, ok := allowed[peer.ID]; !ok {
-				continue
-			}
-		}
-		if limited {
-			role := access.RoleFor(groups, peer.IdentityGroupID)
-			if !access.MaySyncFolder(role, folder.SharedWith, peer.ID, true) {
-				continue
-			}
+		role := access.RoleFor(groups, peer.IdentityGroupID)
+		if !access.MaySyncFolder(role, folder.SharedWith, peer.ID) {
+			continue
 		}
 		if !link.HasAPIEndpoint(peer) {
 			continue

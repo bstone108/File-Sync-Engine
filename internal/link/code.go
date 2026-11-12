@@ -392,6 +392,7 @@ type ClaimResponse struct {
 	NodeName          string  `json:"nodeName"`
 	APIKey            string  `json:"apiKey"`
 	CertificateSHA256 string  `json:"certificateSha256,omitempty"`
+	FolderID          string  `json:"folderId,omitempty"`
 	Profile           Profile `json:"profile"`
 }
 

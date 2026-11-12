@@ -14,9 +14,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	circuit "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"filesyncengine/internal/nat"
+	"filesyncengine/internal/structuredlog"
 )
 
 const (
@@ -277,7 +279,7 @@ func connectRelayHops(ctx context.Context, h host.Host, addrs []ma.Multiaddr) {
 	if ctx == nil || len(addrs) == 0 {
 		return
 	}
-	budget, cancel := context.WithTimeout(ctx, 4*time.Second)
+	budget, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	for _, addr := range addrs {
 		if budget.Err() != nil {
@@ -305,7 +307,17 @@ func connectRelayHop(ctx context.Context, h host.Host, addr ma.Multiaddr) {
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_ = h.Connect(dialCtx, *info)
+	if err := h.Connect(dialCtx, *info); err != nil {
+		return
+	}
+	// The relay only forwards to a peer that has reserved. Reserving here
+	// makes this node reachable through the same hop the dial is about to use.
+	if _, err := circuit.Reserve(ctx, h, *info); err != nil {
+		structuredlog.Event("warn", "libp2p.relay.reserve", "relay reservation failed", map[string]any{
+			"relay": info.ID.String(),
+			"error": err.Error(),
+		})
+	}
 }
 
 var (

@@ -1,0 +1,99 @@
+name: fse-nat-cone
+services:
+  router:
+    image: alpine:3.20
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    command: ["sh", "-c", "apk add --no-cache iptables iproute2 >/tmp/apk.log && sh /router.sh"]
+    volumes:
+      - ./router.sh:/router.sh:ro
+    networks:
+      nata:
+        ipv4_address: 172.30.70.2
+      natb:
+        ipv4_address: 172.30.71.2
+      pub:
+        ipv4_address: 172.30.72.2
+  relay:
+    image: file-sync-engine:e2e
+    hostname: relay
+    environment:
+      FSE_NODE_NAME: relay
+      FSE_ADVERTISE_URL: https://relay.nat.test:22420
+      FSE_DISCOVERY_DHT: "true"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_LAB_PUBLIC_RELAY: "1"
+    extra_hosts:
+      - "relay.nat.test:172.30.72.10"
+    networks:
+      pub:
+        ipv4_address: 172.30.72.10
+  engine-a:
+    image: file-sync-engine:e2e
+    hostname: engine-a
+    cap_add:
+      - NET_ADMIN
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["apk add --no-cache iproute2 >/tmp/apk.log && ip route replace default via 172.30.70.2 && exec /usr/local/bin/fse-container-entrypoint start"]
+    environment:
+      FSE_NODE_NAME: engine-a
+      FSE_ADVERTISE_URL: https://engine-a.nat.test:22420
+      FSE_DISCOVERY_DHT: "true"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_STATIC_RELAYS: ${FSE_STATIC_RELAYS:?set the relay multiaddr}
+    extra_hosts:
+      - "engine-a.nat.test:172.30.70.10"
+      - "engine-b.nat.test:172.30.71.10"
+      - "relay.nat.test:172.30.72.10"
+    ports:
+      - "22801:22420"
+    volumes:
+      - engine-a-config:/config
+      - engine-a-data:/data
+    networks:
+      nata:
+        ipv4_address: 172.30.70.10
+  engine-b:
+    image: file-sync-engine:e2e
+    hostname: engine-b
+    cap_add:
+      - NET_ADMIN
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["apk add --no-cache iproute2 >/tmp/apk.log && ip route replace default via 172.30.71.2 && exec /usr/local/bin/fse-container-entrypoint start"]
+    environment:
+      FSE_NODE_NAME: engine-b
+      FSE_ADVERTISE_URL: https://engine-b.nat.test:22420
+      FSE_DISCOVERY_DHT: "true"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_STATIC_RELAYS: ${FSE_STATIC_RELAYS:?set the relay multiaddr}
+    extra_hosts:
+      - "engine-a.nat.test:172.30.70.10"
+      - "engine-b.nat.test:172.30.71.10"
+      - "relay.nat.test:172.30.72.10"
+    ports:
+      - "22802:22420"
+    volumes:
+      - engine-b-config:/config
+      - engine-b-data:/data
+    networks:
+      natb:
+        ipv4_address: 172.30.71.10
+volumes:
+  engine-a-config:
+  engine-a-data:
+  engine-b-config:
+  engine-b-data:
+networks:
+  nata:
+    ipam:
+      config:
+        - subnet: 172.30.70.0/24
+  natb:
+    ipam:
+      config:
+        - subnet: 172.30.71.0/24
+  pub:
+    ipam:
+      config:
+        - subnet: 172.30.72.0/24

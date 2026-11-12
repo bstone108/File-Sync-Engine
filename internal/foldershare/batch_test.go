@@ -65,7 +65,7 @@ func TestSmallFilesShareOneBatchRequest(t *testing.T) {
 	localCfg := config.Config{
 		NodeName: "local",
 		Folders: []config.FolderConfig{{
-			ID: "shared", Path: localRoot, Enabled: true, Mode: config.ModeReceiveOnly,
+			ID: "shared", Path: localRoot, Enabled: true, Mode: config.ModeReceiveOnly, SharedWith: []string{"remote"},
 		}},
 		Peers: []config.PeerConfig{pinnedPeer("remote", "secret", server.URL, pin)},
 	}

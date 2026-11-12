@@ -92,6 +92,12 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 			if err == nil {
 				return used, nil
 			}
+			if errors.Is(err, ErrDialDeferred) {
+				if last == nil {
+					last = err
+				}
+				continue
+			}
 			var answered answeredError
 			if errors.As(err, &answered) {
 				return "", answered.err
@@ -126,6 +132,9 @@ func Dial(ctx context.Context, peer config.PeerConfig, do func(context.Context, 
 			return "", answered.err
 		}
 		noteFailure(err)
+	}
+	if errors.Is(last, ErrDialDeferred) && tried == 0 {
+		return "", last
 	}
 	if tried == 0 {
 		return "", errors.New("peer has no http endpoint")

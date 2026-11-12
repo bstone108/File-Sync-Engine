@@ -283,6 +283,9 @@ func downloadFileOnce(peer config.PeerConfig, folderID string, entry Entry, targ
 		if _, ok := have[block.Index]; ok {
 			reused++
 			completed += int64(block.Size)
+			structuredlog.Event("info", "folder.sync.block", "verified block reused", map[string]any{
+				"path": entry.Path, "index": block.Index, "reused": true,
+			})
 			continue
 		}
 		data, network, fetchErr := fetchBlock(peer, folderID, entry.Path, block, oldPath, locals)
@@ -448,6 +451,9 @@ func fetchWholeBlock(peer config.PeerConfig, folderID, rel string, block FileBlo
 	if !hashEquals(body, block.Hash) {
 		return nil, fmt.Errorf("download %s: block %d checksum mismatch", rel, block.Index)
 	}
+	structuredlog.Event("info", "folder.sync.block", "block fetched", map[string]any{
+		"path": rel, "index": block.Index, "bytes": len(body), "reused": false,
+	})
 	return body, nil
 }
 

@@ -47,7 +47,7 @@ func TestReconcileCopiesNewerRemoteRevision(t *testing.T) {
 	localCfg := config.Config{
 		NodeName: "local",
 		Folders: []config.FolderConfig{{
-			ID: "shared", Path: localRoot, Enabled: true, Mode: config.ModeSendReceive,
+			ID: "shared", Path: localRoot, Enabled: true, Mode: config.ModeSendReceive, SharedWith: []string{"remote"},
 		}},
 		Peers: []config.PeerConfig{pinnedPeer("remote", "secret", server.URL, pin)},
 	}

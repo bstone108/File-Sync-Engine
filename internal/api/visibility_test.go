@@ -205,7 +205,14 @@ func TestFolderJournalReplacesEmptyScan(t *testing.T) {
 func TestLimitedRelayPathIsVisibleToTheGUI(t *testing.T) {
 	nat.DefaultPaths.Reset()
 	t.Cleanup(nat.DefaultPaths.Reset)
+	nat.DefaultPaths.Observe("circuit-only", "/ip4/198.51.100.8/tcp/4001/p2p/relay/p2p-circuit", nat.PathDirect)
 	nat.DefaultPaths.ObserveLimited("neko", "/ip4/198.51.100.8/tcp/4001/p2p/relay/p2p-circuit")
+	configured := peersVisibleToGUI(State{PeersState: []PeerState{{
+		ID: "circuit-only", Status: "configured", Endpoint: "/ip4/198.51.100.8/tcp/4001/p2p/relay/p2p-circuit",
+	}}})
+	if len(configured) != 1 || configured[0].ConnectionPath != "" {
+		t.Fatalf("circuit endpoint reported as a live path: %+v", configured)
+	}
 	peers := peersVisibleToGUI(State{PeersState: []PeerState{{ID: "neko", Status: "configured"}}})
 	if len(peers) != 1 || peers[0].ConnectionPath != "limited-relay" {
 		t.Fatalf("peers = %+v", peers)

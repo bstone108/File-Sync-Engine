@@ -64,7 +64,7 @@ async function importOn(page, packageText, expected) {
   await expect(page.getByText(expected, { exact: false })).toBeVisible();
 }
 
-async function editSharedFolder(page) {
+async function editSharedFolder(page, peer) {
   const close = page.getByTestId('node-options-close');
   if (await close.isVisible().catch(() => false)) {
     await close.click();
@@ -82,9 +82,11 @@ async function editSharedFolder(page) {
   await page.getByTestId('folder-edit-ignore').fill('*.tmp\ncache/');
   await page.getByTestId('folder-shared-add-input').fill('peer-extra');
   await page.getByTestId('folder-shared-add').click();
-  await expect(page.getByTestId('folder-shared-peer')).toHaveText('peer-extra');
-  await page.getByTestId('folder-shared-remove').click();
-  await expect(page.getByTestId('folder-shared-peer')).toHaveCount(0);
+  await expect(page.getByTestId('folder-shared-peer').filter({ hasText: peer })).toBeVisible();
+  await expect(page.getByTestId('folder-shared-peer').filter({ hasText: 'peer-extra' })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove peer-extra' }).click();
+  await expect(page.getByTestId('folder-shared-peer').filter({ hasText: 'peer-extra' })).toHaveCount(0);
+  await expect(page.getByTestId('folder-shared-peer').filter({ hasText: peer })).toBeVisible();
   await page.getByTestId('folder-edit-save').click();
   const status = page.getByTestId('folder-edit-status');
   await expect(status).toContainText('folder update accepted');
@@ -97,12 +99,13 @@ async function editSharedFolder(page) {
   await expect(status).toContainText('folder update accepted');
 }
 
-async function addSharedFolder(page) {
+async function addSharedFolder(page, peer) {
   await openNodeOptions(page);
   await page.getByTestId('nav-daemon-settings').click();
   await page.locator('form[aria-label="Daemon settings folder form"] select[name="folderFormAction"]').selectOption('add');
   await page.getByTestId('folder-id').fill('shared');
   await page.getByTestId('folder-path').fill('/data/shared');
+  await page.getByTestId('folder-shared-with').fill(peer);
   const submit = page.getByTestId('folder-submit');
   await submit.scrollIntoViewIfNeeded();
   await submit.click();
@@ -231,7 +234,12 @@ async function redeemPairingCode(page, code) {
     }
   });
   await clickClearOfSidebar(page.getByTestId('redeem-pairing-code'));
-  await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(0);
+  try {
+    await expect.poll(() => posts.length, { timeout: 8000 }).toBeGreaterThan(0);
+  } catch (error) {
+    await clickClearOfSidebar(page.getByTestId('redeem-pairing-code'));
+    await expect.poll(() => posts.length, { timeout: 20000 }).toBeGreaterThan(0);
+  }
   await expect(page.getByTestId('pairing-message')).toContainText(/paired by code/i, { timeout: 45000 });
   await openLinkForm(page);
   await page.getByTestId('pairing-code-input').fill(code);
@@ -286,9 +294,9 @@ test('two containers pair in the GUI and sync both ways', async ({ browser }) =>
   await expect(a.getByText('peer-pair key pending')).toHaveCount(0);
   await expect(a.getByText('prepared at level 0')).toHaveCount(0);
   await changeLogLevel(a);
-  await addSharedFolder(a);
-  await editSharedFolder(a);
-  await addSharedFolder(b);
+  await addSharedFolder(a, 'fse-b');
+  await editSharedFolder(a, 'fse-b');
+  await addSharedFolder(b, 'fse-a');
   await pageShowsFolderError(a);
   compose(['exec', '-T', '-u', '99:100', 'fse-a', 'sh', '-c', 'echo hello-from-a > /data/shared/note.txt']);
 

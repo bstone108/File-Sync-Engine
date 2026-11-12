@@ -243,8 +243,8 @@ def main():
         }
         if not infos[service]["key"] or not infos[service]["public"] or not pin:
             fail(f"{service} is missing an API key, identity, or certificate")
-    print("writing identity and share config")
-    compose("stop", timeout=120)
+    print("writing identity and share config", flush=True)
+    compose("stop", check=False, timeout=120)
     write_configs(infos)
     compose("start", timeout=120)
     for service in SERVICES:
@@ -275,7 +275,13 @@ def main():
     status, body = api(PORTS["windows"], infos["windows"]["key"], "POST", "/v1/config-sync/merge", json.dumps({"replica": replica}))
     if status != 200:
         fail(f"identity merge = {status} {body}")
-    windows_cfg = parse_jsonc(read_file("windows", "/config/config.jsonc"))
+    deadline = time.time() + 15
+    windows_cfg = {}
+    while time.time() < deadline:
+        windows_cfg = parse_jsonc(read_file("windows", "/config/config.jsonc"))
+        if windows_cfg.get("logging", {}).get("level") == "debug":
+            break
+        time.sleep(1)
     origin_cfg = parse_jsonc(read_file("unraid-b", "/config/config.jsonc"))
     if windows_cfg.get("logging", {}).get("level") != "debug":
         fail(f"windows logging = {windows_cfg.get('logging')}")

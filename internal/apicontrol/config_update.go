@@ -186,6 +186,7 @@ func setAdvertiseURL(cfg *config.Config, raw string) error {
 		return fmt.Errorf("advertise URL %s is a container-internal address; set %s to a host-reachable URL", normalized, advertise.EnvVar)
 	}
 	cfg.API.AdvertiseURL = normalized
+	cfg.API.AdvertisePinned = true
 	return nil
 }
 

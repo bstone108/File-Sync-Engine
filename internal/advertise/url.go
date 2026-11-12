@@ -83,6 +83,12 @@ func ResolveWithObservations(cfg config.Config, envOverride, detectedHost string
 }
 
 func resolve(cfg config.Config, envOverride, detectedHost string, obs Observations) (string, error) {
+	if cfg.API.AdvertisePinned {
+		saved := strings.TrimSpace(cfg.API.AdvertiseURL)
+		if saved != "" && !ContainerInternalURL(saved) && !skipTailscale(saved) {
+			return Normalize(saved, cfg)
+		}
+	}
 	for _, candidate := range explicitCandidates(envOverride) {
 		if skipTailscale(candidate) || !HostReachable(candidate) {
 			continue
