@@ -26,6 +26,8 @@ export type DaemonStatus = {
   };
   natType?: string;
   stunMappedAddress?: string;
+  inboundClass?: string;
+  inboundTransports?: Record<string, string>;
 };
 
 export type DaemonFolder = {
@@ -47,6 +49,8 @@ export type DaemonPeer = {
   endpoints?: string[];
   status?: string;
   connectionPath?: string;
+  inboundClass?: string;
+  connectionInitiator?: string;
   receiveRemainingBytes?: number;
   sendRemainingBytes?: number;
   averageReceiveBytesPerSecond?: number;

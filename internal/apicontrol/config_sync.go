@@ -17,6 +17,7 @@ import (
 	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/link"
 	"filesyncengine/internal/linkstats"
+	"filesyncengine/internal/nat"
 )
 
 // ConfigSyncResponse is the redacted view returned to a GUI.
@@ -390,16 +391,18 @@ func loadPublishedReplica(configPath string) (*configsync.Store, configsync.Repl
 	}
 	announcement := discovery.CurrentHelperAnnouncement(discovery.SharedPeerID(), discovery.SharedListenAddrs())
 	if _, err := replica.PublishConnection(configsync.Connection{
-		InstanceID:  replica.InstanceID,
-		Label:       cfg.NodeName,
-		APIURL:      cfg.API.AdvertiseURL,
-		DiscoveryID: cfg.Identity.PublicKey,
-		DHTPeerID:   announcement.DHTPeerID,
-		RelayAddrs:  announcement.RelayAddrs,
-		MeshHelper:  announcement.Enabled,
-		Reachable:   announcement.Reachable,
-		Online:      true,
-		LastSeen:    time.Now().UTC().Format(time.RFC3339),
+		InstanceID:   replica.InstanceID,
+		Label:        cfg.NodeName,
+		APIURL:       cfg.API.AdvertiseURL,
+		DiscoveryID:  cfg.Identity.PublicKey,
+		DHTPeerID:    announcement.DHTPeerID,
+		RelayAddrs:   announcement.RelayAddrs,
+		MeshHelper:   announcement.Enabled,
+		Reachable:    announcement.Reachable,
+		InboundClass: string(nat.LocalClass()),
+		Transports:   nat.LocalTransports(),
+		Online:       true,
+		LastSeen:     time.Now().UTC().Format(time.RFC3339),
 	}, time.Now().UnixMilli()); err != nil {
 		return nil, configsync.Replica{}, err
 	}
@@ -457,10 +460,13 @@ func punchMesh(replica configsync.Replica) []discovery.MeshNode {
 			continue
 		}
 		links = append(links, conn.DHTPeerID)
+		if conn.DHTPeerID != "" {
+			nat.SetPeerClass(conn.DHTPeerID, nat.ParseClass(conn.InboundClass))
+		}
 		nodes = append(nodes, discovery.MeshNode{
 			ID:     conn.DHTPeerID,
 			Addrs:  append([]string(nil), conn.RelayAddrs...),
-			Public: conn.Reachable == "public" || conn.MeshHelper,
+			Public: conn.Reachable == "public" || conn.MeshHelper || conn.InboundClass == string(nat.ClassPublic),
 		})
 	}
 	if self != "" {

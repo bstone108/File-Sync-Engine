@@ -67,6 +67,7 @@ func NoteChanged(folderID, path string) {
 	set[path] = struct{}{}
 	journalMu.Unlock()
 	Wake()
+	WakePeerPass()
 }
 
 // RequestFullScan makes the next reconcile hash the folder. The monitor's

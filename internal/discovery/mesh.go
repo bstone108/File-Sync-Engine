@@ -589,11 +589,15 @@ func watchConnections(n network.Network) {
 			}
 			nat.DefaultPaths.Observe(conn.RemotePeer().String(), addr, path)
 		},
-		DisconnectedF: func(_ network.Network, conn network.Conn) {
-			if conn == nil {
+		DisconnectedF: func(netw network.Network, conn network.Conn) {
+			if conn == nil || netw == nil {
+				return
+			}
+			if netw.Connectedness(conn.RemotePeer()) == network.Connected {
 				return
 			}
 			nat.DefaultPaths.Forget(conn.RemotePeer().String())
+			nat.NotifyDisconnected(conn.RemotePeer().String())
 		},
 	})
 }

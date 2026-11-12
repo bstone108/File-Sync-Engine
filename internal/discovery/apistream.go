@@ -140,6 +140,14 @@ func serveAPIStream(stream network.Stream, handler http.Handler) {
 		return
 	}
 	defer stream.Close()
+	if stream.Conn() != nil && authenticatedDialbackPeer(stream.Conn().RemotePeer()) {
+		remote := ""
+		if stream.Conn().RemoteMultiaddr() != nil {
+			remote = stream.Conn().RemoteMultiaddr().String()
+		}
+		local := stream.Conn().Stat().Direction == network.DirOutbound
+		nat.NotifyInbound(stream.Conn().RemotePeer().String(), remote, local)
+	}
 	ln := newOnceListener(streamConn{Stream: stream})
 	srv := &http.Server{
 		Handler:           handler,

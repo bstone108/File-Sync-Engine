@@ -346,6 +346,27 @@ jobs:
       - name: Discover the relay and sync
         run: python3 scripts/nat-discover-relay.py
 
+  nat-oneway-relay:
+    name: No-inbound NAT syncs with a cone NAT
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the engine image
+        run: |
+          set -euo pipefail
+          mkdir -p docker-artifacts
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o docker-artifacts/fse-linux-amd64 ./cmd/fse
+          docker build -t file-sync-engine:e2e .
+      - name: Sync a no-inbound engine with a cone NAT
+        run: python3 scripts/nat-oneway-relay.py
+
   gui-sync-e2e:
     name: Two-container GUI sync
     runs-on: ubuntu-latest

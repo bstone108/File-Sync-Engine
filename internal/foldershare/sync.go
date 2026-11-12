@@ -85,6 +85,13 @@ func LoadJournal(configPath, folderID string) ([]Entry, error) {
 	return stored.Entries, nil
 }
 
+// JournalScanned reports that a local scan has written this folder's journal.
+// An empty folder still counts: the scan found no files.
+func JournalScanned(configPath, folderID string) bool {
+	_, err := os.Stat(JournalPath(configPath, folderID))
+	return err == nil
+}
+
 // JournalIndex summarizes the journal for the folder API. The metadata store
 // stays at the empty hash when foldershare owns the files, so the GUI would
 // otherwise say the folder was never scanned.
