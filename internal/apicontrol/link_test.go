@@ -484,6 +484,107 @@ func finishPairCodeClaim(w http.ResponseWriter, configPath string, claim link.Cl
 	_ = CommitPairCodeClaim(claim)
 }
 
+func TestFolderShareCodeAddsOnlyThatFolder(t *testing.T) {
+	publisherKey, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	redeemerKey, err := peeridentity.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisherPath := filepath.Join(t.TempDir(), "publisher.json")
+	redeemerPath := filepath.Join(t.TempDir(), "redeemer.json")
+	folder := func(id, root string) config.FolderConfig {
+		return config.FolderConfig{ID: id, Path: root, Enabled: true, Mode: config.ModeSendReceive}
+	}
+	if err := saveTestConfig(publisherPath, config.Config{
+		NodeName: "publisher",
+		API:      config.APIConfig{Listen: "127.0.0.1:22420", Key: "publisher-api"},
+		Identity: config.IdentityConfig{PublicKey: publisherKey.PublicKey, PrivateKey: publisherKey.PrivateKey, EncryptionLevel: 4},
+		Folders:  []config.FolderConfig{folder("shared", t.TempDir()), folder("private", t.TempDir())},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveTestConfig(redeemerPath, config.Config{
+		NodeName: "redeemer",
+		API:      config.APIConfig{Listen: "127.0.0.1:22420", Key: "redeemer-api"},
+		Identity: config.IdentityConfig{PublicKey: redeemerKey.PublicKey, PrivateKey: redeemerKey.PrivateKey, EncryptionLevel: 4},
+		Folders:  []config.FolderConfig{folder("shared", t.TempDir()), folder("private", t.TempDir())},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := HandleIssuePairCode(publisherPath, "missing"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing folder = %v", err)
+	}
+	service := link.NewService(link.NewMemoryDirectory())
+	SetLinkService(service)
+	t.Cleanup(func() { SetLinkService(link.NewService(link.UnavailableDirectory{})) })
+	claimServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var claim link.ClaimRequest
+		if err := json.NewDecoder(r.Body).Decode(&claim); err != nil {
+			http.Error(w, "bad claim", http.StatusBadRequest)
+			return
+		}
+		finishPairCodeClaim(w, publisherPath, claim)
+	}))
+	defer claimServer.Close()
+	profile := link.Profile{
+		DiscoveryID:       publisherKey.PublicKey,
+		NodeName:          "publisher",
+		CertificateSHA256: certPin(claimServer.Certificate().Raw),
+		Addresses:         []link.Address{{Kind: "manual", Address: claimServer.URL, NetworkHint: "wan"}},
+	}
+	plain, _, err := service.Issue(context.Background(), publisherKey, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := HandleRedeemPairCode(context.Background(), redeemerPath, api.PairCodeRedeemRequest{Code: plain}); err != nil {
+		t.Fatal(err)
+	}
+	assertFolderPeers(t, publisherPath, "shared", nil)
+	assertFolderPeers(t, redeemerPath, "shared", nil)
+
+	sharedCode, _, err := service.IssueForFolder(context.Background(), publisherKey, profile, "shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := HandleRedeemPairCode(context.Background(), redeemerPath, api.PairCodeRedeemRequest{Code: sharedCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.FolderID != "shared" {
+		t.Fatalf("redeem folder = %q", response.FolderID)
+	}
+	assertFolderPeers(t, publisherPath, "shared", []string{"redeemer"})
+	assertFolderPeers(t, publisherPath, "private", nil)
+	assertFolderPeers(t, redeemerPath, "shared", []string{"publisher"})
+	assertFolderPeers(t, redeemerPath, "private", nil)
+}
+
+func assertFolderPeers(t *testing.T, path, folderID string, want []string) {
+	t.Helper()
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range cfg.Folders {
+		if folder.ID != folderID {
+			continue
+		}
+		if len(folder.SharedWith) != len(want) {
+			t.Fatalf("%s sharedWith = %#v, want %#v", folderID, folder.SharedWith, want)
+		}
+		for i := range want {
+			if folder.SharedWith[i] != want[i] {
+				t.Fatalf("%s sharedWith = %#v, want %#v", folderID, folder.SharedWith, want)
+			}
+		}
+		return
+	}
+	t.Fatalf("folder %s missing", folderID)
+}
+
 func writeIdentityConfig(path, name string, identity peeridentity.Identity, apiKey string) error {
 	cfg := config.Config{
 		NodeName: name,

@@ -14,6 +14,7 @@ import (
 
 type issuedCode struct {
 	code        string
+	folderID    string
 	record      Record
 	payload     []byte
 	expires     time.Time
@@ -93,6 +94,29 @@ func (s *Service) SetTTL(ttl time.Duration) {
 
 // Issue publishes a code-bound record and remembers it until it is redeemed or expires.
 func (s *Service) Issue(ctx context.Context, identity peeridentity.Identity, profile Profile) (string, time.Time, error) {
+	return s.issue(ctx, identity, profile, "")
+}
+
+// IssueForFolder publishes a folder share code. Accepting it grants that one folder.
+func (s *Service) IssueForFolder(ctx context.Context, identity peeridentity.Identity, profile Profile, folderID string) (string, time.Time, error) {
+	return s.issue(ctx, identity, profile, strings.TrimSpace(folderID))
+}
+
+// FolderID returns the folder bound to a code. A computer pairing code has none.
+func (s *Service) FolderID(code string) string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	issued := s.codes[NormalizeCode(code)]
+	if issued == nil {
+		return ""
+	}
+	return issued.folderID
+}
+
+func (s *Service) issue(ctx context.Context, identity peeridentity.Identity, profile Profile, folderID string) (string, time.Time, error) {
 	s.Sweep(ctx)
 	dir, err := s.directory(ctx)
 	if err != nil {
@@ -118,7 +142,7 @@ func (s *Service) Issue(ctx context.Context, identity peeridentity.Identity, pro
 	}
 	normalized := NormalizeCode(code)
 	s.mu.Lock()
-	s.codes[normalized] = &issuedCode{code: normalized, record: record, payload: payload, expires: expires}
+	s.codes[normalized] = &issuedCode{code: normalized, folderID: folderID, record: record, payload: payload, expires: expires}
 	s.mu.Unlock()
 	if err := dir.Publish(ctx, Namespace(normalized), payload); err != nil {
 		s.mu.Lock()

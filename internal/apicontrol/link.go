@@ -70,10 +70,15 @@ func gatheredProfile(cfg config.Config, certificate string) link.Profile {
 }
 
 // HandleIssuePairCode publishes a short-lived single-use code on the DHT.
-func HandleIssuePairCode(configPath string) (api.PairCodeResponse, error) {
+// folderID makes it a folder share code. An empty folderID only links the computer.
+func HandleIssuePairCode(configPath, folderID string) (api.PairCodeResponse, error) {
 	cfg, err := config.LoadFile(configPath)
 	if err != nil {
 		return api.PairCodeResponse{}, err
+	}
+	folderID = strings.TrimSpace(folderID)
+	if folderID != "" && !folderExists(cfg, folderID) {
+		return api.PairCodeResponse{}, fmt.Errorf("folder %q not found", folderID)
 	}
 	certificate, err := localCertificateIfNeeded(configPath, cfg)
 	if err != nil {
@@ -84,13 +89,23 @@ func HandleIssuePairCode(configPath string) (api.PairCodeResponse, error) {
 		return api.PairCodeResponse{}, err
 	}
 	linkService.SetTTL(ttl)
-	code, expires, err := linkService.Issue(context.Background(), peeridentity.Identity{PublicKey: cfg.Identity.PublicKey, PrivateKey: cfg.Identity.PrivateKey}, gatheredProfile(cfg, certificate))
+	identity := peeridentity.Identity{PublicKey: cfg.Identity.PublicKey, PrivateKey: cfg.Identity.PrivateKey}
+	code, expires, err := linkService.IssueForFolder(context.Background(), identity, gatheredProfile(cfg, certificate), folderID)
 	if err != nil {
 		structuredlog.Event("error", "pairing.publish.failed", "pairing code was not published", map[string]any{"error": err.Error()})
 		return api.PairCodeResponse{}, err
 	}
-	structuredlog.Event("info", "pairing.publish.ok", "pairing code published", map[string]any{"expiresAt": expires.UTC().Format(time.RFC3339)})
-	return api.PairCodeResponse{Code: code, ExpiresAt: expires}, nil
+	structuredlog.Event("info", "pairing.publish.ok", "pairing code published", map[string]any{"expiresAt": expires.UTC().Format(time.RFC3339), "folderId": folderID})
+	return api.PairCodeResponse{Code: code, ExpiresAt: expires, FolderID: folderID}, nil
+}
+
+func folderExists(cfg config.Config, folderID string) bool {
+	for _, folder := range cfg.Folders {
+		if folder.ID == folderID {
+			return true
+		}
+	}
+	return false
 }
 
 // claimProfile is the reconnect profile sent with a pairing claim.
@@ -171,8 +186,9 @@ func redeemPairCode(ctx context.Context, configPath string, req api.PairCodeRede
 		return api.PairCodeRedeemResponse{}, fmt.Errorf("pairing claim certificate does not match the DHT record")
 	}
 	merged := link.MergeProfiles(remoteProfile, accepted.Profile)
+	peerID := configops.PairedPeerID(accepted.NodeName, accepted.DiscoveryID)
 	if err := configops.UpsertPairedPeer(configPath, config.PeerConfig{
-		ID:                   configops.PairedPeerID(accepted.NodeName, accepted.DiscoveryID),
+		ID:                   peerID,
 		APIKey:               accepted.APIKey,
 		PeerSecret:           accepted.APIKey,
 		APICertificateSHA256: firstNonEmpty(accepted.CertificateSHA256, record.CertificateSHA256),
@@ -183,9 +199,13 @@ func redeemPairCode(ctx context.Context, configPath string, req api.PairCodeRede
 	}); err != nil {
 		return api.PairCodeRedeemResponse{}, err
 	}
+	if err := shareAcceptedFolder(configPath, accepted.FolderID, peerID); err != nil {
+		return api.PairCodeRedeemResponse{}, err
+	}
 	return api.PairCodeRedeemResponse{
 		Status:            "accepted",
 		Message:           "paired by code",
+		FolderID:          accepted.FolderID,
 		RemoteDiscoveryID: accepted.DiscoveryID,
 		DHTPeerID:         merged.DHTPeerID,
 		CertificateSHA256: firstNonEmpty(accepted.CertificateSHA256, record.CertificateSHA256),
@@ -217,8 +237,9 @@ func HandlePairCodeClaim(configPath string, req link.ClaimRequest) (link.ClaimRe
 	if err != nil {
 		return link.ClaimResponse{}, err
 	}
+	peerID := configops.PairedPeerID(req.NodeName, req.DiscoveryID)
 	if err := configops.UpsertPairedPeer(configPath, config.PeerConfig{
-		ID:                   configops.PairedPeerID(req.NodeName, req.DiscoveryID),
+		ID:                   peerID,
 		APIKey:               secret,
 		PeerSecret:           secret,
 		APICertificateSHA256: req.CertificateSHA256,
@@ -229,14 +250,30 @@ func HandlePairCodeClaim(configPath string, req link.ClaimRequest) (link.ClaimRe
 	}); err != nil {
 		return link.ClaimResponse{}, err
 	}
+	folderID := linkService.FolderID(req.Code)
+	if err := shareAcceptedFolder(configPath, folderID, peerID); err != nil {
+		return link.ClaimResponse{}, err
+	}
 	local := claimProfile(cfg, certificate)
 	return link.ClaimResponse{
 		DiscoveryID:       cfg.Identity.PublicKey,
 		NodeName:          cfg.NodeName,
 		APIKey:            secret,
 		CertificateSHA256: firstNonEmpty(record.CertificateSHA256, certificate),
+		FolderID:          folderID,
 		Profile:           link.MergeProfiles(record.Profile(), local),
 	}, nil
+}
+
+func shareAcceptedFolder(configPath, folderID, peerID string) error {
+	if strings.TrimSpace(folderID) == "" {
+		return nil
+	}
+	err := configops.ShareFolderWithPeer(configPath, folderID, peerID)
+	if err != nil && strings.Contains(err.Error(), "not found") {
+		return nil
+	}
+	return err
 }
 
 // CommitPairCodeClaim burns the code after the claim response was written.

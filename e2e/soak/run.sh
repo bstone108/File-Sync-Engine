@@ -102,8 +102,8 @@ done
 echo "$paired" | grep -qi 'paired by code'
 
 echo "adding shared folder"
-post 22440 "$KEY_A" /v1/folder-command '{"action":"add","id":"shared","path":"/data/shared","mode":"sendrecv"}' >/dev/null
-post 22441 "$KEY_B" /v1/folder-command '{"action":"add","id":"shared","path":"/data/shared","mode":"sendrecv"}' >/dev/null
+post 22440 "$KEY_A" /v1/folder-command '{"action":"add","id":"shared","path":"/data/shared","mode":"sendrecv","sharedWith":["soak-b"]}' >/dev/null
+post 22441 "$KEY_B" /v1/folder-command '{"action":"add","id":"shared","path":"/data/shared","mode":"sendrecv","sharedWith":["soak-a"]}' >/dev/null
 sleep 2
 
 echo "seeding ${BIG_COUNT}x${BIG_MB}MB and ${SMALL_COUNT} small files"

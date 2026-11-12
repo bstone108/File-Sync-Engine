@@ -91,6 +91,11 @@ func RunFromEnvironment(configPath string) error {
 	} else {
 		cfg = repaired
 	}
+	if migrated, shareErr := config.PersistShareACL(configPath, cfg); shareErr != nil {
+		fmt.Fprintf(os.Stderr, "share-only folder list was not migrated: %v\n", shareErr)
+	} else {
+		cfg = migrated
+	}
 	if err := advertise.Apply(&cfg, os.Getenv(advertise.EnvVar)); err != nil {
 		if message := advertise.StartupMessage(cfg.API.AdvertiseURL, err); message != "" {
 			fmt.Fprintln(os.Stderr, message)

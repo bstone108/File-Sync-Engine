@@ -354,7 +354,7 @@ func runRight(t *testing.T, dir string) {
 	foldershare.Reconcile(config.Config{
 		NodeName: "right",
 		Folders: []config.FolderConfig{{
-			ID: "shared", Path: root, Enabled: true, Mode: config.ModeSendReceive,
+			ID: "shared", Path: root, Enabled: true, Mode: config.ModeSendReceive, SharedWith: []string{"left-peer"},
 		}},
 		Peers: []config.PeerConfig{peer},
 	}, configPath, nil)

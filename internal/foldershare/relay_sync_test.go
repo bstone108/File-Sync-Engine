@@ -94,7 +94,7 @@ func TestSyncUsesRelayWhenAdvertisedURLIsUnreachable(t *testing.T) {
 	Reconcile(config.Config{
 		NodeName: "receiver",
 		Folders: []config.FolderConfig{{
-			ID: "shared", Path: receiverRoot, Enabled: true, Mode: config.ModeSendReceive,
+			ID: "shared", Path: receiverRoot, Enabled: true, Mode: config.ModeSendReceive, SharedWith: []string{"sender-peer"},
 		}},
 		Peers: []config.PeerConfig{{
 			ID:        "sender-peer",

@@ -156,7 +156,7 @@ func localConfig(root, peerURL, pin string) config.Config {
 	return config.Config{
 		NodeName: "local",
 		Folders: []config.FolderConfig{{
-			ID: "shared", Path: root, Enabled: true, Mode: config.ModeSendReceive,
+			ID: "shared", Path: root, Enabled: true, Mode: config.ModeSendReceive, SharedWith: []string{"remote"},
 		}},
 		Peers: []config.PeerConfig{pinnedPeer("remote", "secret", peerURL, pin)},
 	}

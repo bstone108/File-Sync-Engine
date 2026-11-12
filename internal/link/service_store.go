@@ -9,6 +9,7 @@ import (
 
 type storedCode struct {
 	Code        string    `json:"code"`
+	FolderID    string    `json:"folderId,omitempty"`
 	Expires     time.Time `json:"expires"`
 	Used        bool      `json:"used"`
 	Unpublished bool      `json:"unpublished"`
@@ -63,6 +64,7 @@ func (s *Service) loadCodes() {
 		}
 		s.codes[item.Code] = &issuedCode{
 			code:        item.Code,
+			folderID:    item.FolderID,
 			record:      item.Record,
 			payload:     item.Payload,
 			expires:     item.Expires,
@@ -86,6 +88,7 @@ func (s *Service) saveCodes() {
 		}
 		items = append(items, storedCode{
 			Code:        issued.code,
+			FolderID:    issued.folderID,
 			Expires:     issued.expires,
 			Used:        issued.used,
 			Unpublished: issued.unpublished,

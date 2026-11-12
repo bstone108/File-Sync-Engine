@@ -189,6 +189,36 @@ func UpdateFolderDetails(path, id string, update FolderUpdate) error {
 	return fmt.Errorf("folder %q not found", id)
 }
 
+// ShareFolderWithPeer adds peerID to one folder. Identity peers already sync
+// every folder; this is how a share-only peer is granted that folder.
+func ShareFolderWithPeer(path, folderID, peerID string) error {
+	folderID = strings.TrimSpace(folderID)
+	peerID = strings.TrimSpace(peerID)
+	if folderID == "" || peerID == "" {
+		return fmt.Errorf("folder and peer are required")
+	}
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return err
+	}
+	for i := range cfg.Folders {
+		if cfg.Folders[i].ID != folderID {
+			continue
+		}
+		for _, id := range cfg.Folders[i].SharedWith {
+			if id == peerID {
+				return nil
+			}
+		}
+		cfg.Folders[i].SharedWith = append(cfg.Folders[i].SharedWith, peerID)
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+		return save(path, cfg)
+	}
+	return fmt.Errorf("folder %q not found", folderID)
+}
+
 func cleanFolderList(values *[]string) ([]string, error) {
 	if values == nil {
 		return nil, nil

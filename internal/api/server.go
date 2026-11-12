@@ -391,9 +391,14 @@ type PairExchangeResponse struct {
 	LinkProfile          link.Profile `json:"linkProfile,omitempty"`
 }
 
+type PairCodeIssueRequest struct {
+	FolderID string `json:"folderId,omitempty"`
+}
+
 type PairCodeResponse struct {
 	Code      string    `json:"code"`
 	ExpiresAt time.Time `json:"expiresAt"`
+	FolderID  string    `json:"folderId,omitempty"`
 }
 
 type PairCodeRedeemRequest struct {
@@ -403,6 +408,7 @@ type PairCodeRedeemRequest struct {
 type PairCodeRedeemResponse struct {
 	Status            string         `json:"status"`
 	Message           string         `json:"message,omitempty"`
+	FolderID          string         `json:"folderId,omitempty"`
 	RemoteDiscoveryID string         `json:"remoteDiscoveryId,omitempty"`
 	DHTPeerID         string         `json:"dhtPeerId,omitempty"`
 	CertificateSHA256 string         `json:"certificateSha256,omitempty"`
@@ -548,7 +554,7 @@ type WebGUICommandHandler func(context.Context, WebGUICommandRequest) (WebGUICom
 type IdentityPackageHandler func(context.Context, IdentityPackageRequest) (pairing.IdentityPackage, error)
 type IdentityImportHandler func(context.Context, IdentityImportRequest) (IdentityImportResponse, error)
 type PairExchangeHandler func(context.Context, PairExchangeRequest) (PairExchangeResponse, error)
-type PairCodeHandler func(context.Context) (PairCodeResponse, error)
+type PairCodeHandler func(context.Context, PairCodeIssueRequest) (PairCodeResponse, error)
 type PairCodeRedeemHandler func(context.Context, PairCodeRedeemRequest) (PairCodeRedeemResponse, error)
 type PairCodeClaimHandler func(context.Context, link.ClaimRequest) (link.ClaimResponse, error)
 
@@ -1207,8 +1213,7 @@ func (s *Server) allowSyncFolder(w http.ResponseWriter, r *http.Request, folderI
 			break
 		}
 	}
-	protect := len(access.EnabledGroupIDs(cfg)) > 0
-	if !found || !access.MaySyncFolder(caller.role, shared, caller.peer.ID, protect) {
+	if !found || !access.MaySyncFolder(caller.role, shared, caller.peer.ID) {
 		http.Error(w, "folder is not shared", http.StatusForbidden)
 		return false
 	}
@@ -2029,7 +2034,21 @@ func (s *Server) handlePairCode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "pairing code handler is not configured", http.StatusServiceUnavailable)
 		return
 	}
-	response, err := handler(r.Context())
+	var req PairCodeIssueRequest
+	if r.Body != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "invalid pairing code request", http.StatusBadRequest)
+			return
+		}
+		if len(bytes.TrimSpace(body)) > 0 {
+			if err := json.Unmarshal(body, &req); err != nil {
+				http.Error(w, "invalid pairing code request", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	response, err := handler(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

@@ -223,7 +223,7 @@ func releaseOnboarding(id string) {
 func runOnboardingCommand(ctx context.Context, configPath string, replica *configsync.Replica, command configsync.OnboardingCommand, now int64) error {
 	switch command.Action {
 	case configsync.OnboardingIssue:
-		issued, issueErr := HandleIssuePairCode(configPath)
+		issued, issueErr := HandleIssuePairCode(configPath, "")
 		if issueErr != nil {
 			_, err := replica.CompleteOnboarding(command.ID, configsync.OnboardingFailed, "", "", onboardingFailure(issueErr, command.Code), now)
 			return err

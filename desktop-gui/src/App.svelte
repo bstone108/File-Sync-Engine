@@ -1952,7 +1952,7 @@
       <form class="control-form folder-edit-view" data-testid="folder-editor" aria-label="Folder editor" on:submit|preventDefault={saveFolderEditor}>
         <span class="eyebrow">Folder</span>
         <h2>Edit {folderEditor.id}</h2>
-        <p>sendrecv exchanges files both ways. send only uploads. recv only downloads. An empty peer list shares with every paired peer. Ignore patterns use one pattern per line.</p>
+        <p>sendrecv exchanges files both ways. send only uploads. recv only downloads. An empty peer list shares with identity peers. Name each share-only peer. Ignore patterns use one pattern per line.</p>
         <label>
           Path
           <input bind:value={folderEditPath} name="folderEditPath" data-testid="folder-edit-path" autocomplete="off" />
@@ -2241,7 +2241,7 @@
       </label>
       <label>
         Share with peer IDs
-        <input bind:value={folderFormSharedWith} name="folderFormSharedWith" data-testid="folder-shared-with" autocomplete="off" placeholder="empty shares with every paired peer" />
+        <input bind:value={folderFormSharedWith} name="folderFormSharedWith" data-testid="folder-shared-with" autocomplete="off" placeholder="empty shares with identity peers; name each share-only peer" />
       </label>
       <button type="button" data-testid="folder-submit" on:click={submitFolderForm} disabled={loading || !hasDaemonCredential}>Submit folder command</button>
       {#if folderRemoveConfirm}

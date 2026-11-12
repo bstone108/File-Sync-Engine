@@ -190,6 +190,11 @@ func run(configPath string) {
 	} else {
 		cfg = repaired
 	}
+	if migrated, shareErr := config.PersistShareACL(configPath, cfg); shareErr != nil {
+		fmt.Fprintf(os.Stderr, "share-only folder list was not migrated: %v\n", shareErr)
+	} else {
+		cfg = migrated
+	}
 	if ensured, advErr := advertise.Ensure(configPath); ensured.NodeName != "" {
 		cfg = ensured
 		if message := advertise.StartupMessage(cfg.API.AdvertiseURL, advErr); message != "" {
@@ -294,8 +299,8 @@ func run(configPath string) {
 		}
 		structuredlog.Event("info", "pairing.dht.warmup", "pairing lookup is ready", nil)
 	}()
-	apiServer.SetPairCodeHandler(func(ctx context.Context) (api.PairCodeResponse, error) {
-		return apicontrol.HandleIssuePairCode(configPath)
+	apiServer.SetPairCodeHandler(func(ctx context.Context, req api.PairCodeIssueRequest) (api.PairCodeResponse, error) {
+		return apicontrol.HandleIssuePairCode(configPath, req.FolderID)
 	})
 	apiServer.SetPairCodeRedeemHandler(func(ctx context.Context, req api.PairCodeRedeemRequest) (api.PairCodeRedeemResponse, error) {
 		return apicontrol.HandleRedeemPairCode(ctx, configPath, req)

@@ -52,6 +52,9 @@ type Config struct {
 	Maintenance MaintenanceConfig `json:"maintenance,omitempty"`
 	Peers       []PeerConfig      `json:"peers"`
 	Folders     []FolderConfig    `json:"folders"`
+	// ShareACLVersion records that empty sharedWith no longer includes
+	// share-only peers. Version 1 is the migrated explicit list.
+	ShareACLVersion int `json:"shareACLVersion,omitempty"`
 }
 
 type MetadataBackend string

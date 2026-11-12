@@ -583,29 +583,15 @@ func noteLinkDial(peer config.PeerConfig, used string) {
 }
 
 func peersFor(cfg config.Config, folder config.FolderConfig) []config.PeerConfig {
-	allowed := map[string]struct{}{}
-	for _, id := range folder.SharedWith {
-		if id = strings.TrimSpace(id); id != "" {
-			allowed[id] = struct{}{}
-		}
-	}
 	groups := access.EnabledGroupIDs(cfg)
-	limited := len(groups) > 0
 	out := []config.PeerConfig{}
 	for _, peer := range cfg.Peers {
 		if peer.APIKey == "" && peer.PeerSecret == "" {
 			continue
 		}
-		if len(allowed) > 0 {
-			if _, ok := allowed[peer.ID]; !ok {
-				continue
-			}
-		}
-		if limited {
-			role := access.RoleFor(groups, peer.IdentityGroupID)
-			if !access.MaySyncFolder(role, folder.SharedWith, peer.ID, true) {
-				continue
-			}
+		role := access.RoleFor(groups, peer.IdentityGroupID)
+		if !access.MaySyncFolder(role, folder.SharedWith, peer.ID) {
+			continue
 		}
 		if !link.HasAPIEndpoint(peer) {
 			continue
