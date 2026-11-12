@@ -22,6 +22,12 @@ func TestOfflinePeerDialIsPromptThenSixtySeconds(t *testing.T) {
 	if !allowPeerDial("kiki", nat.DefaultPaths) {
 		t.Fatal("the first offline dial was deferred")
 	}
+	if !allowPeerDial("kiki", nat.DefaultPaths) {
+		t.Fatal("the block read in the same sync pass was deferred")
+	}
+	peerDialMu.Lock()
+	peerDialBurst["kiki"] = time.Now().Add(-time.Second)
+	peerDialMu.Unlock()
 	if allowPeerDial("kiki", nat.DefaultPaths) {
 		t.Fatal("an offline peer was redialed before 60 seconds")
 	}

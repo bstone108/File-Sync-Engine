@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/link"
 )
 
 func TestJournalStoresBlockHashesWithoutSubHashes(t *testing.T) {
@@ -187,10 +188,12 @@ func TestMissingBlockComesFromNextPeer(t *testing.T) {
 	serverA, pinA := pinnedServer(t, serve(true, &first))
 	serverB, pinB := pinnedServer(t, serve(false, &second))
 
+	link.ResetDialStateForTest()
 	localRoot := t.TempDir()
 	cfg := localConfig(localRoot, serverA.URL, pinA)
-	cfg.Folders[0].SharedWith = append(cfg.Folders[0].SharedWith, "other")
-	cfg.Peers = append(cfg.Peers, pinnedPeer("other", "secret", serverB.URL, pinB))
+	cfg.Peers[0].ID = "split-a"
+	cfg.Folders[0].SharedWith = []string{"split-a", "split-b"}
+	cfg.Peers = append(cfg.Peers, pinnedPeer("split-b", "secret", serverB.URL, pinB))
 	Reconcile(cfg, filepath.Join(t.TempDir(), "local.json"), nil)
 	got, err := os.ReadFile(filepath.Join(localRoot, "split.bin"))
 	if err != nil {
