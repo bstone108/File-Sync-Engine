@@ -39,7 +39,7 @@ type Candidate struct {
 func Classify(addr string) Path {
 	text := strings.ToLower(strings.TrimSpace(addr))
 	if text == "" {
-		return PathDirect
+		return ""
 	}
 	if strings.Contains(text, "p2p-circuit") || strings.Contains(text, "relay://") || strings.Contains(text, "/p2p-circuit") {
 		return PathRelay

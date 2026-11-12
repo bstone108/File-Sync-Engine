@@ -283,8 +283,8 @@ func UpsertPairedPeer(path string, peer config.PeerConfig) error {
 			if peer.DHTPeerID != "" {
 				cfg.Peers[i].DHTPeerID = peer.DHTPeerID
 			}
-			if len(peer.Relays) > 0 {
-				cfg.Peers[i].Relays = peer.Relays
+			if relays := persistedRelays(peer.Relays); len(relays) > 0 {
+				cfg.Peers[i].Relays = relays
 			}
 			if len(peer.Endpoints) > 0 {
 				cfg.Peers[i].Endpoints = peer.Endpoints
@@ -304,6 +304,7 @@ func UpsertPairedPeer(path string, peer config.PeerConfig) error {
 			break
 		}
 	}
+	peer.Relays = persistedRelays(peer.Relays)
 	cfg.Peers = append(cfg.Peers, peer)
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -326,7 +327,7 @@ func MergePairedPeerLink(path, peerID string, peer config.PeerConfig) error {
 		if peer.DHTPeerID != "" {
 			cfg.Peers[i].DHTPeerID = peer.DHTPeerID
 		}
-		cfg.Peers[i].Relays = unionStrings(cfg.Peers[i].Relays, peer.Relays)
+		cfg.Peers[i].Relays = unionStrings(cfg.Peers[i].Relays, persistedRelays(peer.Relays))
 		seen := map[string]struct{}{}
 		for _, endpoint := range cfg.Peers[i].Endpoints {
 			seen[endpoint.Address] = struct{}{}
@@ -347,6 +348,18 @@ func MergePairedPeerLink(path, peerID string, peer config.PeerConfig) error {
 		return save(path, cfg)
 	}
 	return fmt.Errorf("peer %q not found", peerID)
+}
+
+func persistedRelays(relays []string) []string {
+	var out []string
+	for _, relay := range relays {
+		relay = strings.TrimSpace(relay)
+		if relay == "" || strings.Contains(relay, "p2p-circuit") || strings.HasPrefix(relay, "/") {
+			continue
+		}
+		out = append(out, relay)
+	}
+	return out
 }
 
 func authenticatedPeer(peer config.PeerConfig) config.PeerConfig {

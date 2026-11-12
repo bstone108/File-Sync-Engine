@@ -29,17 +29,15 @@ func unverifiedPeerConfig() Config {
 }
 
 func TestPurgeUnverifiedEndpointsDropsAnythingUnverified(t *testing.T) {
-	cfg := unverifiedPeerConfig()
-	verifiedRelay := cfg.Peers[0].Relays[3]
-	got, changed := PurgeUnverifiedEndpoints(cfg)
+	got, changed := PurgeUnverifiedEndpoints(unverifiedPeerConfig())
 	if !changed {
 		t.Fatal("unverified endpoints were kept")
 	}
 	if len(got.Peers[0].Endpoints) != 1 || got.Peers[0].Endpoints[0].Address != "https://203.0.113.10:22420" || !got.Peers[0].Endpoints[0].Authenticated {
 		t.Fatalf("endpoints = %+v", got.Peers[0].Endpoints)
 	}
-	if len(got.Peers[0].Relays) != 1 || got.Peers[0].Relays[0] != verifiedRelay {
-		t.Fatalf("relays = %v", got.Peers[0].Relays)
+	if len(got.Peers[0].Relays) != 0 {
+		t.Fatalf("public relays were persisted: %v", got.Peers[0].Relays)
 	}
 
 	path := filepath.Join(t.TempDir(), "node.json")
@@ -54,7 +52,7 @@ func TestPurgeUnverifiedEndpointsDropsAnythingUnverified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Peers[0].Endpoints) != 1 || len(loaded.Peers[0].Relays) != 1 {
+	if len(loaded.Peers[0].Endpoints) != 1 || len(loaded.Peers[0].Relays) != 0 {
 		t.Fatalf("loaded endpoints = %+v relays = %v", loaded.Peers[0].Endpoints, loaded.Peers[0].Relays)
 	}
 	again, err := PersistUnverifiedEndpointPurge(path, loaded)

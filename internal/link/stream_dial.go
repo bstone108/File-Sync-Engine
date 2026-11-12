@@ -3,6 +3,7 @@ package link
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -91,6 +92,12 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 		})
 		return "", errNoStream
 	}
+	if id != "" {
+		circuits = appendUniqueAddrs(circuits, discovery.ReservedRelayCircuits(id))
+	}
+	if !allowPeerDial(peer.ID, nat.DefaultPaths) {
+		return "", errDialDeferred
+	}
 	var last error
 	try := func(kind string, addrs []string, limit time.Duration) (string, bool) {
 		if len(addrs) == 0 || ctx.Err() != nil {
@@ -101,7 +108,7 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 		// The limit covers the dial only. Relay dials are included: a dead
 		// public circuit used to wait forever and hold the folder sync loop.
 		// A transfer that is already moving keeps the caller's context.
-		if limit > 0 && (kind == "relay" || len(circuits) > 0) {
+		if limit > 0 {
 			var timeoutCancel context.CancelFunc
 			dialCtx, timeoutCancel = context.WithTimeout(ctx, limit)
 			cancel = timeoutCancel
@@ -210,6 +217,48 @@ func dialStreamAddrs(parent, dialCtx context.Context, peer config.PeerConfig, id
 }
 
 var errNoStream = streamDialError("peer has no libp2p address")
+
+// ErrDialDeferred means this offline peer was already tried inside the
+// 60 second redial interval. The first attempt is never deferred.
+var ErrDialDeferred = errors.New("peer dial is waiting for the offline interval")
+
+var errDialDeferred = ErrDialDeferred
+
+var (
+	peerDialMu    sync.Mutex
+	peerDialNext  = map[string]time.Time{}
+	forceDialGate bool
+)
+
+func allowPeerDial(peerID string, paths *nat.Registry) bool {
+	peerID = strings.TrimSpace(peerID)
+	if peerID == "" {
+		return true
+	}
+	if flag.Lookup("test.v") != nil && !forceDialGate {
+		return true
+	}
+	interval := discovery.OfflineProbeInterval
+	if paths != nil {
+		if _, ok := paths.Active(peerID); ok {
+			interval = discovery.LiveProbeInterval
+		}
+	}
+	peerDialMu.Lock()
+	defer peerDialMu.Unlock()
+	now := time.Now()
+	if next := peerDialNext[peerID]; !next.IsZero() && now.Before(next) {
+		return false
+	}
+	peerDialNext[peerID] = now.Add(interval)
+	return true
+}
+
+func resetPeerDialSchedule() {
+	peerDialMu.Lock()
+	peerDialNext = map[string]time.Time{}
+	peerDialMu.Unlock()
+}
 
 type streamDialError string
 

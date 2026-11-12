@@ -1417,13 +1417,15 @@ func peersVisibleToGUI(state State) []PeerState {
 				}
 				if current.Endpoint == "" {
 					for _, endpoint := range peer.Endpoints {
-						if strings.TrimSpace(endpoint.Address) != "" {
-							current.Endpoint = endpoint.Address
-							break
+						address := strings.TrimSpace(endpoint.Address)
+						if address == "" || strings.Contains(address, "p2p-circuit") {
+							continue
 						}
+						current.Endpoint = address
+						break
 					}
 				}
-				current.ConnectionPath = activeConnectionPath(peer.ID, peer.DHTPeerID)
+				current.ConnectionPath = reportedConnectionPath(activeConnectionPath(peer.ID, peer.DHTPeerID), current.Endpoint)
 				out = append(out, annotateLimitedRelay(current))
 			}
 			return out
@@ -1437,10 +1439,17 @@ func peersVisibleToGUI(state State) []PeerState {
 		if _, ok := self[peer.ID]; ok {
 			continue
 		}
-		peer.ConnectionPath = activeConnectionPath(peer.ID)
+		peer.ConnectionPath = reportedConnectionPath(activeConnectionPath(peer.ID), peer.Endpoint)
 		out = append(out, annotateLimitedRelay(peer))
 	}
 	return out
+}
+
+func reportedConnectionPath(path, endpoint string) string {
+	if strings.Contains(endpoint, "p2p-circuit") && (path == "" || path == string(nat.PathDirect)) {
+		return ""
+	}
+	return path
 }
 
 func activeConnectionPath(ids ...string) string {

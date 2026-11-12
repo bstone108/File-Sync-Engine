@@ -1,0 +1,78 @@
+name: fse-nat-cone
+services:
+  router:
+    image: alpine:3.20
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    command: ["sh", "-c", "apk add --no-cache iptables iproute2 >/tmp/apk.log && sh /router.sh"]
+    volumes:
+      - ./router.sh:/router.sh:ro
+    networks:
+      nata:
+        ipv4_address: 172.30.70.2
+      natb:
+        ipv4_address: 172.30.71.2
+      pub:
+        ipv4_address: 172.30.72.2
+  relay:
+    image: file-sync-engine:e2e
+    hostname: relay
+    environment:
+      FSE_NODE_NAME: relay
+      FSE_ADVERTISE_URL: https://172.30.72.10:22420
+      FSE_DISCOVERY_DHT: "false"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_LAB_PUBLIC_RELAY: "1"
+    networks:
+      pub:
+        ipv4_address: 172.30.72.10
+  engine-a:
+    image: file-sync-engine:e2e
+    hostname: engine-a
+    cap_add:
+      - NET_ADMIN
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["apk add --no-cache iproute2 >/tmp/apk.log && ip route replace default via 172.30.70.2 && exec /usr/local/bin/fse-container-entrypoint start"]
+    environment:
+      FSE_NODE_NAME: engine-a
+      FSE_ADVERTISE_URL: https://172.30.70.10:22420
+      FSE_DISCOVERY_DHT: "false"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_STATIC_RELAYS: ${FSE_STATIC_RELAYS:?set the relay multiaddr}
+    ports:
+      - "22801:22420"
+    networks:
+      nata:
+        ipv4_address: 172.30.70.10
+  engine-b:
+    image: file-sync-engine:e2e
+    hostname: engine-b
+    cap_add:
+      - NET_ADMIN
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["apk add --no-cache iproute2 >/tmp/apk.log && ip route replace default via 172.30.71.2 && exec /usr/local/bin/fse-container-entrypoint start"]
+    environment:
+      FSE_NODE_NAME: engine-b
+      FSE_ADVERTISE_URL: https://172.30.71.10:22420
+      FSE_DISCOVERY_DHT: "false"
+      FSE_DISCOVERY_LOCAL: "false"
+      FSE_STATIC_RELAYS: ${FSE_STATIC_RELAYS:?set the relay multiaddr}
+    ports:
+      - "22802:22420"
+    networks:
+      natb:
+        ipv4_address: 172.30.71.10
+networks:
+  nata:
+    ipam:
+      config:
+        - subnet: 172.30.70.0/24
+  natb:
+    ipam:
+      config:
+        - subnet: 172.30.71.0/24
+  pub:
+    ipam:
+      config:
+        - subnet: 172.30.72.0/24

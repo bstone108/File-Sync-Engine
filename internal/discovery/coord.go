@@ -1,6 +1,9 @@
 package discovery
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 // Hole-punch coordination roles. Own engines are used before any public network.
 const (
@@ -254,6 +257,64 @@ func ownRelayAddrsLocked() []string {
 		}
 	}
 	return cleanAddrs(own)
+}
+
+const maxReservedRelays = 8
+
+// NoteReservedRelays remembers relay reservations in memory. They are not
+// written to config. The newest addresses win and the set stays bounded.
+func NoteReservedRelays(addrs []string) {
+	mesh.mu.Lock()
+	defer mesh.mu.Unlock()
+	seen := map[string]struct{}{}
+	var next []string
+	add := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" || !strings.Contains(raw, "/p2p/") {
+			return
+		}
+		if _, ok := seen[raw]; ok {
+			return
+		}
+		seen[raw] = struct{}{}
+		next = append(next, raw)
+	}
+	for _, raw := range addrs {
+		add(raw)
+		if len(next) >= maxReservedRelays {
+			break
+		}
+	}
+	for _, raw := range mesh.reservedRelays {
+		add(raw)
+		if len(next) >= maxReservedRelays {
+			break
+		}
+	}
+	mesh.reservedRelays = next
+}
+
+// ReservedRelayCircuits builds circuits through relays this node has reserved.
+// The addresses stay in memory and are the public fallback after own relays.
+func ReservedRelayCircuits(target string) []string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil
+	}
+	mesh.mu.Lock()
+	addrs := append([]string(nil), mesh.reservedRelays...)
+	mesh.mu.Unlock()
+	if raw := strings.TrimSpace(os.Getenv("FSE_STATIC_RELAYS")); raw != "" {
+		raw = strings.ReplaceAll(raw, ",", " ")
+		addrs = append(strings.Fields(raw), addrs...)
+	}
+	var out []string
+	for _, raw := range addrs {
+		if circuit := circuitTo(raw, target); circuit != "" {
+			out = append(out, circuit)
+		}
+	}
+	return cleanAddrs(out)
 }
 
 // OwnRelayCircuits builds circuits through our own relays to target.

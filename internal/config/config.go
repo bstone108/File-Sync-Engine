@@ -250,10 +250,11 @@ func (i *IdentityConfig) UnmarshalJSON(data []byte) error {
 }
 
 type APIConfig struct {
-	Listen       string              `json:"listen"`
-	Key          string              `json:"key"`
-	AdvertiseURL string              `json:"advertiseURL,omitempty"`
-	Encryption   APIEncryptionConfig `json:"encryption,omitempty"`
+	Listen          string              `json:"listen"`
+	Key             string              `json:"key"`
+	AdvertiseURL    string              `json:"advertiseURL,omitempty"`
+	AdvertisePinned bool                `json:"advertisePinned,omitempty"`
+	Encryption      APIEncryptionConfig `json:"encryption,omitempty"`
 }
 
 type APIEncryptionConfig struct {

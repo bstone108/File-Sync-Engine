@@ -24,7 +24,9 @@ func PurgeUnverifiedEndpoints(cfg Config) (Config, bool) {
 		}
 		keptRelays := make([]string, 0, len(cfg.Peers[i].Relays))
 		for _, relay := range cfg.Peers[i].Relays {
-			if unverifiedRelay(relay, cfg.Peers[i].DHTPeerID) {
+			// Relay, DHT, and observed circuits stay in memory. A persisted
+			// list only grows as public relays are reserved.
+			if strings.Contains(relay, "p2p-circuit") || strings.HasPrefix(strings.TrimSpace(relay), "/") || unverifiedRelay(relay, cfg.Peers[i].DHTPeerID) {
 				changed = true
 				continue
 			}

@@ -49,7 +49,7 @@ func TestUpsertDropsEndpointsThatAreNotThePeer(t *testing.T) {
 	if len(peer.Endpoints) != 1 || peer.Endpoints[0].Address != "https://10.1.1.5:22420" {
 		t.Fatalf("endpoints = %+v", peer.Endpoints)
 	}
-	if len(peer.Relays) != 1 || peer.Relays[0] != "/ip4/10.1.1.1/tcp/4001/p2p/12D3KooWRelay/p2p-circuit/p2p/"+peerID {
-		t.Fatalf("relays = %+v", peer.Relays)
+	if len(peer.Relays) != 0 {
+		t.Fatalf("public relays were stored in config: %+v", peer.Relays)
 	}
 }

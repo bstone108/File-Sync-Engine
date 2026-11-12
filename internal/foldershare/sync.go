@@ -155,6 +155,9 @@ func reconcileFolder(cfg config.Config, configPath string, folder config.FolderC
 	for _, peer := range peers {
 		remote, remoteCursor, err := fetchRemoteJournal(configPath, peer, folder.ID)
 		if err != nil {
+			if errors.Is(err, link.ErrDialDeferred) {
+				continue
+			}
 			structuredlog.Event("error", "folder.sync.journal_failed", "remote journal was not read", map[string]any{
 				"folder": folder.ID,
 				"peer":   peer.ID,

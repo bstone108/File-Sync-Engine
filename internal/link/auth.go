@@ -39,10 +39,14 @@ func KeepPairedAddress(address, dhtPeerID string) bool {
 // it. DHT, relay, and observed addresses stay ephemeral until that happens,
 // and plain HTTP is never stored because it cannot pin the API certificate.
 func KeepStoredEndpoint(endpoint config.EndpointConfig, dhtPeerID string) bool {
-	if !endpoint.Authenticated || discovery.PendingDHTAddress(endpoint.Address) {
+	address := strings.TrimSpace(endpoint.Address)
+	if strings.HasPrefix(address, "/") || strings.Contains(address, "p2p-circuit") {
 		return false
 	}
-	return KeepPairedAddress(endpoint.Address, dhtPeerID)
+	if !endpoint.Authenticated || discovery.PendingDHTAddress(address) {
+		return false
+	}
+	return KeepPairedAddress(address, dhtPeerID)
 }
 
 // keepDialEndpoint decides which saved addresses may carry an API or sync

@@ -300,6 +300,9 @@ func observationURLs(cfg config.Config, obs Observations) []string {
 			if err != nil {
 				return
 			}
+		} else if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() && !hostOnInterface(ip) {
+			// Another peer's LAN address is not this node's advertise URL.
+			return
 		}
 		out = append(out, net.JoinHostPort(host, strconv.Itoa(hostPort)))
 	}
