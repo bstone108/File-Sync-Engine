@@ -174,6 +174,7 @@
   let desktopAppUpdate: DesktopAppUpdateStatus | null = null;
   let desktopAppUpdateBusy = false;
   let daemonFolders: DaemonFolder[] = [];
+  let availablePaths: Record<string, string> = {};
   let daemonPeers: DaemonPeer[] = [];
   let daemonEvents: DaemonEvent[] = [];
   let daemonTransfers: DaemonTransferReadModel = { active: [], history: [], liveRatesAvailable: false, byteProgressAvailable: false };
@@ -1243,7 +1244,7 @@
   function folderShareText(folder: DaemonFolder): string {
     const peers = folder.sharedWith ?? [];
     if (peers.length === 0) {
-      return 'Every paired peer';
+      return 'Identity peers that added this folder';
     }
     return peers.join(', ');
   }
@@ -1384,6 +1385,20 @@
 
   async function rescanFolderRow(folder: DaemonFolder) {
     await runFolderRow(folder, 'folder rescan', () => sendFolderCommand(daemonConnectionSettings, { action: 'rescan', id: folder.id }));
+  }
+
+  async function addAvailableFolder(folder: DaemonFolder) {
+    const path = (availablePaths[folder.id] ?? '').trim();
+    if (path.length === 0) {
+      folderRowMessage = 'A local path is required.';
+      return;
+    }
+    await runFolderRow(folder, 'folder add', () => sendFolderCommand(daemonConnectionSettings, {
+      action: 'add',
+      id: folder.id,
+      path,
+      mode: folder.mode || 'sendrecv',
+    }));
   }
 
   async function pauseOrResumeFolder(action: 'pause' | 'resume') {
@@ -1987,7 +2002,7 @@
         <div>
           <p>Shared peers</p>
           {#if folderEditSharedPeers.length === 0}
-            <p>Every paired peer.</p>
+            <p>Identity peers that added this folder. Name share-only peers here.</p>
           {:else}
             <ul aria-label="Shared peers">
               {#each folderEditSharedPeers as peer}
@@ -2042,9 +2057,14 @@
                     <p>{folder.path || 'No path'}</p>
                     <p>{folderModeLabel(folder.mode)} · {folderShareText(folder)}</p>
                     <div class="lifecycle-actions">
+                      {#if folder.status === 'available'}
+                        <input data-testid="available-folder-path" bind:value={availablePaths[folder.id]} placeholder="/data/shared" />
+                        <button type="button" data-testid="available-folder-add" on:click={() => addAvailableFolder(folder)} disabled={loading || !hasDaemonCredential}>Add</button>
+                      {:else}
                       <button type="button" data-testid="folder-open" on:click={() => openFolderEditor(folder)}>Edit</button>
                       <button type="button" data-testid="folder-row-pause" on:click={() => pauseOrResumeFolderRow(folder)} disabled={loading || !hasDaemonCredential}>{folder.enabled === false ? 'Resume' : 'Pause'}</button>
                       <button type="button" data-testid="folder-rescan" on:click={() => rescanFolderRow(folder)} disabled={loading || !hasDaemonCredential}>Rescan</button>
+                      {/if}
                     </div>
                   </div>
                 {/if}

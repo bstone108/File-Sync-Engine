@@ -81,6 +81,21 @@ def peer_id(service):
     fail(f"{service} did not announce a libp2p peer id")
 
 
+def api_json(port, key, method, path, payload=None):
+    data = None if payload is None else json.dumps(payload).encode()
+    request = urllib.request.Request(f"https://127.0.0.1:{port}{path}", data=data, method=method)
+    request.add_header("X-FSE-API-Key", key)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, context=SSL_CONTEXT, timeout=20) as response:
+            return response.status, response.read().decode()
+    except urllib.error.HTTPError as err:
+        return err.code, err.read().decode()
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as err:
+        return 0, str(err)
+
+
 def api(port, key, path):
     request = urllib.request.Request(f"https://127.0.0.1:{port}{path}")
     request.add_header("X-FSE-API-Key", key)
@@ -182,14 +197,7 @@ def main():
             "endpoints": [],
             "relays": [],
         }]
-        cfg["folders"] = [{
-            "id": "shared",
-            "path": "/data/shared",
-            "enabled": True,
-            "mode": "sendrecv",
-            "sharedWith": [other],
-            "ignore": [],
-        }]
+        cfg["folders"] = []
         payload = json.dumps(cfg, indent=2) + "\n"
         command = "cat > /config/config.jsonc && chown 99:100 /config/config.jsonc && mkdir -p /data/shared && chmod 0777 /data /data/shared"
         compose("run", "-q", "-i", "-T", "--rm", "--no-deps", "--user", "0", "--entrypoint", "sh", service, "-c", command, input_text=payload)
@@ -206,8 +214,29 @@ def main():
             time.sleep(2)
         fail(f"{name} did not reach {service} within {seconds}s")
 
-    compose("exec", "-T", "-u", "0", "engine-a", "sh", "-c", "mkdir -p /data/shared && printf from-a > /data/shared/from-a.txt && chmod 666 /data/shared/from-a.txt")
-    wait_file("engine-b", "from-a.txt", "from-a", 180)
+    compose("exec", "-T", "-u", "0", "engine-a", "sh", "-c", "mkdir -p /data/shared && chmod 0777 /data /data/shared")
+    compose("exec", "-T", "-u", "0", "engine-b", "sh", "-c", "mkdir -p /data/shared && chmod 0777 /data /data/shared")
+    status, body = api_json(PORTS["engine-a"], infos["engine-a"]["key"], "POST", "/v1/folder-command", {"action": "add", "id": "shared", "path": "/data/shared", "mode": "sendrecv"})
+    if status != 200:
+        fail(f"engine-a folder add = {status} {body}")
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        status, body = api_json(PORTS["engine-b"], infos["engine-b"]["key"], "GET", "/v1/folders")
+        if status == 200 and "available" in body and "shared" in body:
+            print("engine-b lists the folder as available", flush=True)
+            break
+        time.sleep(2)
+    else:
+        fail(f"engine-b did not list the folder as available: {body}")
+    compose("exec", "-T", "-u", "0", "engine-a", "sh", "-c", "printf from-a > /data/shared/from-a.txt && chmod 666 /data/shared/from-a.txt")
+    time.sleep(20)
+    got = compose("exec", "-T", "engine-b", "sh", "-c", "cat /data/shared/from-a.txt", check=False)
+    if got.returncode == 0:
+        fail("data moved before engine-b added the folder")
+    status, body = api_json(PORTS["engine-b"], infos["engine-b"]["key"], "POST", "/v1/folder-command", {"action": "add", "id": "shared", "path": "/data/shared", "mode": "sendrecv"})
+    if status != 200:
+        fail(f"engine-b folder add = {status} {body}")
+    wait_file("engine-b", "from-a.txt", "from-a", 90)
     logged = compose("exec", "-T", "engine-b", "sh", "-c", "cat /config/logs/fse.jsonl 2>/dev/null || true", check=False).stdout or ""
     if "folder.sync.journal" not in logged and "folder.sync.block" not in logged:
         fail("engine-b synced the file without a libp2p journal or block transfer")

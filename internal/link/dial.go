@@ -49,6 +49,9 @@ func OrderedEndpoints(peer config.PeerConfig) []config.EndpointConfig {
 // HasAPIEndpoint reports whether the peer has an HTTP API address or a
 // libp2p stream path. Relay-only peers are dialable.
 func HasAPIEndpoint(peer config.PeerConfig) bool {
+	if strings.TrimSpace(peer.DHTPeerID) != "" || HasSession(peer.ID) || HasSession(peer.DHTPeerID) {
+		return true
+	}
 	return len(OrderedEndpoints(peer)) > 0 || len(libp2pTargets(peer)) > 0
 }
 

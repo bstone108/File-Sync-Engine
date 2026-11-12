@@ -19,6 +19,7 @@ import (
 	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/block"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/configsync"
 	"filesyncengine/internal/foldershare"
 	"filesyncengine/internal/link"
 	"filesyncengine/internal/nat"
@@ -1369,16 +1370,24 @@ func foldersVisibleToGUI(state State) []FolderState {
 			}
 			if foldershare.JournalScanned(state.ConfigPath, folder.ID) {
 				current.Index.Scanned = true
-				if current.Index.TotalFiles == 0 && current.LocalBytes == 0 && current.Enabled {
+				if current.Index.TotalFiles == 0 && current.LocalBytes == 0 && current.Enabled && !foldershare.DirectoryHasFiles(folder.Path) {
 					current.ProgressLabel = "Up to date"
 					current.SyncPercent = 100
 				}
+			}
+			if foldershare.DirectoryHasFiles(folder.Path) && current.Index.TotalFiles == 0 {
+				current.ProgressLabel = "Scanning"
+				current.SyncPercent = 0
+				foldershare.RequestFullScan(folder.ID)
+				foldershare.Wake()
 			}
 		}
 		if !current.Enabled {
 			current.Status = "paused"
 			current.ProgressLabel = "Paused"
 			current.SyncPercent = 0
+		} else if foldershare.TargetCount(cfg, state.ConfigPath, folder) == 0 && (current.Status == "" || current.Status == "configured" || current.Status == "not shared") {
+			current.Status = "not shared"
 		} else if !ok || current.Status == "" || current.Status == "paused" {
 			current.Status = "configured"
 			if current.ProgressLabel == "Paused" {
@@ -1386,6 +1395,19 @@ func foldersVisibleToGUI(state State) []FolderState {
 			}
 		}
 		visible = append(visible, current)
+	}
+	localIDs := map[string]struct{}{}
+	for _, folder := range cfg.Folders {
+		localIDs[folder.ID] = struct{}{}
+	}
+	for _, extra := range configsync.AvailableFolders(state.ConfigPath, localIDs) {
+		visible = append(visible, FolderState{
+			ID:            extra.ID,
+			Mode:          extra.Mode,
+			Status:        "available",
+			Enabled:       true,
+			ProgressLabel: "available on identity, not added here",
+		})
 	}
 	return visible
 }
@@ -1450,6 +1472,19 @@ func peersVisibleToGUI(state State) []PeerState {
 				path := reportedConnectionPath(activeConnectionPath(peer.ID, peer.DHTPeerID), current.Endpoint)
 				if link.HasSession(peer.ID) || link.HasSession(peer.DHTPeerID) {
 					current.Status = "connected"
+					if path == "" {
+						if remote := link.SessionRemote(peer.ID, peer.DHTPeerID); remote != "" {
+							classified := nat.Classify(remote)
+							if classified == "" {
+								classified = nat.PathDirect
+							}
+							path = string(classified)
+							nat.DefaultPaths.Observe(peer.ID, remote, classified)
+							if peer.DHTPeerID != "" {
+								nat.DefaultPaths.Observe(peer.DHTPeerID, remote, classified)
+							}
+						}
+					}
 					current.ConnectionPath = path
 				} else {
 					current.Status = "configured"

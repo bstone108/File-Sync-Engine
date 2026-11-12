@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"filesyncengine/internal/access"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/link"
@@ -23,7 +24,7 @@ import (
 var peerSyncAsync = !testing.Testing()
 
 func startPeerSync(cfg config.Config, configPath string, folder config.FolderConfig) {
-	if schedulerOn() || folder.Mode == config.ModeSendOnly || len(peersFor(cfg, folder)) == 0 {
+	if schedulerOn() || folder.Mode == config.ModeSendOnly || len(peersFor(cfg, configPath, folder)) == 0 {
 		return
 	}
 	if !peerSyncAsync {
@@ -71,6 +72,33 @@ func WakePeerPass() {
 	select {
 	case peerWake <- struct{}{}:
 	default:
+	}
+}
+
+var (
+	identityExchange   func(config.PeerConfig)
+	identityExchangeAt time.Time
+)
+
+// SetIdentityExchange pushes this engine's folder list to identity peers so a
+// folder added here shows up as available on the others before any file sync.
+func SetIdentityExchange(fn func(config.PeerConfig)) {
+	identityExchange = fn
+}
+
+func exchangeIdentity(cfg config.Config) {
+	if identityExchange == nil || time.Since(identityExchangeAt) < 15*time.Second {
+		return
+	}
+	identityExchangeAt = time.Now()
+	groups := access.EnabledGroupIDs(cfg)
+	fn := identityExchange
+	for _, peer := range cfg.Peers {
+		if access.RoleFor(groups, peer.IdentityGroupID) != access.RoleIdentity {
+			continue
+		}
+		peer := peer
+		go fn(peer)
 	}
 }
 
@@ -138,6 +166,7 @@ func peerLoop(ctx context.Context, configPath string, load func() config.Config)
 		peerDue.Store(false)
 		started := time.Now()
 		cfg := load()
+		exchangeIdentity(cfg)
 		passCtx, cancel := context.WithTimeout(ctx, passDeadline)
 		live := false
 		for _, folder := range cfg.Folders {
@@ -167,7 +196,7 @@ func runPeerSync(ctx context.Context, cfg config.Config, configPath string, fold
 		ctx = context.Background()
 	}
 	live := false
-	for _, peer := range peersFor(cfg, folder) {
+	for _, peer := range peersFor(cfg, configPath, folder) {
 		if ctx.Err() != nil {
 			return live
 		}

@@ -1352,7 +1352,7 @@ func TestFoldersRouteShowsConfigBeforeHotReload(t *testing.T) {
 	if folders[0].ID != "docs" || folders[0].Path != docs.Path || folders[0].Mode != "sendrecv" || folders[0].Status != "syncing" || folders[0].Index.TotalFiles != 4 || folders[0].ProgressLabel != "Syncing" {
 		t.Fatalf("adopted folder lost progress or kept stale config: %+v", folders[0])
 	}
-	if folders[1].ID != "shared" || folders[1].Path != shared.Path || folders[1].Mode != "sendonly" || !folders[1].Enabled || folders[1].Status != "configured" || len(folders[1].SharedWith) != 1 || folders[1].SharedWith[0] != "peer-extra" || len(folders[1].Ignore) != 1 || folders[1].Ignore[0] != "*.tmp" {
+	if folders[1].ID != "shared" || folders[1].Path != shared.Path || folders[1].Mode != "sendonly" || !folders[1].Enabled || folders[1].Status != "not shared" || len(folders[1].SharedWith) != 1 || folders[1].SharedWith[0] != "peer-extra" || len(folders[1].Ignore) != 1 || folders[1].Ignore[0] != "*.tmp" {
 		t.Fatalf("new folder missing before hot reload: %+v", folders[1])
 	}
 	if folders[2].ID != "hold" || folders[2].Enabled || folders[2].Status != "paused" || folders[2].ProgressLabel != "Paused" {
