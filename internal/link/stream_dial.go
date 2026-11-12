@@ -3,13 +3,13 @@ package link
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"filesyncengine/internal/config"
@@ -230,15 +230,21 @@ var errDialDeferred = ErrDialDeferred
 var (
 	peerDialMu    sync.Mutex
 	peerDialNext  = map[string]time.Time{}
+	peerDialBurst = map[string]time.Time{}
 	forceDialGate bool
 )
+
+// dialBurst keeps the journal read and the following block reads in one sync
+// pass. The 60 second offline wait starts after that pass, and each request
+// during a transfer extends the burst so a long file is not cut off.
+const dialBurst = 30 * time.Second
 
 func allowPeerDial(peerID string, paths *nat.Registry) bool {
 	peerID = strings.TrimSpace(peerID)
 	if peerID == "" {
 		return true
 	}
-	if flag.Lookup("test.v") != nil && !forceDialGate {
+	if testing.Testing() && !forceDialGate {
 		return true
 	}
 	interval := discovery.OfflineProbeInterval
@@ -250,17 +256,29 @@ func allowPeerDial(peerID string, paths *nat.Registry) bool {
 	peerDialMu.Lock()
 	defer peerDialMu.Unlock()
 	now := time.Now()
+	if burst := peerDialBurst[peerID]; !burst.IsZero() && now.Before(burst) {
+		peerDialBurst[peerID] = now.Add(dialBurst)
+		return true
+	}
 	if next := peerDialNext[peerID]; !next.IsZero() && now.Before(next) {
 		return false
 	}
 	peerDialNext[peerID] = now.Add(interval)
+	peerDialBurst[peerID] = now.Add(dialBurst)
 	return true
 }
 
 func resetPeerDialSchedule() {
 	peerDialMu.Lock()
 	peerDialNext = map[string]time.Time{}
+	peerDialBurst = map[string]time.Time{}
 	peerDialMu.Unlock()
+}
+
+// ResetDialStateForTest clears the process-wide dial cache and redial schedule.
+func ResetDialStateForTest() {
+	resetDialCache()
+	resetPeerDialSchedule()
 }
 
 type streamDialError string
