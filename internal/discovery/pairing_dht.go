@@ -457,7 +457,11 @@ func (r *Libp2pDHTRouter) finishBootstrap(wait chan struct{}) {
 			// look at the routing table again. A peer that stays a client is
 			// still a place to serve the pairing stream.
 			if r.shouldProbeRemoteDialback() {
-				r.tryRemoteDialback(bootCtx, nil)
+				// The background probe keeps going. This attempt must not sit
+				// on a public peer long enough to stall pairing or folder sync.
+				probeCtx, probeCancel := context.WithTimeout(bootCtx, 2*time.Second)
+				r.tryRemoteDialback(probeCtx, nil)
+				probeCancel()
 			}
 			if r.connectedBootstrapIsClient() {
 				err = nil

@@ -98,7 +98,10 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 		}
 		dialCtx := ctx
 		cancel := func() {}
-		if limit > 0 && kind != "relay" && len(circuits) > 0 {
+		// The limit covers the dial only. Relay dials are included: a dead
+		// public circuit used to wait forever and hold the folder sync loop.
+		// A transfer that is already moving keeps the caller's context.
+		if limit > 0 && (kind == "relay" || len(circuits) > 0) {
 			var timeoutCancel context.CancelFunc
 			dialCtx, timeoutCancel = context.WithTimeout(ctx, limit)
 			cancel = timeoutCancel
@@ -110,8 +113,6 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 			"path":      kind,
 			"addresses": addrs,
 		})
-		// The limit covers the dial only. A block transfer on the open stream
-		// keeps the caller's context.
 		used, err := dialStreamAddrs(ctx, dialCtx, peer, id, addrs, do)
 		if err == nil {
 			return used, true
@@ -150,7 +151,16 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 			}
 		}
 	}
-	if used, stop := try("relay", circuits, 0); stop {
+	own, publicCircuits := partitionCircuits(id, circuits)
+	if used, stop := try("relay", own, 20*time.Second); stop {
+		if base, err, done := finish(used, stop); done {
+			return base, err
+		}
+	}
+	// Public relays are the fallback after our own relays miss. The dial
+	// budget is long enough for a live circuit and short enough that a dead
+	// public relay cannot hold the folder sync loop.
+	if used, stop := try("relay", publicCircuits, 20*time.Second); stop {
 		if base, err, done := finish(used, stop); done {
 			return base, err
 		}
@@ -283,6 +293,58 @@ func directFromSignedHostnames(peer config.PeerConfig) []string {
 		}
 	}
 	return out
+}
+
+// partitionCircuits puts circuits through our own engines ahead of public
+// relays. Own circuits are added even when the saved peer only learned a
+// public circuit from the DHT.
+func partitionCircuits(target string, circuits []string) (own, public []string) {
+	ownIDs := map[string]struct{}{}
+	for _, addr := range discovery.OwnRelayAddrs() {
+		if id := relayHopID(addr); id != "" {
+			ownIDs[id] = struct{}{}
+		}
+	}
+	seen := map[string]struct{}{}
+	add := func(addr string, toOwn bool) {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			return
+		}
+		if _, ok := seen[addr]; ok {
+			return
+		}
+		seen[addr] = struct{}{}
+		if toOwn {
+			own = append(own, addr)
+			return
+		}
+		public = append(public, addr)
+	}
+	for _, addr := range discovery.OwnRelayCircuits(target) {
+		add(addr, true)
+	}
+	for _, addr := range circuits {
+		_, isOwn := ownIDs[relayHopID(addr)]
+		add(addr, isOwn)
+	}
+	return own, public
+}
+
+func relayHopID(addr string) string {
+	head := addr
+	if cut := strings.Index(addr, "/p2p-circuit"); cut > 0 {
+		head = addr[:cut]
+	}
+	parts := strings.Split(head, "/p2p/")
+	if len(parts) < 2 {
+		return ""
+	}
+	id := parts[len(parts)-1]
+	if i := strings.Index(id, "/"); i >= 0 {
+		id = id[:i]
+	}
+	return strings.TrimSpace(id)
 }
 
 func splitStreamAddrs(id string, raw []string) (direct, circuits []string) {

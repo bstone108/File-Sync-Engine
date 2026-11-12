@@ -439,9 +439,31 @@ func noteReplicaMembers(cfg config.Config, replica configsync.Replica) {
 	}
 	discovery.SetConnectionMembers(ids)
 	discovery.SetIdentityRelays(relays)
+	discovery.MergePunchMesh(discovery.SharedPeerID(), punchMesh(replica))
 	if len(exchanged) > 0 {
 		discovery.NoteExchangedPeers(exchanged)
 	}
+}
+
+func punchMesh(replica configsync.Replica) []discovery.MeshNode {
+	self := discovery.SharedPeerID()
+	var links []string
+	var nodes []discovery.MeshNode
+	for id, conn := range replica.Connections {
+		if conn.DHTPeerID == "" || conn.DHTPeerID == self || id == replica.InstanceID {
+			continue
+		}
+		links = append(links, conn.DHTPeerID)
+		nodes = append(nodes, discovery.MeshNode{
+			ID:     conn.DHTPeerID,
+			Addrs:  append([]string(nil), conn.RelayAddrs...),
+			Public: conn.Reachable == "public" || conn.MeshHelper,
+		})
+	}
+	if self != "" {
+		nodes = append(nodes, discovery.MeshNode{ID: self, Links: links})
+	}
+	return nodes
 }
 
 // recordOwnSettings copies this engine's non-secret settings into its own

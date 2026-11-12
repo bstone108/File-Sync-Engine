@@ -43,6 +43,8 @@ type meshState struct {
 	maxReservations   int
 	publicRelays      []string
 	identityRelays    []string
+	selfID            string
+	punchNodes        []MeshNode
 	configMembers     map[string]struct{}
 	connectionMembers map[string]struct{}
 	dialbackPeers     map[string]struct{}
@@ -164,9 +166,10 @@ func HelperRelayAddrs() []string {
 	return out
 }
 
-// OrderedRelays returns same-identity helpers, then public relays.
-// An empty public list falls back to the DHT bootstrap multiaddrs. Those
-// nodes are candidates for a reservation, not for bulk transfer.
+// OrderedRelays returns same-identity relays when any exist. Public relays,
+// including the default bootstrap list, are used only when no own relay can
+// carry the reservation. Those public nodes are reservation candidates, not
+// bulk-transfer paths.
 func OrderedRelays() []string {
 	mesh.mu.Lock()
 	defer mesh.mu.Unlock()
@@ -174,16 +177,16 @@ func OrderedRelays() []string {
 	if len(public) == 0 {
 		public = append([]string(nil), DefaultPublicDHTBootstrapPeers...)
 	}
-	return nat.PreferRelays(mesh.identityRelays, public)
+	return DataRelays(ownRelayAddrsLocked(), public)
 }
 
-// UnlimitedRelayAddrs returns same-identity helpers and explicitly configured
-// public relays. The default bootstrap list is omitted: public kubo relays are
-// limited circuits and cannot carry file bytes.
+// UnlimitedRelayAddrs returns same-identity relays first, then explicitly
+// configured public relays. The default bootstrap list is omitted: public
+// kubo relays are limited circuits and cannot carry file bytes.
 func UnlimitedRelayAddrs() []string {
 	mesh.mu.Lock()
 	defer mesh.mu.Unlock()
-	return nat.PreferRelays(mesh.identityRelays, mesh.publicRelays)
+	return nat.PreferRelays(ownRelayAddrsLocked(), mesh.publicRelays)
 }
 
 // RefreshIdentityMembers allows reservations from configured peers in an
@@ -438,7 +441,9 @@ func watchConnections(n network.Network) {
 			if router := routerFor(conn.LocalPeer()); router != nil {
 				if source != "" {
 					router.notePublicReachability(source)
-				} else if conn.RemotePeer() != conn.LocalPeer() {
+				} else if conn.RemotePeer() != conn.LocalPeer() && authenticatedDialbackPeer(conn.RemotePeer()) {
+					// A public bootstrap connection is not a reason to probe.
+					// Own authenticated peers coordinate that dial-back.
 					router.scheduleRemoteDialback()
 				}
 			}

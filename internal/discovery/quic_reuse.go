@@ -107,6 +107,12 @@ func startLibp2pSTUN(h host.Host, cm *quicreuse.ConnManager) func() {
 		}
 		return func() {}
 	}
+	if !PublicRelayFallback() {
+		structuredlog.Event("info", "nat.stun.skipped", "public STUN is waiting because an own engine can coordinate", map[string]any{
+			"reason": "own-coordinator",
+		})
+		return func() {}
+	}
 	conn, laddr, err := shareQUICSocket(h, cm)
 	if err != nil {
 		structuredlog.Event("warn", "nat.stun.failed", "libp2p UDP socket is not available for STUN", map[string]any{

@@ -126,13 +126,16 @@ func TestUnlimitedRelaysSkipDefaultBootstrap(t *testing.T) {
 	mesh.mu.Lock()
 	prevPublic := append([]string(nil), mesh.publicRelays...)
 	prevIdentity := append([]string(nil), mesh.identityRelays...)
+	prevNodes := append([]MeshNode(nil), mesh.punchNodes...)
 	mesh.publicRelays = nil
 	mesh.identityRelays = []string{"/ip4/198.51.100.8/tcp/22421/p2p/12D3KooWhelper"}
+	mesh.punchNodes = nil
 	mesh.mu.Unlock()
 	t.Cleanup(func() {
 		mesh.mu.Lock()
 		mesh.publicRelays = prevPublic
 		mesh.identityRelays = prevIdentity
+		mesh.punchNodes = prevNodes
 		mesh.mu.Unlock()
 	})
 	got := UnlimitedRelayAddrs()
@@ -140,18 +143,32 @@ func TestUnlimitedRelaysSkipDefaultBootstrap(t *testing.T) {
 		t.Fatalf("unlimited = %#v", got)
 	}
 	ordered := OrderedRelays()
-	if len(ordered) < 2 || ordered[0] != got[0] {
+	if len(ordered) != 1 || ordered[0] != got[0] {
 		t.Fatalf("ordered = %#v", ordered)
+	}
+	if PublicRelayFallback() {
+		t.Fatal("an own relay still allowed public relay reservation")
 	}
 }
 
 func TestOrderedRelaysPreferIdentityHelpers(t *testing.T) {
 	mesh.mu.Lock()
+	prevPublic := append([]string(nil), mesh.publicRelays...)
+	prevIdentity := append([]string(nil), mesh.identityRelays...)
+	prevNodes := append([]MeshNode(nil), mesh.punchNodes...)
 	mesh.publicRelays = []string{"/dnsaddr/bootstrap.libp2p.io"}
 	mesh.identityRelays = []string{"/ip4/198.51.100.8/tcp/22421/p2p/12D3KooWhelper"}
+	mesh.punchNodes = nil
 	mesh.mu.Unlock()
+	t.Cleanup(func() {
+		mesh.mu.Lock()
+		mesh.publicRelays = prevPublic
+		mesh.identityRelays = prevIdentity
+		mesh.punchNodes = prevNodes
+		mesh.mu.Unlock()
+	})
 	got := OrderedRelays()
-	if len(got) != 2 || got[0] != "/ip4/198.51.100.8/tcp/22421/p2p/12D3KooWhelper" {
+	if len(got) != 1 || got[0] != "/ip4/198.51.100.8/tcp/22421/p2p/12D3KooWhelper" {
 		t.Fatalf("relays = %#v", got)
 	}
 }

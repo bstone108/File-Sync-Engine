@@ -504,6 +504,11 @@ func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value
 				return
 			}
 		}
+		// Connected DHT peers are public coordinators. They are not relay
+		// candidates while one of our own engines can coordinate the punch.
+		if !PublicRelayFallback() {
+			return
+		}
 		if hostBox == nil || dhtBox == nil {
 			return
 		}

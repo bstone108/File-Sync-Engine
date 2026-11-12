@@ -23,19 +23,30 @@ func (r *Libp2pDHTRouter) runRemoteDialback() {
 	if r == nil || r.closed == nil {
 		return
 	}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	timer := time.NewTimer(dialbackInterval())
+	defer timer.Stop()
 	for {
 		select {
 		case <-r.closed:
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if r.remotePublic.Load() {
 				return
 			}
 			r.scheduleRemoteDialback()
+			timer.Reset(dialbackInterval())
 		}
 	}
+}
+
+// dialbackInterval is short for our own peers and slow for public fallback.
+// A public probe on a 2s loop punched the public swarm often enough to stall
+// the folder sync loop.
+func dialbackInterval() time.Duration {
+	if PublicRelayFallback() {
+		return 30 * time.Second
+	}
+	return 2 * time.Second
 }
 
 // scheduleRemoteDialback starts one dial-back check. A self-dial is never
@@ -65,7 +76,29 @@ func (r *Libp2pDHTRouter) shouldProbeRemoteDialback() bool {
 	if r == nil || r.host == nil || r.remotePublic.Load() || !NATEnabled() {
 		return false
 	}
-	return r.hasRemoteAutoNATPeer() && len(publicLibp2pProbeAddrs(r.host.Addrs())) > 0
+	if len(publicLibp2pProbeAddrs(r.host.Addrs())) == 0 {
+		return false
+	}
+	if !PublicRelayFallback() {
+		return r.hasAuthenticatedAutoNATPeer()
+	}
+	return r.hasRemoteAutoNATPeer()
+}
+
+func (r *Libp2pDHTRouter) hasAuthenticatedAutoNATPeer() bool {
+	if r == nil || r.host == nil {
+		return false
+	}
+	for _, id := range r.host.Network().Peers() {
+		if !authenticatedDialbackPeer(id) {
+			continue
+		}
+		supported, err := r.host.Peerstore().SupportsProtocols(id, autonatv2.DialProtocol)
+		if err == nil && len(supported) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // tryRemoteDialback asks one connected peer to dial addrs. Empty addrs uses
