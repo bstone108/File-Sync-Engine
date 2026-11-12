@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -69,7 +70,12 @@ func DialMetadata(ctx context.Context, peerID string) (io.ReadWriteCloser, error
 	if err != nil {
 		return nil, err
 	}
-	stream, err := h.NewStream(ctx, pid, protocol.ID(MetadataProtocol))
+	if h.Network().Connectedness(pid) != network.Connected {
+		return nil, errNoAPIHost
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	stream, err := h.NewStream(dialCtx, pid, protocol.ID(MetadataProtocol))
 	if err != nil {
 		structuredlog.Event("warn", "metadata.stream.dial_failed", "metadata session was not opened", map[string]any{
 			"peer":  peerID,
