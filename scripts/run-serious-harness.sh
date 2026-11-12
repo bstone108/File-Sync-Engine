@@ -85,7 +85,10 @@ run go test ./internal/ci -run 'Test(CrossPlatformWorkflowCoversTestHarnessAndSi
 run go test ./internal/ci -run 'TestGoModulesPinPatchedSecurityDependencyVersions'
 run go test ./internal/ci -run 'TestDaemonOwnsEnabledWebGUIStartupWithoutBlockingHeadlessServer'
 run go test ./internal/ci -run 'TestDesktopGUI(InstallsWailsNativeShellBridgeBeforeSvelteStarts|WailsBridgeUsesGeneratedBindingsInsteadOfOptionalWindowGlobals)'
-	run_in "${ROOT}/desktop-gui" go test app.go app_control.go app_native_features.go app_version.go app_update.go app_update_github.go app_update_version.go app_update_select.go app_update_sha.go app_update_state.go app_update_nsis.go app_update_appimage.go app_update_sparkle_keys.go app_update_sparkle_stub.go credential_vault_linux.go app_nonservice_test.go app_control_test.go credential_vault_linux_test.go app_update_test.go
+	# The engine job installs the root module's Go with GOTOOLCHAIN=local.
+	# desktop-gui declares a newer toolchain (Echo and Wails require Go 1.26).
+	desktop_go="$(awk '/^go /{print $2; exit}' "${ROOT}/desktop-gui/go.mod")"
+	run_in "${ROOT}/desktop-gui" env "GOTOOLCHAIN=go${desktop_go}" go test app.go app_control.go app_native_features.go app_version.go app_update.go app_update_github.go app_update_version.go app_update_select.go app_update_sha.go app_update_state.go app_update_nsis.go app_update_appimage.go app_update_sparkle_keys.go app_update_sparkle_stub.go credential_vault_linux.go app_nonservice_test.go app_control_test.go credential_vault_linux_test.go app_update_test.go
 run go test ./internal/runtimesync -run 'Test(PeerPullsFromPlansKeepsOnlyRuntimeRoutingFields|PlanCooperativeBlockFetches|CooperativeBlockFetchPlanMessage|PublishCooperativeBlockFetchPlansPublishesRuntimeEvents)'
 run go test ./internal/apistate -run 'Test(PeerTransferStateReportsLocalConfiguredCauses|PeerNetworkDiagnosticsReportsUnpromotedContainerBridgeEndpoint|BackupSnapshotStateProjectsAvailabilityStatus|FolderSyncStateProjectsDeferredDeleteCatchup|FolderWarningStateProjectsOnlyUncommittedLockedApplies|PeerMetadataAndFolderIndexProjection|BuildStateProjectsConfigAndStoreDerivedStatus|BuildConfiguredStateFallsBackToDefaultJSONStoreWhenConfiguredStoreCannotOpen)'
 run go test ./internal/service -run 'Test(Render|SystemdInstallHandoff|LaunchdInstallHandoff|WindowsInstallHandoff|ControlHandoff)'
