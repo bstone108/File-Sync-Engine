@@ -25,6 +25,8 @@ COMPOSE = ROOT / "e2e" / "nat-cone" / "compose.yaml"
 PROJECT = "fse-nat-cone"
 ENGINES = ["engine-a", "engine-b"]
 PORTS = {"engine-a": 22801, "engine-b": 22802}
+GROUP = "identity-a"
+TOKEN = "identity-a-bootstrap-token-must-be-43-characters"
 SSL_CONTEXT = ssl._create_unverified_context()
 
 
@@ -142,15 +144,18 @@ def main():
         cfg["api"]["advertisePinned"] = True
         cfg.setdefault("discovery", {})["dht"] = True
         cfg["discovery"]["dhtBootstrapPeers"] = [os.environ["FSE_STATIC_RELAYS"]]
+        cfg.setdefault("identity", {})["groups"] = [{"id": GROUP, "token": TOKEN, "enabled": True}]
         cfg["peers"] = [{
             "id": other,
             "apiKey": infos[other]["key"],
             "apiCertificateSha256": infos[other]["pin"],
             "identityPublicKey": infos[other]["public"],
+            "identityGroupId": GROUP,
             "dhtPeerId": infos[other]["dht"],
             "encryptionLevel": 4,
             "addresses": [],
             "endpoints": [],
+            "relays": [],
         }]
         cfg["folders"] = [{
             "id": "shared",
@@ -171,10 +176,25 @@ def main():
     while time.time() < deadline:
         got = compose("exec", "-T", "engine-b", "sh", "-c", "cat /data/shared/note.txt", check=False)
         if got.returncode == 0 and got.stdout.strip() == "nat-relayed":
-            print("synced through the cone NAT relay path")
+            print("synced through the cone NAT relay path:", sync_path())
             return
         time.sleep(3)
+    sys.stderr.write(sync_path() + "\n")
     fail("the file did not sync across the cone NATs")
+
+
+def sync_path():
+    bits = []
+    for service in ENGINES:
+        stored = compose("exec", "-T", service, "sh", "-c", "cat /config/logs/fse.jsonl 2>/dev/null || true", check=False).stdout or ""
+        for line in stored.splitlines():
+            if any(token in line for token in ("libp2p.stream", "libp2p.dcutr", "folder.sync", "libp2p.bootstrap")):
+                bits.append(f"{service}: {line[-400:]}")
+    if any("libp2p.dcutr.ok" in line for line in bits):
+        return "hole-punch\n" + "\n".join(bits[-30:])
+    if any('"path":"relay"' in line or '"path":"limited-relay"' in line for line in bits):
+        return "relay\n" + "\n".join(bits[-30:])
+    return "no authenticated path yet\n" + "\n".join(bits[-30:])
 
 
 if __name__ == "__main__":

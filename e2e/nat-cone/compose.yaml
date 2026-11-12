@@ -48,6 +48,9 @@ services:
       - "relay.nat.test:172.30.72.10"
     ports:
       - "22801:22420"
+    volumes:
+      - engine-a-config:/config
+      - engine-a-data:/data
     networks:
       nata:
         ipv4_address: 172.30.70.10
@@ -70,9 +73,17 @@ services:
       - "relay.nat.test:172.30.72.10"
     ports:
       - "22802:22420"
+    volumes:
+      - engine-b-config:/config
+      - engine-b-data:/data
     networks:
       natb:
         ipv4_address: 172.30.71.10
+volumes:
+  engine-a-config:
+  engine-a-data:
+  engine-b-config:
+  engine-b-data:
 networks:
   nata:
     ipam:

@@ -75,6 +75,12 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 			direct, circuits = appendCatalogAddrs(direct, circuits, peer.ID, id)
 		}
 	}
+	if id != "" {
+		// A reserved public relay is a dial path even when the DHT has not
+		// published an address for this peer. Direct and own relays are still
+		// tried first.
+		circuits = appendUniqueAddrs(circuits, discovery.ReservedRelayCircuits(id))
+	}
 	lookedUp := false
 	if len(direct) == 0 && id != "" {
 		// Relays are not a reason to skip the DHT. A direct address has to be
@@ -91,9 +97,6 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 			"reason":    "peer has no libp2p address",
 		})
 		return "", errNoStream
-	}
-	if id != "" {
-		circuits = appendUniqueAddrs(circuits, discovery.ReservedRelayCircuits(id))
 	}
 	if !allowPeerDial(peer.ID, nat.DefaultPaths) {
 		return "", errDialDeferred
@@ -271,11 +274,15 @@ type libp2pTarget struct {
 
 func libp2pTargets(peer config.PeerConfig) []libp2pTarget {
 	direct, circuits := streamDialPlan(peer)
+	id := strings.TrimSpace(peer.DHTPeerID)
+	if id != "" {
+		circuits = appendUniqueAddrs(circuits, discovery.ReservedRelayCircuits(id))
+	}
 	addrs := append(append([]string{}, direct...), circuits...)
-	if len(addrs) == 0 || strings.TrimSpace(peer.DHTPeerID) == "" {
+	if len(addrs) == 0 || id == "" {
 		return nil
 	}
-	return []libp2pTarget{{id: peer.DHTPeerID, addrs: addrs}}
+	return []libp2pTarget{{id: id, addrs: addrs}}
 }
 
 // streamDialPlan splits dial candidates so a signed hostname is a direct
