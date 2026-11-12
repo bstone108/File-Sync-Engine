@@ -329,12 +329,15 @@ func (d DiscoveryConfig) AllDisabled() bool {
 }
 
 type PeerConfig struct {
-	ID                    string           `json:"id"`
-	APIKey                string           `json:"apiKey,omitempty"`
-	APICertificateSHA256  string           `json:"apiCertificateSha256,omitempty"`
-	IdentityPublicKey     string           `json:"identityPublicKey,omitempty"`
-	IdentityGroupID       string           `json:"identityGroupId,omitempty"`
-	DHTPeerID             string           `json:"dhtPeerId,omitempty"`
+	ID                   string `json:"id"`
+	APIKey               string `json:"apiKey,omitempty"`
+	APICertificateSHA256 string `json:"apiCertificateSha256,omitempty"`
+	IdentityPublicKey    string `json:"identityPublicKey,omitempty"`
+	IdentityGroupID      string `json:"identityGroupId,omitempty"`
+	DHTPeerID            string `json:"dhtPeerId,omitempty"`
+	// PeerSecret authenticates this peer on the sync API. It is not the
+	// engine API key, so a share-only peer cannot manage config.
+	PeerSecret            string           `json:"peerSecret,omitempty"`
 	Relays                []string         `json:"relays,omitempty"`
 	EncryptionLevel       int              `json:"encryptionLevel"`
 	SendBytesPerSecond    int64            `json:"sendBytesPerSecond,omitempty"`

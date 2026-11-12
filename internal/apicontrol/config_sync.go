@@ -95,6 +95,9 @@ func HandleConfigSyncEdit(configPath string, raw json.RawMessage) (ConfigSyncRes
 	if req.TargetInstanceID == "" || req.Path == "" {
 		return ConfigSyncResponse{}, fmt.Errorf("targetInstanceId and path are required")
 	}
+	if err := configsync.ValidateInstanceID(req.TargetInstanceID); err != nil {
+		return ConfigSyncResponse{}, err
+	}
 	store, err := openStore(configPath)
 	if err != nil {
 		return ConfigSyncResponse{}, err
@@ -125,7 +128,7 @@ func HandleConfigSyncMerge(configPath string, raw json.RawMessage) (ConfigSyncMe
 	if err != nil {
 		return ConfigSyncMergeResponse{}, err
 	}
-	if req.Replica.GroupID != "" && local.GroupID != "" && req.Replica.GroupID != local.GroupID {
+	if local.GroupID != "" && req.Replica.GroupID != local.GroupID {
 		return ConfigSyncMergeResponse{}, fmt.Errorf("config sync group mismatch")
 	}
 	merged, stats := configsync.Merge(local, req.Replica)

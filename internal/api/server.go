@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"filesyncengine/internal/access"
 	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/block"
 	"filesyncengine/internal/config"
@@ -831,7 +832,7 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/identity-package", s.requireKey(s.handleIdentityPackage))
 	mux.HandleFunc("/v1/identity-import", s.requireKey(s.handleIdentityImport))
 	mux.HandleFunc("/v1/schema", s.requireKey(s.handleSchema))
-	mux.HandleFunc("/v1/sync-journal", s.requireKey(s.handleSyncJournal))
+	mux.HandleFunc("/v1/sync-journal", s.requireSync(s.handleSyncJournal))
 	mux.HandleFunc("/v1/pair-exchange", s.handlePairExchange)
 	mux.HandleFunc("/v1/pair-code", s.requireKey(s.handlePairCode))
 	mux.HandleFunc("/v1/pair-code/redeem", s.requireKey(s.handlePairCodeRedeem))
@@ -851,11 +852,11 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("/v1/encryption-profiles", s.requireKey(s.handleEncryptionProfiles))
 	mux.HandleFunc("/v1/stop", s.requireKey(s.handleStop))
 	mux.HandleFunc("/v1/folder-index", s.requireKey(s.handleFolderIndex))
-	mux.HandleFunc("/v1/folder-file", s.requireKey(s.handleFolderFile))
-	mux.HandleFunc("/v1/folder-manifest", s.requireKey(s.handleFolderManifest))
-	mux.HandleFunc("/v1/folder-block", s.requireKey(s.handleFolderBlock))
+	mux.HandleFunc("/v1/folder-file", s.requireSync(s.handleFolderFile))
+	mux.HandleFunc("/v1/folder-manifest", s.requireSync(s.handleFolderManifest))
+	mux.HandleFunc("/v1/folder-block", s.requireSync(s.handleFolderBlock))
 	mux.HandleFunc("/v1/folder-batch", s.requireKey(s.handleFolderBatch))
-	mux.HandleFunc("/v1/folder-block-subhashes", s.requireKey(s.handleFolderBlockSubhashes))
+	mux.HandleFunc("/v1/folder-block-subhashes", s.requireSync(s.handleFolderBlockSubhashes))
 	return mux
 }
 
@@ -1134,6 +1135,84 @@ func (s *Server) requireKey(next http.HandlerFunc) http.HandlerFunc {
 		advertise.NoteGUIRequest(r.Host, r.Header.Get(advertise.GUIHostHeader))
 		next(w, r)
 	}
+}
+
+type syncCallerKey struct{}
+
+type syncCaller struct {
+	peer config.PeerConfig
+	role access.Role
+}
+
+// requireSync accepts the engine API key or a paired peer's sync secret.
+// The engine key is the local owner. A peer secret is identity or share-only,
+// and share-only callers cannot read a folder that was not explicitly shared.
+func (s *Server) requireSync(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("X-FSE-API-Key")
+		if key == "" {
+			http.Error(w, "missing or invalid API key", http.StatusUnauthorized)
+			return
+		}
+		if s.apiKey != "" && key == s.apiKey {
+			advertise.NoteGUIRequest(r.Host, r.Header.Get(advertise.GUIHostHeader))
+			next(w, r)
+			return
+		}
+		peer, role, ok := s.peerForSecret(key)
+		if !ok {
+			http.Error(w, "missing or invalid API key", http.StatusUnauthorized)
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), syncCallerKey{}, syncCaller{peer: peer, role: role})))
+	}
+}
+
+func (s *Server) peerForSecret(secret string) (config.PeerConfig, access.Role, bool) {
+	state := s.snapshotState()
+	if strings.TrimSpace(state.ConfigPath) == "" {
+		return config.PeerConfig{}, "", false
+	}
+	cfg, err := config.LoadFile(state.ConfigPath)
+	if err != nil {
+		return config.PeerConfig{}, "", false
+	}
+	groups := access.EnabledGroupIDs(cfg)
+	for _, peer := range cfg.Peers {
+		if peer.PeerSecret == "" || peer.PeerSecret != secret {
+			continue
+		}
+		return peer, access.RoleFor(groups, peer.IdentityGroupID), true
+	}
+	return config.PeerConfig{}, "", false
+}
+
+func (s *Server) allowSyncFolder(w http.ResponseWriter, r *http.Request, folderID string) bool {
+	caller, ok := r.Context().Value(syncCallerKey{}).(syncCaller)
+	if !ok {
+		return true
+	}
+	state := s.snapshotState()
+	cfg, err := config.LoadFile(state.ConfigPath)
+	if err != nil {
+		http.Error(w, "folder is not shared", http.StatusForbidden)
+		return false
+	}
+	var shared []string
+	found := false
+	for _, folder := range cfg.Folders {
+		if folder.ID == folderID {
+			shared = folder.SharedWith
+			found = true
+			break
+		}
+	}
+	protect := len(access.EnabledGroupIDs(cfg)) > 0
+	if !found || !access.MaySyncFolder(caller.role, shared, caller.peer.ID, protect) {
+		http.Error(w, "folder is not shared", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -1897,6 +1976,9 @@ func (s *Server) handleSyncJournal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "folder is required", http.StatusBadRequest)
 		return
 	}
+	if !s.allowSyncFolder(w, r, folderID) {
+		return
+	}
 	state := s.snapshotState()
 	after, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("afterCursor")), 10, 64)
 	entries, cursor, delta, err := foldershare.JournalDelta(state.ConfigPath, folderID, after)
@@ -2653,7 +2735,11 @@ func (s *Server) handleFolderBlockSubhashes(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) openFolderQueryFile(w http.ResponseWriter, r *http.Request) (http.File, os.FileInfo, bool) {
-	folder, ok := s.findFolder(r.URL.Query().Get("folder"))
+	folderID := r.URL.Query().Get("folder")
+	if !s.allowSyncFolder(w, r, folderID) {
+		return nil, nil, false
+	}
+	folder, ok := s.findFolder(folderID)
 	if !ok {
 		http.Error(w, "unknown folder", http.StatusNotFound)
 		return nil, nil, false

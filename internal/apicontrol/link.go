@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"filesyncengine/internal/access"
 	"filesyncengine/internal/advertise"
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
@@ -173,6 +174,7 @@ func redeemPairCode(ctx context.Context, configPath string, req api.PairCodeRede
 	if err := configops.UpsertPairedPeer(configPath, config.PeerConfig{
 		ID:                   configops.PairedPeerID(accepted.NodeName, accepted.DiscoveryID),
 		APIKey:               accepted.APIKey,
+		PeerSecret:           accepted.APIKey,
 		APICertificateSHA256: firstNonEmpty(accepted.CertificateSHA256, record.CertificateSHA256),
 		IdentityPublicKey:    accepted.DiscoveryID,
 		DHTPeerID:            merged.DHTPeerID,
@@ -211,9 +213,14 @@ func HandlePairCodeClaim(configPath string, req link.ClaimRequest) (link.ClaimRe
 	if err != nil {
 		return link.ClaimResponse{}, err
 	}
+	secret, err := access.NewPeerSecret()
+	if err != nil {
+		return link.ClaimResponse{}, err
+	}
 	if err := configops.UpsertPairedPeer(configPath, config.PeerConfig{
 		ID:                   configops.PairedPeerID(req.NodeName, req.DiscoveryID),
-		APIKey:               req.APIKey,
+		APIKey:               secret,
+		PeerSecret:           secret,
 		APICertificateSHA256: req.CertificateSHA256,
 		IdentityPublicKey:    req.DiscoveryID,
 		DHTPeerID:            req.Profile.DHTPeerID,
@@ -226,7 +233,7 @@ func HandlePairCodeClaim(configPath string, req link.ClaimRequest) (link.ClaimRe
 	return link.ClaimResponse{
 		DiscoveryID:       cfg.Identity.PublicKey,
 		NodeName:          cfg.NodeName,
-		APIKey:            cfg.API.Key,
+		APIKey:            secret,
 		CertificateSHA256: firstNonEmpty(record.CertificateSHA256, certificate),
 		Profile:           link.MergeProfiles(record.Profile(), local),
 	}, nil
