@@ -44,6 +44,7 @@ type meshState struct {
 	publicRelays      []string
 	reservedRelays    []string
 	discoveredRelays  []string
+	pinnedRelays      []string
 	bootstrapPeers    map[string]struct{}
 	identityRelays    []string
 	selfID            string
@@ -175,7 +176,8 @@ func HelperRelayAddrs() []string {
 // protocol, and dialing them cannot reach an identity peer.
 func OrderedRelays() []string {
 	mesh.mu.Lock()
-	public := append([]string(nil), mesh.publicRelays...)
+	public := append([]string(nil), mesh.pinnedRelays...)
+	public = append(public, mesh.publicRelays...)
 	public = append(public, mesh.discoveredRelays...)
 	own := ownRelayAddrsLocked()
 	boot := map[string]struct{}{}
@@ -191,6 +193,26 @@ func OrderedRelays() []string {
 		filtered = append(filtered, addr)
 	}
 	return DataRelays(own, filtered)
+}
+
+// NotePinnedRelay remembers a relay this node was configured to dial. It is
+// not evicted when public DHT discoveries fill the bounded set.
+func NotePinnedRelay(addr string) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" || !strings.Contains(addr, "/p2p/") || bootstrapRelay(addr) {
+		return
+	}
+	mesh.mu.Lock()
+	defer mesh.mu.Unlock()
+	for _, existing := range mesh.pinnedRelays {
+		if existing == addr {
+			return
+		}
+	}
+	mesh.pinnedRelays = append(mesh.pinnedRelays, addr)
+	if len(mesh.pinnedRelays) > maxReservedRelays {
+		mesh.pinnedRelays = mesh.pinnedRelays[len(mesh.pinnedRelays)-maxReservedRelays:]
+	}
 }
 
 // NoteDiscoveredRelay remembers a DHT relay in memory. The set is bounded

@@ -120,6 +120,10 @@ func TestProductionRouterReservesDiscoveredRelay(t *testing.T) {
 		}
 	}
 	bootstrap := relayAddr + "/p2p/" + relayHost.ID().String()
+	mesh.mu.Lock()
+	mesh.discoveredRelays = nil
+	mesh.pinnedRelays = nil
+	mesh.mu.Unlock()
 	router, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{DHTMode: "auto"})
 	if err != nil {
 		t.Fatal(err)
