@@ -1,0 +1,98 @@
+name: fse-five-peer
+services:
+  mac:
+    image: file-sync-engine:e2e
+    hostname: mac
+    environment:
+      FSE_NODE_NAME: mac
+      FSE_ADVERTISE_URL: https://mac:22420
+      FSE_DISCOVERY_DHT: "false"
+      FSE_DISCOVERY_LOCAL: "false"
+    ports:
+      - "22601:22420"
+    volumes:
+      - mac-config:/config
+      - mac-data:/data
+    networks:
+      mesh:
+        ipv4_address: 172.30.60.10
+  windows:
+    image: file-sync-engine:e2e
+    hostname: windows
+    environment:
+      FSE_NODE_NAME: windows
+      FSE_ADVERTISE_URL: https://windows:22420
+      FSE_DISCOVERY_DHT: "false"
+      FSE_DISCOVERY_LOCAL: "false"
+    ports:
+      - "22602:22420"
+    volumes:
+      - windows-config:/config
+      - windows-data:/data
+    networks:
+      mesh:
+        ipv4_address: 172.30.60.11
+  unraid-a:
+    image: file-sync-engine:e2e
+    hostname: unraid-a
+    environment:
+      FSE_NODE_NAME: unraid-a
+      FSE_ADVERTISE_URL: https://unraid-a:22420
+      FSE_DISCOVERY_DHT: "false"
+      FSE_DISCOVERY_LOCAL: "false"
+    ports:
+      - "22603:22420"
+    volumes:
+      - unraid-a-config:/config
+      - unraid-a-data:/data
+    networks:
+      mesh:
+        ipv4_address: 172.30.60.12
+  unraid-b:
+    image: file-sync-engine:e2e
+    hostname: unraid-b
+    environment:
+      FSE_NODE_NAME: unraid-b
+      FSE_ADVERTISE_URL: https://unraid-b:22420
+      FSE_DISCOVERY_DHT: "false"
+      FSE_DISCOVERY_LOCAL: "false"
+    ports:
+      - "22604:22420"
+    volumes:
+      - unraid-b-config:/config
+      - unraid-b-data:/data
+    networks:
+      mesh:
+        ipv4_address: 172.30.60.13
+  unraid-share:
+    image: file-sync-engine:e2e
+    hostname: unraid-share
+    environment:
+      FSE_NODE_NAME: unraid-share
+      FSE_ADVERTISE_URL: https://unraid-share:22420
+      FSE_DISCOVERY_DHT: "false"
+      FSE_DISCOVERY_LOCAL: "false"
+    ports:
+      - "22605:22420"
+    volumes:
+      - unraid-share-config:/config
+      - unraid-share-data:/data
+    networks:
+      mesh:
+        ipv4_address: 172.30.60.14
+volumes:
+  mac-config:
+  mac-data:
+  windows-config:
+  windows-data:
+  unraid-a-config:
+  unraid-a-data:
+  unraid-b-config:
+  unraid-b-data:
+  unraid-share-config:
+  unraid-share-data:
+networks:
+  mesh:
+    ipam:
+      config:
+        - subnet: 172.30.60.0/24
