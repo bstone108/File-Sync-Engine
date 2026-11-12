@@ -2,7 +2,7 @@ package advertise
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -193,32 +193,24 @@ func RefreshNow(path string) error {
 }
 
 func persistRefreshedURL(path string) (string, error) {
-	cfg, err := config.LoadFile(path)
-	if err != nil {
-		return "", err
-	}
-	before := cfg.API.AdvertiseURL
-	applyErr := Apply(&cfg, os.Getenv(EnvVar))
-	if cfg.API.AdvertiseURL == before {
+	var written string
+	var applyErr error
+	err := config.UpdateFile(path, func(cfg *config.Config) error {
+		before := cfg.API.AdvertiseURL
+		applyErr = Apply(cfg, os.Getenv(EnvVar))
+		if cfg.API.AdvertiseURL == before {
+			return config.ErrUnchanged
+		}
+		written = cfg.API.AdvertiseURL
+		return nil
+	})
+	if errors.Is(err, config.ErrUnchanged) {
 		return "", applyErr
 	}
-	// Reload so a concurrent config-sync write, such as a logging change, is
-	// not replaced by the copy this refresh loaded earlier.
-	latest, loadErr := config.LoadFile(path)
-	if loadErr != nil {
-		return "", loadErr
-	}
-	latest.API.AdvertiseURL = cfg.API.AdvertiseURL
-	latest.API.AdvertisePinned = cfg.API.AdvertisePinned
-	cfg = latest
-	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	if err := config.WriteFileAtomic(path, append(data, '\n'), 0o600); err != nil {
-		return "", err
-	}
-	return cfg.API.AdvertiseURL, applyErr
+	return written, applyErr
 }
 
 type portMapping struct {

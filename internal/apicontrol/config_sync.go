@@ -525,18 +525,13 @@ func applyOwnRecord(configPath string, replica configsync.Replica) error {
 	default:
 		return fmt.Errorf("logging.level %q is not a setting this engine applies", level)
 	}
-	cfg, err := config.LoadFile(configPath)
-	if err != nil {
-		return err
-	}
-	if string(cfg.Logging.Level) == level {
-		return nil
-	}
-	cfg.Logging.Level = config.LogLevel(level)
-	if err := cfg.Validate(); err != nil {
-		return err
-	}
-	return writePatchedConfig(configPath, cfg)
+	return config.UpdateFile(configPath, func(cfg *config.Config) error {
+		if string(cfg.Logging.Level) == level {
+			return nil
+		}
+		cfg.Logging.Level = config.LogLevel(level)
+		return cfg.Validate()
+	})
 }
 
 func identityGroupID(cfg config.Config) string {

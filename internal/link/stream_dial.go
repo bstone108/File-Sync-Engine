@@ -124,6 +124,14 @@ func ReleasePeer(peerID string) {
 	peerDialMu.Unlock()
 }
 
+// ReleaseAllPeers clears the redial gate. A new local file uses it so the
+// open libp2p session is asked for that file without waiting out a deferral.
+func ReleaseAllPeers() {
+	peerDialMu.Lock()
+	peerDialNext = map[string]time.Time{}
+	peerDialMu.Unlock()
+}
+
 func cachedDial(peerID string) (string, *http.Client, bool) {
 	if peerID == "" {
 		return "", nil, false
@@ -131,10 +139,19 @@ func cachedDial(peerID string) (string, *http.Client, bool) {
 	dialCacheMu.Lock()
 	defer dialCacheMu.Unlock()
 	entry, ok := dialCache[peerID]
-	if !ok || entry.client == nil || time.Since(entry.at) > 45*time.Second {
+	if !ok || entry.client == nil {
 		return "", nil, false
 	}
-	if entry.stream && !discovery.StreamConnected(peerID) {
+	if entry.stream {
+		if !discovery.StreamConnected(peerID) {
+			return "", nil, false
+		}
+		// The QUIC connection is the session. A quiet minute must not force a
+		// new dial before the journal can be read again.
+		nat.DefaultPaths.Touch(peerID)
+		return entry.base, entry.client, true
+	}
+	if time.Since(entry.at) > 45*time.Second {
 		return "", nil, false
 	}
 	return entry.base, entry.client, true

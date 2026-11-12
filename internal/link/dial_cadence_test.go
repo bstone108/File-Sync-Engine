@@ -42,6 +42,28 @@ func TestOfflinePeerDialIsPromptThenSixtySeconds(t *testing.T) {
 	}
 }
 
+func TestReleaseAllPeersUndoesADeferral(t *testing.T) {
+	forceDialGate = true
+	resetPeerDialSchedule()
+	t.Cleanup(func() {
+		forceDialGate = false
+		resetPeerDialSchedule()
+	})
+	if !allowPeerDial("kiki", nat.DefaultPaths) {
+		t.Fatal("the first dial was deferred")
+	}
+	peerDialMu.Lock()
+	peerDialBurst["kiki"] = time.Now().Add(-time.Second)
+	peerDialMu.Unlock()
+	if allowPeerDial("kiki", nat.DefaultPaths) {
+		t.Fatal("the gate did not hold")
+	}
+	ReleaseAllPeers()
+	if !allowPeerDial("kiki", nat.DefaultPaths) {
+		t.Fatal("a new local file did not open the gate")
+	}
+}
+
 func TestForeignPrivateAddressIsNotDialed(t *testing.T) {
 	const id = "12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU"
 	if KeepPairedAddress("/ip4/192.168.1.101/tcp/22420/https/p2p/"+id, id) {
