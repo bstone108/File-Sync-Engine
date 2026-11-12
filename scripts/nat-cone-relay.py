@@ -166,7 +166,7 @@ def main():
     compose("start", "engine-a", "engine-b")
     for service in ENGINES:
         wait_api(service, infos[service]["key"])
-    compose("exec", "-T", "engine-a", "sh", "-c", "printf nat-relayed > /data/shared/note.txt")
+    compose("exec", "-T", "-u", "0", "engine-a", "sh", "-c", "mkdir -p /data/shared && printf nat-relayed > /data/shared/note.txt && chmod 666 /data/shared/note.txt")
     deadline = time.time() + 180
     while time.time() < deadline:
         got = compose("exec", "-T", "engine-b", "sh", "-c", "cat /data/shared/note.txt", check=False)

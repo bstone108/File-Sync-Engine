@@ -116,9 +116,17 @@ func TestRestartRepublishesCodeForASecondLookupAndDHT(t *testing.T) {
 		t.Fatal("DHT provider payload was not republished after restart")
 	}
 
-	redeemer, err := ListenLocalDirectory("127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	var redeemer *LocalDirectory
+	var listenErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		redeemer, listenErr = ListenLocalDirectory("127.0.0.1:0")
+		if listenErr == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if listenErr != nil {
+		t.Fatal(listenErr)
 	}
 	t.Cleanup(func() { _ = redeemer.Close() })
 	redeemer.SetDialTargets([]string{restoredLocal.Addr()})
