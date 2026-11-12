@@ -228,7 +228,7 @@ func (r *Libp2pDHTRouter) usingPublicBootstrap() bool {
 
 func noteRelayCandidate(info peer.AddrInfo) {
 	for _, addr := range relayDialAddrs(info) {
-		NoteDiscoveredRelay(addr)
+		NotePinnedRelay(addr)
 	}
 }
 
