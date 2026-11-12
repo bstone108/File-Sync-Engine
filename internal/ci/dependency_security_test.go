@@ -14,9 +14,10 @@ func TestGoModulesPinPatchedSecurityDependencyVersions(t *testing.T) {
 		want string
 	}{
 		{"go.mod", "golang.org/x/crypto v0.52.0"},
-		{filepath.Join("desktop-gui", "go.mod"), "golang.org/x/crypto v0.53.0"},
-		{filepath.Join("desktop-gui", "go.mod"), "golang.org/x/net v0.56.0"},
-		{filepath.Join("desktop-gui", "go.mod"), "github.com/labstack/echo/v4 v4.15.4"},
+		{filepath.Join("desktop-gui", "go.mod"), "golang.org/x/crypto v0.57.0"},
+		{filepath.Join("desktop-gui", "go.mod"), "golang.org/x/net v0.60.0"},
+		{filepath.Join("desktop-gui", "go.mod"), "github.com/wailsapp/wails/v2 v2.17.1"},
+		{filepath.Join("desktop-gui", "go.mod"), "github.com/labstack/echo/v4 v4.16.3"},
 		{"go.mod", "github.com/quic-go/quic-go v0.60.0"},
 		{"go.mod", "github.com/quic-go/webtransport-go v0.11.1"},
 		{"go.mod", "github.com/golang/glog v1.2.4"},
@@ -28,7 +29,8 @@ func TestGoModulesPinPatchedSecurityDependencyVersions(t *testing.T) {
 		{filepath.Join("desktop-gui", "package.json"), "\"svelte\": \"^5.56.3\""},
 		{filepath.Join("desktop-gui", "package-lock.json"), "\"node_modules/postcss\": {\n      \"version\": \"8.5.32\""},
 		{filepath.Join("desktop-gui", "package-lock.json"), "\"node_modules/source-map-js\": {\n      \"version\": \"1.2.2\""},
-		{filepath.Join("desktop-gui", "package.json"), "\"vite\": \"^6.4.2\""},
+		{filepath.Join("desktop-gui", "package.json"), "\"vite\": \"^6.4.6\""},
+		{filepath.Join("desktop-gui", "package-lock.json"), "\"node_modules/vite\": {\n      \"version\": \"6.4.6\""},
 		{filepath.Join("desktop-gui", "package.json"), "\"@sveltejs/vite-plugin-svelte\": \"^6.2.4\""},
 		{filepath.Join("desktop-gui", "package-lock.json"), "\"node_modules/nanoid\": {\n      \"version\": \"3.3.20\""},
 		{filepath.Join("desktop-gui", "package-lock.json"), "\"node_modules/devalue\": {\n      \"version\": \"5.9.4\""},

@@ -4,10 +4,10 @@
 # builds use target-native GTK/WebKit headers and libraries instead of mixing
 # x86_64 pkg-config output into an aarch64 cross compile. Do not install these
 # tools on the Hermes host.
-FROM --platform=linux/arm64 golang:1.25-bookworm
+FROM --platform=linux/arm64 golang:1.26-bookworm
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG WAILS_VERSION=v2.10.2
+ARG WAILS_VERSION=v2.17.1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -32,7 +32,7 @@ ENV FSE_DESKTOP_WAILS_TARGETS="linux/arm64"
 ENV FSE_DESKTOP_WAILS_NATIVE_LINUX_ARM64=1
 
 # Keep the pinned command visible for structural release-contract tests:
-# github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+# github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
 RUN go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
 
 WORKDIR /tmp/work

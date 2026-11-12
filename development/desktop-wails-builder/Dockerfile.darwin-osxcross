@@ -2,7 +2,7 @@
 # Isolated Darwin/macOS Wails builder layer for the file synchronization engine.
 # This layer intentionally requires a caller-supplied Apple SDK archive. Do not
 # commit SDK contents or download them from this repository/script.
-FROM fse-desktop-wails-builder:debian12-wails2.10.2
+FROM fse-desktop-wails-builder:debian12-wails2.17.1
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG OSXCROSS_REPO=https://github.com/tpoechtrager/osxcross.git

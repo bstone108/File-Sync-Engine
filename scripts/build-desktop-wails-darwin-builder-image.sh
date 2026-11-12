@@ -17,7 +17,7 @@ Arguments:
   [image-tag]    Optional output image tag.
 
 Default image tag:
-  fse-desktop-wails-builder:debian12-wails2.10.2-darwin-osxcross
+  fse-desktop-wails-builder:debian12-wails2.17.1-darwin-osxcross
 
 Environment:
   FSE_DESKTOP_CONTAINER_RUNTIME  docker or podman (default: docker)
@@ -41,7 +41,7 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SDK_TARBALL="${1:-${FSE_MACOS_SDK_TARBALL:-}}"
-IMAGE_TAG="${2:-fse-desktop-wails-builder:debian12-wails2.10.2-darwin-osxcross}"
+IMAGE_TAG="${2:-fse-desktop-wails-builder:debian12-wails2.17.1-darwin-osxcross}"
 RUNTIME="${FSE_DESKTOP_CONTAINER_RUNTIME:-docker}"
 CACHE_ROOT="/development/fse-desktop-wails-builder-cache"
 CONTEXT_DIR="${FSE_DARWIN_BUILDER_CONTEXT_DIR:-/development/fse-desktop-wails-builder-cache/darwin-osxcross-context}"

@@ -121,7 +121,7 @@ jobs:
         working-directory: desktop-gui
         shell: bash
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
           export PATH="$(go env GOPATH)/bin:$PATH"
           export FSE_DESKTOP_VERSION="ci-${GITHUB_SHA::12}"
           ../scripts/stamp-desktop-gui-version.sh "$FSE_DESKTOP_VERSION" .
@@ -165,7 +165,7 @@ jobs:
         shell: pwsh
         working-directory: desktop-gui
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
           $env:Path = "$(go env GOPATH)\\bin;$env:Path"
           wails generate module
           npm ci
@@ -186,8 +186,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: desktop-gui/go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            desktop-gui/go.sum
       - name: Set up Node 22
         uses: actions/setup-node@v6
         with:
@@ -198,7 +201,7 @@ jobs:
         shell: pwsh
         run: |
           go build -trimpath -o fse.exe ./cmd/fse
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
           $env:Path = "$(go env GOPATH)\\bin;$env:Path"
           Push-Location desktop-gui
           wails generate module

@@ -4,7 +4,7 @@
 # that still ship the webkit2gtk-4.0 ABI/runtime packages.
 FROM node:22-bookworm AS node-runtime
 
-FROM golang:1.25-bookworm
+FROM golang:1.26-bookworm
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
@@ -13,11 +13,11 @@ COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
-LABEL org.filesyncengine.desktop.wails.go-version="1.25.7" \
+LABEL org.filesyncengine.desktop.wails.go-version="1.26.11" \
       org.filesyncengine.desktop.wails.node-major="22"
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG WAILS_VERSION=v2.10.2
+ARG WAILS_VERSION=v2.17.1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -43,7 +43,7 @@ ENV FSE_DESKTOP_LINUX_WEBKIT_API=4.0
 ENV FSE_DESKTOP_WAILS_TARGETS="linux/amd64 linux/arm64"
 
 # Keep the pinned command visible for structural release-contract tests:
-# github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+# github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
 RUN go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
 
 RUN pkg-config --exists gtk+-3.0 webkit2gtk-4.0

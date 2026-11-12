@@ -213,7 +213,7 @@ func TestDesktopGUIWailsBuildRejectsStaleBuilderImagesBeforeWindowsArtifactBuild
 	imageBuild := readRequiredFile(t, filepath.Join(root, "scripts", "build-desktop-wails-builder-image.sh"))
 
 	for _, want := range []string{
-		`org.filesyncengine.desktop.wails.go-version="1.25.7"`,
+		`org.filesyncengine.desktop.wails.go-version="1.26.11"`,
 		`org.filesyncengine.desktop.wails.node-major="22"`,
 	} {
 		if !strings.Contains(dockerfile, want) {
@@ -221,7 +221,7 @@ func TestDesktopGUIWailsBuildRejectsStaleBuilderImagesBeforeWindowsArtifactBuild
 		}
 	}
 	for _, want := range []string{
-		"REQUIRED_WAILS_BUILDER_GO_VERSION=1.25.7",
+		"REQUIRED_WAILS_BUILDER_GO_VERSION=1.26.11",
 		"REQUIRED_WAILS_BUILDER_NODE_MAJOR=22",
 		"verify_builder_image_runtime_labels",
 		"stale or incompatible Wails builder image",
@@ -240,7 +240,7 @@ func TestLegacyWebKitWailsBuilderUsesSupportedNodeRuntimeAndLabels(t *testing.T)
 		"COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node",
 		"COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules",
 		"ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm",
-		`org.filesyncengine.desktop.wails.go-version="1.25.7"`,
+		`org.filesyncengine.desktop.wails.go-version="1.26.11"`,
 		`org.filesyncengine.desktop.wails.node-major="22"`,
 	} {
 		if !strings.Contains(legacyDockerfile, want) {

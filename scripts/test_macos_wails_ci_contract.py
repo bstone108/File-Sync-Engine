@@ -49,7 +49,7 @@ def main() -> None:
         "runner: macos-15",
         "go-version-file: desktop-gui/go.mod",
         "node-version: 22",
-        "github.com/wailsapp/wails/v2/cmd/wails@v2.10.2",
+        "github.com/wailsapp/wails/v2/cmd/wails@v2.17.1",
         "wails generate module",
         "npm ci",
         "npm run typecheck",

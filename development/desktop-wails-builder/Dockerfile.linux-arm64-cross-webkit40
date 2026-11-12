@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Legacy WebKitGTK 4.0 linux-arm64 Wails cross-builder for amd64 hosts.
 # Build this after the legacy WebKitGTK 4.0 base builder exists.
-FROM fse-desktop-wails-builder:debian12-wails2.10.2-linux-webkit40
+FROM fse-desktop-wails-builder:debian12-wails2.17.1-linux-webkit40
 
 ARG DEBIAN_FRONTEND=noninteractive
 

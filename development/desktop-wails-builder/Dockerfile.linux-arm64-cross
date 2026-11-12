@@ -3,7 +3,7 @@
 # This layers ARM64 GTK/WebKit pkg-config/development libraries onto the
 # project-owned base Wails builder so scripts/build-desktop-gui-wails.sh can
 # produce linux/arm64 output without running an ARM64 container through QEMU.
-FROM fse-desktop-wails-builder:debian12-wails2.10.2
+FROM fse-desktop-wails-builder:debian12-wails2.17.1
 
 ARG DEBIAN_FRONTEND=noninteractive
 

@@ -162,7 +162,7 @@ jobs:
             webkit_api: '4.1'
             webkit_slug: webkit41
             webkit_dockerfile: development/desktop-wails-builder/Dockerfile
-            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.10.2
+            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.17.1
           - target: linux-arm64
             goarch: arm64
             runner: ubuntu-24.04-arm
@@ -170,7 +170,7 @@ jobs:
             webkit_api: '4.1'
             webkit_slug: webkit41
             webkit_dockerfile: development/desktop-wails-builder/Dockerfile
-            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.10.2
+            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.17.1
           - target: linux-amd64
             goarch: amd64
             runner: ubuntu-latest
@@ -178,7 +178,7 @@ jobs:
             webkit_api: '4.0'
             webkit_slug: webkit40
             webkit_dockerfile: development/desktop-wails-builder/Dockerfile.linux-webkit40
-            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.10.2-linux-webkit40
+            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.17.1-linux-webkit40
           - target: linux-arm64
             goarch: arm64
             runner: ubuntu-24.04-arm
@@ -186,7 +186,7 @@ jobs:
             webkit_api: '4.0'
             webkit_slug: webkit40
             webkit_dockerfile: development/desktop-wails-builder/Dockerfile.linux-webkit40
-            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.10.2-linux-webkit40
+            webkit_builder_image: fse-desktop-wails-builder:debian12-wails2.17.1-linux-webkit40
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -292,19 +292,19 @@ jobs:
         shell: bash
         run: |
           docker build \
-            -t fse-desktop-wails-builder:debian12-wails2.10.2 \
+            -t fse-desktop-wails-builder:debian12-wails2.17.1 \
             -f development/desktop-wails-builder/Dockerfile \
             development/desktop-wails-builder
           docker build \
-            -t fse-desktop-wails-builder:debian12-wails2.10.2-windows-arm64-llvm-mingw \
+            -t fse-desktop-wails-builder:debian12-wails2.17.1-windows-arm64-llvm-mingw \
             -f development/desktop-wails-builder/Dockerfile.windows-arm64-llvm-mingw \
             development/desktop-wails-builder
 
       - name: Build Windows desktop GUI Wails outputs
         env:
-          FSE_DESKTOP_WAILS_BUILDER_IMAGE: fse-desktop-wails-builder:debian12-wails2.10.2
-          FSE_DESKTOP_WAILS_BUILDER_IMAGE_WINDOWS_AMD64: fse-desktop-wails-builder:debian12-wails2.10.2
-          FSE_DESKTOP_WAILS_BUILDER_IMAGE_WINDOWS_ARM64: fse-desktop-wails-builder:debian12-wails2.10.2-windows-arm64-llvm-mingw
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE: fse-desktop-wails-builder:debian12-wails2.17.1
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE_WINDOWS_AMD64: fse-desktop-wails-builder:debian12-wails2.17.1
+          FSE_DESKTOP_WAILS_BUILDER_IMAGE_WINDOWS_ARM64: fse-desktop-wails-builder:debian12-wails2.17.1-windows-arm64-llvm-mingw
           FSE_DESKTOP_WAILS_TARGETS: windows/amd64 windows/arm64
         run: scripts/build-desktop-gui-wails.sh "${{ steps.version.outputs.version }}"
 
@@ -417,7 +417,7 @@ jobs:
       - name: Install Wails CLI and packaging tools
         shell: bash
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Package desktop engine resources
