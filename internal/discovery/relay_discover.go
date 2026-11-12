@@ -20,29 +20,29 @@ import (
 )
 
 var (
-	rendezvousMu     sync.Mutex
-	rendezvousSecret string
-	discoverLogMu    sync.Mutex
-	discoverLogAt    = map[string]time.Time{}
+	rendezvousMu    sync.Mutex
+	rendezvousGroup string
+	discoverLogMu   sync.Mutex
+	discoverLogAt   = map[string]time.Time{}
 )
 
-// SetRendezvousSecret selects the DHT namespace both identity peers advertise
-// under. It is a hash of the shared group token, so the peers find each
-// other's current relay circuits without sharing a relay list.
-func SetRendezvousSecret(secret string) {
+// SetRendezvousGroup selects the DHT namespace both members of an identity
+// group advertise under. The namespace is derived from the group id so the
+// peers find each other's current relay circuits.
+func SetRendezvousGroup(groupID string) {
 	rendezvousMu.Lock()
-	rendezvousSecret = strings.TrimSpace(secret)
+	rendezvousGroup = strings.TrimSpace(groupID)
 	rendezvousMu.Unlock()
 }
 
 func currentRendezvous() string {
 	rendezvousMu.Lock()
-	secret := rendezvousSecret
+	groupID := rendezvousGroup
 	rendezvousMu.Unlock()
-	if secret == "" {
+	if groupID == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte("fse-relay-rendezvous/v1\n" + secret))
+	sum := sha256.Sum256([]byte("fse-relay-rendezvous/v1\n" + groupID))
 	return "fse-relay/" + hex.EncodeToString(sum[:8])
 }
 
