@@ -21,16 +21,19 @@ func TestShareOnlyCannotManageOrSeeUnsharedFolders(t *testing.T) {
 	if MaySeeConfig(share) || !MaySeeConfig(identity) {
 		t.Fatal("config visibility")
 	}
-	if !MaySyncFolder(identity, nil, "a2") {
+	if !MaySyncFolder(identity, nil, "a2", true) {
 		t.Fatal("identity peers sync a folder that is not limited")
 	}
-	if MaySyncFolder(share, nil, "guest") {
+	if MaySyncFolder(share, nil, "guest", true) {
 		t.Fatal("share-only peer saw a folder that was not explicitly shared")
 	}
-	if !MaySyncFolder(share, []string{"guest"}, "guest") {
+	if !MaySyncFolder(share, nil, "guest", false) {
+		t.Fatal("a paired peer was excluded before any identity group existed")
+	}
+	if !MaySyncFolder(share, []string{"guest"}, "guest", true) {
 		t.Fatal("explicit share was refused")
 	}
-	if MaySyncFolder(share, []string{"a2"}, "guest") {
+	if MaySyncFolder(share, []string{"a2"}, "guest", true) {
 		t.Fatal("share-only peer saw a folder shared with someone else")
 	}
 	if GrantsIdentityTrust(share) || !GrantsIdentityTrust(identity) {

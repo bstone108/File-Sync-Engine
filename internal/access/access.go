@@ -62,27 +62,26 @@ func MaySeeConfig(role Role) bool {
 }
 
 // MaySyncFolder reports whether role may read or write one folder.
-// Identity peers follow the folder allow-list. An empty allow-list means every
-// identity peer, and no share-only peer. A share-only peer must be named.
-func MaySyncFolder(role Role, sharedWith []string, peerID string) bool {
+// An explicit sharedWith list is the allow-list for every role. An empty list
+// includes identity peers. It includes a share-only peer only when this engine
+// has no identity group to protect. Once a group is enabled, a share-only peer
+// must be named.
+func MaySyncFolder(role Role, sharedWith []string, peerID string, protectIdentity bool) bool {
 	if role == RoleOwner {
 		return true
 	}
-	listed := false
 	for _, id := range sharedWith {
 		if strings.TrimSpace(id) != "" && id == peerID {
-			listed = true
-			break
+			return true
 		}
 	}
-	switch role {
-	case RoleIdentity:
-		return len(sharedWith) == 0 || listed
-	case RoleShare:
-		return listed
-	default:
+	if len(sharedWith) > 0 {
 		return false
 	}
+	if role == RoleIdentity {
+		return true
+	}
+	return role == RoleShare && !protectIdentity
 }
 
 // GrantsIdentityTrust is false when the introducer is only a folder share.

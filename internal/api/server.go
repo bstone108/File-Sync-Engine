@@ -1207,7 +1207,8 @@ func (s *Server) allowSyncFolder(w http.ResponseWriter, r *http.Request, folderI
 			break
 		}
 	}
-	if !found || !access.MaySyncFolder(caller.role, shared, caller.peer.ID) {
+	protect := len(access.EnabledGroupIDs(cfg)) > 0
+	if !found || !access.MaySyncFolder(caller.role, shared, caller.peer.ID, protect) {
 		http.Error(w, "folder is not shared", http.StatusForbidden)
 		return false
 	}

@@ -603,7 +603,7 @@ func peersFor(cfg config.Config, folder config.FolderConfig) []config.PeerConfig
 		}
 		if limited {
 			role := access.RoleFor(groups, peer.IdentityGroupID)
-			if !access.MaySyncFolder(role, folder.SharedWith, peer.ID) {
+			if !access.MaySyncFolder(role, folder.SharedWith, peer.ID, true) {
 				continue
 			}
 		}
