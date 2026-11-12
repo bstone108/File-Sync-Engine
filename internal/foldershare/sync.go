@@ -69,6 +69,7 @@ func Reconcile(cfg config.Config, configPath string, paused func(folderID string
 				"error":  err.Error(),
 			})
 		}
+		startPeerSync(cfg, configPath, folder)
 	}
 }
 
@@ -127,6 +128,9 @@ func JournalPath(configPath, folderID string) string {
 }
 
 func reconcileFolder(cfg config.Config, configPath string, folder config.FolderConfig) error {
+	mu := journalLock(configPath, folder.ID)
+	mu.Lock()
+	defer mu.Unlock()
 	entries, err := LoadJournal(configPath, folder.ID)
 	if err != nil {
 		return err
@@ -151,35 +155,7 @@ func reconcileFolder(cfg config.Config, configPath string, folder config.FolderC
 	if folder.Mode == config.ModeSendOnly {
 		return nil
 	}
-	peers := peersFor(cfg, folder)
-	for _, peer := range peers {
-		remote, remoteCursor, err := fetchRemoteJournal(configPath, peer, folder.ID)
-		if err != nil {
-			if errors.Is(err, link.ErrDialDeferred) {
-				continue
-			}
-			structuredlog.Event("error", "folder.sync.journal_failed", "remote journal was not read", map[string]any{
-				"folder": folder.ID,
-				"peer":   peer.ID,
-				"error":  err.Error(),
-			})
-			continue
-		}
-		if err := applyRemote(peer, folder, byPath, remote); err != nil {
-			structuredlog.Event("error", "folder.sync.apply_failed", "some remote files were not applied", map[string]any{
-				"folder": folder.ID,
-				"peer":   peer.ID,
-				"error":  err.Error(),
-			})
-			continue
-		}
-		// Advance only after every entry in this delta applied. A failed file
-		// stays above the saved cursor and is requested again.
-		if remoteCursor > 0 {
-			rememberPeerCursor(configPath, folder.ID, peer.ID, remoteCursor)
-		}
-	}
-	return saveJournal(configPath, folder.ID, byPath)
+	return nil
 }
 
 func absorbLocal(root, origin string, byPath map[string]Entry) error {

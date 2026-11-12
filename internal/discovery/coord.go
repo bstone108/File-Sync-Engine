@@ -302,7 +302,8 @@ func ReservedRelayCircuits(target string) []string {
 		return nil
 	}
 	mesh.mu.Lock()
-	addrs := append([]string(nil), mesh.reservedRelays...)
+	addrs := append([]string(nil), mesh.discoveredRelays...)
+	addrs = append(addrs, mesh.reservedRelays...)
 	mesh.mu.Unlock()
 	if raw := strings.TrimSpace(os.Getenv("FSE_STATIC_RELAYS")); raw != "" {
 		raw = strings.ReplaceAll(raw, ",", " ")
@@ -310,6 +311,9 @@ func ReservedRelayCircuits(target string) []string {
 	}
 	var out []string
 	for _, raw := range addrs {
+		if bootstrapRelay(raw) {
+			continue
+		}
 		if circuit := circuitTo(raw, target); circuit != "" {
 			out = append(out, circuit)
 		}

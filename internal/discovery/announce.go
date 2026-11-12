@@ -365,7 +365,7 @@ func announcedMultiaddrs(hosts []string, apiURL string, publishedPort int) []ma.
 	for _, host := range hosts {
 		out = append(out, hostMultiaddrs(host, publishedPort)...)
 	}
-	if api := apiMultiaddr(apiURL); api != nil {
+	if api := apiMultiaddr(apiURL); api != nil && !advertise.ForeignPrivateHost(advertiseHost(apiURL)) {
 		out = append(out, api)
 	}
 	return out

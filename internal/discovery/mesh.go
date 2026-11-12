@@ -43,6 +43,8 @@ type meshState struct {
 	maxReservations   int
 	publicRelays      []string
 	reservedRelays    []string
+	discoveredRelays  []string
+	bootstrapPeers    map[string]struct{}
 	identityRelays    []string
 	selfID            string
 	punchNodes        []MeshNode
@@ -167,18 +169,103 @@ func HelperRelayAddrs() []string {
 	return out
 }
 
-// OrderedRelays returns same-identity relays when any exist. Public relays,
-// including the default bootstrap list, are used only when no own relay can
-// carry the reservation. Those public nodes are reservation candidates, not
-// bulk-transfer paths.
+// OrderedRelays returns same-identity relays when any exist. Otherwise it
+// returns configured public relays and relays discovered in the DHT. The
+// public bootstrap list is not a relay: those nodes do not speak the hop
+// protocol, and dialing them cannot reach an identity peer.
 func OrderedRelays() []string {
 	mesh.mu.Lock()
-	defer mesh.mu.Unlock()
-	public := mesh.publicRelays
-	if len(public) == 0 {
-		public = append([]string(nil), DefaultPublicDHTBootstrapPeers...)
+	public := append([]string(nil), mesh.publicRelays...)
+	public = append(public, mesh.discoveredRelays...)
+	own := ownRelayAddrsLocked()
+	boot := map[string]struct{}{}
+	for id := range mesh.bootstrapPeers {
+		boot[id] = struct{}{}
 	}
-	return DataRelays(ownRelayAddrsLocked(), public)
+	mesh.mu.Unlock()
+	var filtered []string
+	for _, addr := range public {
+		if _, ok := boot[relayPeerID(addr)]; ok {
+			continue
+		}
+		filtered = append(filtered, addr)
+	}
+	return DataRelays(own, filtered)
+}
+
+// NoteDiscoveredRelay remembers a DHT relay in memory. The set is bounded
+// and is never written to config.
+func NoteDiscoveredRelay(addr string) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" || !strings.Contains(addr, "/p2p/") || strings.Contains(addr, "p2p-circuit") {
+		return
+	}
+	if bootstrapRelay(addr) {
+		return
+	}
+	mesh.mu.Lock()
+	defer mesh.mu.Unlock()
+	next := []string{addr}
+	for _, existing := range mesh.discoveredRelays {
+		if existing == addr {
+			continue
+		}
+		next = append(next, existing)
+		if len(next) >= maxReservedRelays {
+			break
+		}
+	}
+	if len(next) > maxReservedRelays {
+		next = next[:maxReservedRelays]
+	}
+	mesh.discoveredRelays = next
+}
+
+// NoteBootstrapPeer records a DHT bootstrap peer so it is not used as a relay.
+func NoteBootstrapPeer(id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	mesh.mu.Lock()
+	defer mesh.mu.Unlock()
+	if mesh.bootstrapPeers == nil {
+		mesh.bootstrapPeers = map[string]struct{}{}
+	}
+	mesh.bootstrapPeers[id] = struct{}{}
+}
+
+func bootstrapRelay(addr string) bool {
+	return isBootstrapID(relayPeerID(addr))
+}
+
+func isBootstrapID(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	mesh.mu.Lock()
+	defer mesh.mu.Unlock()
+	_, ok := mesh.bootstrapPeers[id]
+	return ok
+}
+
+func relayPeerID(addr string) string {
+	addr = strings.TrimSpace(addr)
+	cut := strings.Index(addr, "/p2p-circuit")
+	head := addr
+	if cut > 0 {
+		head = addr[:cut]
+	}
+	parts := strings.Split(head, "/p2p/")
+	if len(parts) < 2 {
+		return ""
+	}
+	id := parts[len(parts)-1]
+	if i := strings.Index(id, "/"); i >= 0 {
+		id = id[:i]
+	}
+	return strings.TrimSpace(id)
 }
 
 // UnlimitedRelayAddrs returns same-identity relays first, then explicitly
@@ -442,6 +529,12 @@ func watchConnections(n network.Network) {
 			addr := ""
 			if conn.RemoteMultiaddr() != nil {
 				addr = conn.RemoteMultiaddr().String()
+			}
+			if strings.Contains(addr, "p2p-circuit") && !authenticatedDialbackPeer(conn.RemotePeer()) {
+				// A relayed connection to a stranger starts DCUtR. Only a
+				// configured identity peer is punched.
+				_ = conn.Close()
+				return
 			}
 			stat := conn.Stat()
 			source := remoteReachabilitySource(0, conn.RemotePeer(), conn.LocalPeer(), stat.Direction == network.DirInbound, strings.Contains(addr, "p2p-circuit"), authenticatedDialbackPeer(conn.RemotePeer()))

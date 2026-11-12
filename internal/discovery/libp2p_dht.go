@@ -151,6 +151,8 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	go watchAutoRelay(h)
 	go router.watchAutoNAT()
 	go router.republishWhenRelayReserved()
+	go router.watchPublicRelays()
+	go router.watchIdentifiedRelays()
 	if opts.Announce {
 		structuredlog.Event("info", "libp2p.announce", "libp2p is advertising the published port", map[string]any{
 			"peerId":        h.ID().String(),
@@ -524,6 +526,9 @@ func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value
 			return
 		}
 		for _, info := range preferredRelayInfos() {
+			if isBootstrapID(info.ID.String()) {
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -534,54 +539,9 @@ func relayCandidates(ctx context.Context, num int, hostBox, dhtBox *atomic.Value
 				return
 			}
 		}
-		// Connected DHT peers are public coordinators. They are not relay
-		// candidates while one of our own engines can coordinate the punch.
-		if !PublicRelayFallback() {
-			return
-		}
-		if hostBox == nil || dhtBox == nil {
-			return
-		}
-		h, _ := hostBox.Load().(host.Host)
-		if h == nil {
-			return
-		}
-		seen := map[peer.ID]struct{}{}
-		send := func(id peer.ID) bool {
-			if id == "" || id == h.ID() {
-				return true
-			}
-			if _, ok := seen[id]; ok {
-				return true
-			}
-			seen[id] = struct{}{}
-			info := peer.AddrInfo{ID: id, Addrs: h.Peerstore().Addrs(id)}
-			select {
-			case <-ctx.Done():
-				return false
-			case ch <- info:
-			}
-			return true
-		}
-		// Connected peers include the bootstrap dial, which may not be in the
-		// routing table yet. Those peers are the only relay candidates when
-		// no relay was configured.
-		for _, id := range h.Network().Peers() {
-			num--
-			if num < 0 || !send(id) {
-				return
-			}
-		}
-		kad, _ := dhtBox.Load().(*dht.IpfsDHT)
-		if kad == nil || kad.RoutingTable() == nil {
-			return
-		}
-		for _, id := range kad.RoutingTable().ListPeers() {
-			num--
-			if num < 0 || !send(id) {
-				return
-			}
-		}
+		// Random DHT peers are not relays. Reserving on them opens DCUtR to
+		// strangers and never reaches the identity peer. Discovered hop relays
+		// arrive through preferredRelayInfos.
 	}()
 	return ch
 }
@@ -614,6 +574,11 @@ func (r *Libp2pDHTRouter) connectBootstrap(ctx context.Context, infos []peer.Add
 		err := r.host.Connect(connectCtx, info)
 		cancel()
 		if err == nil {
+			if r.usingPublicBootstrap() {
+				NoteBootstrapPeer(info.ID.String())
+			} else {
+				noteRelayCandidate(info)
+			}
 			structuredlog.Event("info", "libp2p.bootstrap.connected", "libp2p bootstrap dial connected", map[string]any{
 				"address": lastAddrOf(info),
 				"peer":    info.ID.String(),

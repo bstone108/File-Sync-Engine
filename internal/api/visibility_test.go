@@ -268,3 +268,24 @@ func TestTransferCountsDoNotClaimDirectWhenNothingMoved(t *testing.T) {
 		t.Fatalf("item = %+v", item)
 	}
 }
+
+func TestPinnedAdvertiseURLReplacesTheLiveStatusImmediately(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	cfg := config.Config{NodeName: "kiki", API: config.APIConfig{Listen: "127.0.0.1:22420", Key: "secret", AdvertiseURL: "https://kiki.example:22420", AdvertisePinned: true}}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(State{ConfigPath: configPath, AdvertiseURL: "https://192.168.1.101:22420"}, "secret")
+	req := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
+	req.Header.Set("X-FSE-API-Key", "secret")
+	w := httptest.NewRecorder()
+	server.Router().ServeHTTP(w, req)
+	if strings.Contains(w.Body.String(), "192.168.1.101") || !strings.Contains(w.Body.String(), "https://kiki.example:22420") {
+		t.Fatalf("status = %s", w.Body.String())
+	}
+}

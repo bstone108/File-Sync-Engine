@@ -268,6 +268,24 @@ func allowPeerDial(peerID string, paths *nat.Registry) bool {
 	return true
 }
 
+// FinishPeerPass closes the in-pass dial burst and schedules the next
+// offline or live attempt. A transfer that is still reading blocks extends
+// the burst until this is called.
+func FinishPeerPass(peerID string, connected bool) {
+	peerID = strings.TrimSpace(peerID)
+	if peerID == "" || (testing.Testing() && !forceDialGate) {
+		return
+	}
+	interval := discovery.OfflineProbeInterval
+	if connected {
+		interval = discovery.LiveProbeInterval
+	}
+	peerDialMu.Lock()
+	peerDialNext[peerID] = time.Now().Add(interval)
+	peerDialBurst[peerID] = time.Time{}
+	peerDialMu.Unlock()
+}
+
 func resetPeerDialSchedule() {
 	peerDialMu.Lock()
 	peerDialNext = map[string]time.Time{}

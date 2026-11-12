@@ -237,3 +237,11 @@ func TestProductionRouterReusesThePublishedPort(t *testing.T) {
 		t.Fatalf("listen addrs = %v", multiaddrStrings(first.host.Addrs()))
 	}
 }
+
+func TestAnnouncedAPISkipsForeignPrivateLAN(t *testing.T) {
+	for _, addr := range announcedMultiaddrs(nil, "https://192.168.1.101:22420", 22421) {
+		if strings.Contains(addr.String(), "192.168.1.101") {
+			t.Fatalf("announced a foreign private API address: %s", addr)
+		}
+	}
+}

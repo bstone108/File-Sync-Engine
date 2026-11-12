@@ -27,6 +27,9 @@ func HandleConfigUpdate(configPath string, req api.ConfigUpdateRequest) (api.Con
 	if err := recordOwnSettings(configPath, cfg); err != nil {
 		return api.ConfigUpdateResponse{}, err
 	}
+	if cfg.API.AdvertisePinned && strings.TrimSpace(cfg.API.AdvertiseURL) != "" {
+		advertise.Notify(cfg.API.AdvertiseURL)
+	}
 	return api.ConfigUpdateResponse{Status: "accepted", Message: configUpdateAcceptedMessage}, nil
 }
 
@@ -47,6 +50,9 @@ func HandleConfigUpdateWithStore(configPath string, store state.JSONStore, req a
 	}
 	if err := recordOwnSettings(configPath, cfg); err != nil {
 		return api.ConfigUpdateResponse{}, err
+	}
+	if cfg.API.AdvertisePinned && strings.TrimSpace(cfg.API.AdvertiseURL) != "" {
+		advertise.Notify(cfg.API.AdvertiseURL)
 	}
 	return api.ConfigUpdateResponse{Status: "accepted", Message: configUpdateAcceptedMessage}, nil
 }
