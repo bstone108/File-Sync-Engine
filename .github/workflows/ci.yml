@@ -121,7 +121,16 @@ jobs:
         working-directory: desktop-gui
         shell: bash
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          # The Wails module zip is large; proxy.golang.org has timed out once on macos-15-intel.
+          for attempt in 1 2 3; do
+            if go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
           export PATH="$(go env GOPATH)/bin:$PATH"
           export FSE_DESKTOP_VERSION="ci-${GITHUB_SHA::12}"
           ../scripts/stamp-desktop-gui-version.sh "$FSE_DESKTOP_VERSION" .
@@ -165,7 +174,13 @@ jobs:
         shell: pwsh
         working-directory: desktop-gui
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          $installed = $false
+          foreach ($attempt in 1..3) {
+            go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
+            if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+            if ($attempt -lt 3) { Start-Sleep -Seconds (15 * $attempt) }
+          }
+          if (-not $installed) { throw "go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1 failed" }
           $env:Path = "$(go env GOPATH)\\bin;$env:Path"
           wails generate module
           npm ci
@@ -186,8 +201,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: desktop-gui/go.mod
           cache: true
+          cache-dependency-path: |
+            go.sum
+            desktop-gui/go.sum
       - name: Set up Node 22
         uses: actions/setup-node@v6
         with:
@@ -198,7 +216,13 @@ jobs:
         shell: pwsh
         run: |
           go build -trimpath -o fse.exe ./cmd/fse
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.2
+          $installed = $false
+          foreach ($attempt in 1..3) {
+            go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
+            if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+            if ($attempt -lt 3) { Start-Sleep -Seconds (15 * $attempt) }
+          }
+          if (-not $installed) { throw "go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1 failed" }
           $env:Path = "$(go env GOPATH)\\bin;$env:Path"
           Push-Location desktop-gui
           wails generate module

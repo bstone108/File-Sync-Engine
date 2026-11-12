@@ -22,7 +22,7 @@ Environment:
                                      (default: /development/logs/file-sync-desktop-darwin/build-darwin-builder.status).
 
 Default Darwin builder image:
-  fse-desktop-wails-builder:debian12-wails2.10.2-darwin-osxcross
+  fse-desktop-wails-builder:debian12-wails2.17.1-darwin-osxcross
 
 Expected Darwin outputs:
   desktop-gui/wails-output/darwin-amd64/fse-desktop.app/Contents/MacOS/fse-desktop
@@ -43,7 +43,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WAILS_OUTPUT_ROOT="${2:-$ROOT/desktop-gui/wails-output}"
 ENGINE_RESOURCE_ROOT="${3:-$ROOT/desktop-gui/resources/engine}"
 RUNTIME="${FSE_DESKTOP_CONTAINER_RUNTIME:-docker}"
-DEFAULT_DARWIN_IMAGE="fse-desktop-wails-builder:debian12-wails2.10.2-darwin-osxcross"
+DEFAULT_DARWIN_IMAGE="fse-desktop-wails-builder:debian12-wails2.17.1-darwin-osxcross"
 DARWIN_IMAGE="${FSE_DESKTOP_WAILS_BUILDER_IMAGE_DARWIN:-${FSE_DESKTOP_WAILS_BUILDER_IMAGE:-$DEFAULT_DARWIN_IMAGE}}"
 DARWIN_AMD64_IMAGE="${FSE_DESKTOP_WAILS_BUILDER_IMAGE_DARWIN_AMD64:-$DARWIN_IMAGE}"
 DARWIN_ARM64_IMAGE="${FSE_DESKTOP_WAILS_BUILDER_IMAGE_DARWIN_ARM64:-$DARWIN_IMAGE}"

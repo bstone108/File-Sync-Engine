@@ -1282,13 +1282,13 @@ func TestDesktopGUIWailsBuilderImageDefinitionIsProjectOwnedAndIsolated(t *testi
 	doc := readRequiredFile(t, filepath.Join(root, "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
 
 	for _, want := range []string{
-		"FROM golang:1.25-bookworm",
+		"FROM golang:1.26-bookworm",
 		"nodejs",
 		"npm",
 		"libwebkit2gtk-4.1-dev",
 		"mingw-w64",
 		"gcc-aarch64-linux-gnu",
-		"github.com/wailsapp/wails/v2/cmd/wails@v2.10.2",
+		"github.com/wailsapp/wails/v2/cmd/wails@v2.17.1",
 		"linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64",
 	} {
 		if !strings.Contains(dockerfile, want) {
@@ -1296,11 +1296,11 @@ func TestDesktopGUIWailsBuilderImageDefinitionIsProjectOwnedAndIsolated(t *testi
 		}
 	}
 	for _, want := range []string{
-		"FROM --platform=linux/arm64 golang:1.25-bookworm",
+		"FROM --platform=linux/arm64 golang:1.26-bookworm",
 		"libgtk-3-dev",
 		"libwebkit2gtk-4.1-dev",
 		"FSE_DESKTOP_WAILS_NATIVE_LINUX_ARM64=1",
-		"github.com/wailsapp/wails/v2/cmd/wails@v2.10.2",
+		"github.com/wailsapp/wails/v2/cmd/wails@v2.17.1",
 		"linux/arm64",
 	} {
 		if !strings.Contains(linuxArm64Dockerfile, want) {
@@ -1308,7 +1308,7 @@ func TestDesktopGUIWailsBuilderImageDefinitionIsProjectOwnedAndIsolated(t *testi
 		}
 	}
 	for _, want := range []string{
-		"FROM fse-desktop-wails-builder:debian12-wails2.10.2",
+		"FROM fse-desktop-wails-builder:debian12-wails2.17.1",
 		"dpkg --add-architecture arm64",
 		"gcc-aarch64-linux-gnu",
 		"g++-aarch64-linux-gnu",
@@ -1325,7 +1325,7 @@ func TestDesktopGUIWailsBuilderImageDefinitionIsProjectOwnedAndIsolated(t *testi
 	for _, want := range []string{
 		"docker build",
 		"/development/fse-desktop-wails-builder-cache",
-		"fse-desktop-wails-builder:debian12-wails2.10.2",
+		"fse-desktop-wails-builder:debian12-wails2.17.1",
 		"FSE_DESKTOP_WAILS_BUILDER_IMAGE",
 		"FSE_DESKTOP_WAILS_BUILDER_DOCKERFILE",
 		"FSE_DESKTOP_WAILS_BUILDER_PLATFORM",
@@ -1402,9 +1402,9 @@ func TestDesktopGUIWailsBuilderImageDefinitionIsProjectOwnedAndIsolated(t *testi
 	for _, want := range []string{
 		"development/desktop-wails-builder/Dockerfile",
 		"scripts/build-desktop-wails-builder-image.sh",
-		"fse-desktop-wails-builder:debian12-wails2.10.2",
+		"fse-desktop-wails-builder:debian12-wails2.17.1",
 		"development/desktop-wails-builder/Dockerfile.linux-arm64-cross",
-		"fse-desktop-wails-builder:debian12-wails2.10.2-linux-arm64-cross",
+		"fse-desktop-wails-builder:debian12-wails2.17.1-linux-arm64-cross",
 		"development/desktop-wails-builder/Dockerfile.linux-webkit40",
 		"development/desktop-wails-builder/Dockerfile.linux-arm64-cross-webkit40",
 		"does not install build tooling on the Hermes host",
@@ -1426,7 +1426,7 @@ func TestDesktopGUIWindowsARM64WailsBuilderLayerUsesLLVMMinGW(t *testing.T) {
 	doc := readRequiredFile(t, filepath.Join(root, "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
 
 	for _, want := range []string{
-		"FROM fse-desktop-wails-builder:debian12-wails2.10.2",
+		"FROM fse-desktop-wails-builder:debian12-wails2.17.1",
 		"LLVM_MINGW_VERSION=20250114",
 		"llvm-mingw-20250114-ucrt-ubuntu-20.04-x86_64.tar.xz",
 		"/opt/llvm-mingw/bin/aarch64-w64-mingw32-gcc",
@@ -1447,7 +1447,7 @@ func TestDesktopGUIWindowsARM64WailsBuilderLayerUsesLLVMMinGW(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Dockerfile.windows-arm64-llvm-mingw",
-		"fse-desktop-wails-builder:debian12-wails2.10.2-windows-arm64-llvm-mingw",
+		"fse-desktop-wails-builder:debian12-wails2.17.1-windows-arm64-llvm-mingw",
 		"Windows ARM64 LLVM-MinGW builder layer",
 	} {
 		if !strings.Contains(readme, want) {
@@ -1468,7 +1468,7 @@ func TestDesktopGUIDarwinWailsBuilderLayerRequiresExternalSDKAndOsxcross(t *test
 	doc := readRequiredFile(t, filepath.Join(root, "docs", "DESKTOP_GUI_ARCHITECTURE.md"))
 
 	for _, want := range []string{
-		"FROM fse-desktop-wails-builder:debian12-wails2.10.2",
+		"FROM fse-desktop-wails-builder:debian12-wails2.17.1",
 		"tpoechtrager/osxcross",
 		"MacOSX*.sdk.tar*",
 		"OSXCROSS_NO_INCLUDE_PATH_WARNINGS=1",
@@ -1519,7 +1519,7 @@ func TestDesktopGUIDarwinWailsBuilderLayerRequiresExternalSDKAndOsxcross(t *test
 		"SDK_CONTEXT_NAME=\"MacOSX${SDK_OSXCROSS_VERSION}.sdk.tar.xz\"",
 		"trap 'rm -f \"$CONTEXT_DIR/MacOSX\"*.sdk.tar*' EXIT",
 		"patch-osxcross-sdk.py",
-		"fse-desktop-wails-builder:debian12-wails2.10.2-darwin-osxcross",
+		"fse-desktop-wails-builder:debian12-wails2.17.1-darwin-osxcross",
 		"FSE_DESKTOP_WAILS_BUILDER_IMAGE",
 		"scripts/build-desktop-gui-wails.sh",
 	} {
@@ -1541,7 +1541,7 @@ func TestDesktopGUIDarwinWailsBuilderLayerRequiresExternalSDKAndOsxcross(t *test
 		"Apple SDK/osxcross-capable isolated builder layer",
 		"does not commit or download Apple SDK contents",
 		"FSE_DESKTOP_CONTAINER_NETWORK",
-		"fse-desktop-wails-builder:debian12-wails2.10.2-darwin-osxcross",
+		"fse-desktop-wails-builder:debian12-wails2.17.1-darwin-osxcross",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Fatalf("desktop GUI README missing darwin builder layer note %q:\n%s", want, readme)
@@ -1676,7 +1676,7 @@ func TestDesktopGUIDarwinReadinessCheckReportsSDKBuilderAndOutputGates(t *testin
 		"pid=",
 		"ps -p",
 		"stale/dead",
-		"fse-desktop-wails-builder:debian12-wails2.10.2-darwin-osxcross",
+		"fse-desktop-wails-builder:debian12-wails2.17.1-darwin-osxcross",
 		"desktop-gui/wails-output/darwin-amd64/fse-desktop.app/Contents/MacOS/fse-desktop",
 		"desktop-gui/wails-output/darwin-arm64/fse-desktop.app/Contents/MacOS/fse-desktop",
 		"scripts/package-desktop-gui-release.sh",

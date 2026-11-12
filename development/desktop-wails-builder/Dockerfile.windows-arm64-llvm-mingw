@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Isolated Windows ARM64 Wails builder layer for the file synchronization engine.
 # Build this image from an isolated/container context; do not install these tools on the Hermes host.
-FROM fse-desktop-wails-builder:debian12-wails2.10.2
+FROM fse-desktop-wails-builder:debian12-wails2.17.1
 
 ARG LLVM_MINGW_VERSION=20250114
 ARG LLVM_MINGW_ARCHIVE=llvm-mingw-20250114-ucrt-ubuntu-20.04-x86_64.tar.xz

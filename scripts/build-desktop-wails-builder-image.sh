@@ -11,7 +11,7 @@ project development/ so the recipe is versioned, while Docker layer/cache
 state is directed to /development rather than the source tree.
 
 Default image tag:
-  fse-desktop-wails-builder:debian12-wails2.10.2
+  fse-desktop-wails-builder:debian12-wails2.17.1
 
 Environment:
   FSE_DESKTOP_CONTAINER_RUNTIME       docker or podman (default: docker)
@@ -37,11 +37,11 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE_TAG="${1:-fse-desktop-wails-builder:debian12-wails2.10.2}"
+IMAGE_TAG="${1:-fse-desktop-wails-builder:debian12-wails2.17.1}"
 RUNTIME="${FSE_DESKTOP_CONTAINER_RUNTIME:-docker}"
 CACHE_ROOT="/development/fse-desktop-wails-builder-cache"
 DOCKERFILE_INPUT="${FSE_DESKTOP_WAILS_BUILDER_DOCKERFILE:-development/desktop-wails-builder/Dockerfile}"
-REQUIRED_WAILS_BUILDER_GO_VERSION=1.25.7
+REQUIRED_WAILS_BUILDER_GO_VERSION=1.26.11
 REQUIRED_WAILS_BUILDER_NODE_MAJOR=22
 if [[ "$DOCKERFILE_INPUT" = /* ]]; then
   DOCKERFILE="$DOCKERFILE_INPUT"
