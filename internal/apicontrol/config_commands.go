@@ -6,6 +6,7 @@ import (
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/configops"
+	"filesyncengine/internal/foldershare"
 	"filesyncengine/internal/scancli"
 )
 
@@ -48,6 +49,7 @@ func HandleFolderCommand(configPath string, req api.FolderCommandRequest) (api.F
 				return api.FolderCommandResponse{}, err
 			}
 		}
+		foldershare.RequestFullScan(req.ID)
 	case "remove":
 		if err := configops.RemoveFolder(configPath, req.ID); err != nil {
 			return api.FolderCommandResponse{}, err
@@ -62,6 +64,7 @@ func HandleFolderCommand(configPath string, req api.FolderCommandRequest) (api.F
 		}); err != nil {
 			return api.FolderCommandResponse{}, err
 		}
+		foldershare.RequestFullScan(req.ID)
 	case "pause":
 		disabled := false
 		if err := configops.UpdateFolderDetails(configPath, req.ID, configops.FolderUpdate{Enabled: &disabled}); err != nil {
@@ -73,6 +76,7 @@ func HandleFolderCommand(configPath string, req api.FolderCommandRequest) (api.F
 		if err := configops.UpdateFolderDetails(configPath, req.ID, configops.FolderUpdate{Enabled: &enabled}); err != nil {
 			return api.FolderCommandResponse{}, err
 		}
+		foldershare.RequestFullScan(req.ID)
 		return api.FolderCommandResponse{Action: req.Action, ID: req.ID, Status: "accepted", Message: "folder resumed; daemon hot reload will adopt the config change"}, nil
 	case "rescan":
 		if _, err := scancli.RunConfigured(configPath, req.ID); err != nil {

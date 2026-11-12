@@ -1386,8 +1386,14 @@ func foldersVisibleToGUI(state State) []FolderState {
 			current.Status = "paused"
 			current.ProgressLabel = "Paused"
 			current.SyncPercent = 0
-		} else if foldershare.TargetCount(cfg, state.ConfigPath, folder) == 0 && (current.Status == "" || current.Status == "configured" || current.Status == "not shared") {
+		} else if targets := foldershare.TargetCount(cfg, state.ConfigPath, folder); targets == 0 && (current.Status == "" || current.Status == "configured" || current.Status == "not shared") {
 			current.Status = "not shared"
+		} else if targets > 0 && (current.Status == "" || current.Status == "configured" || current.Status == "not shared") {
+			if current.ProgressLabel == "Up to date" {
+				current.Status = "idle"
+			} else {
+				current.Status = "syncing"
+			}
 		} else if !ok || current.Status == "" || current.Status == "paused" {
 			current.Status = "configured"
 			if current.ProgressLabel == "Paused" {

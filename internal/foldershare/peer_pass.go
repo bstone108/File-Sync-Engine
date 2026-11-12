@@ -78,6 +78,8 @@ func WakePeerPass() {
 var (
 	identityExchange   func(config.PeerConfig)
 	identityExchangeAt time.Time
+	metadataCatchup    func()
+	metadataCatchupAt  time.Time
 )
 
 // SetIdentityExchange pushes this engine's folder list to identity peers so a
@@ -100,6 +102,36 @@ func exchangeIdentity(cfg config.Config) {
 		peer := peer
 		go fn(peer)
 	}
+}
+
+// SetMetadataCatchup runs index exchange over the libp2p session. The peer
+// loop calls it so a blocked discovery poll cannot keep metadata.folders empty.
+func SetMetadataCatchup(fn func()) {
+	metadataCatchup = fn
+}
+
+func runMetadataCatchup() {
+	if metadataCatchup == nil || time.Since(metadataCatchupAt) < 15*time.Second {
+		return
+	}
+	metadataCatchupAt = time.Now()
+	fn := metadataCatchup
+	go fn()
+}
+
+var notePeerFolderFn func(peerID, folderID string, cursor int64, files int)
+
+// SetPeerFolderRecorder stores a remote journal summary so /v1/peers metadata
+// shows the folder once the libp2p session has exchanged an index.
+func SetPeerFolderRecorder(fn func(peerID, folderID string, cursor int64, files int)) {
+	notePeerFolderFn = fn
+}
+
+func notePeerFolder(peerID, folderID string, cursor int64, files int) {
+	if notePeerFolderFn == nil || peerID == "" || folderID == "" {
+		return
+	}
+	notePeerFolderFn(peerID, folderID, cursor, files)
 }
 
 // StartSchedulers scans on its own clock and dials on a clock that does not
@@ -140,7 +172,11 @@ func scanLoop(ctx context.Context, configPath string, load func() config.Config)
 			if !folder.Enabled || folder.Path == "" {
 				continue
 			}
-			_ = reconcileFolder(cfg, configPath, folder)
+			if err := reconcileFolder(cfg, configPath, folder); err != nil {
+				structuredlog.Event("warn", "folder.scan.failed", "local folder was not indexed", map[string]any{
+					"folder": folder.ID, "path": folder.Path, "error": err.Error(),
+				})
+			}
 		}
 	}
 }
@@ -167,6 +203,7 @@ func peerLoop(ctx context.Context, configPath string, load func() config.Config)
 		started := time.Now()
 		cfg := load()
 		exchangeIdentity(cfg)
+		runMetadataCatchup()
 		passCtx, cancel := context.WithTimeout(ctx, passDeadline)
 		live := false
 		for _, folder := range cfg.Folders {
@@ -221,6 +258,7 @@ func runPeerSync(ctx context.Context, cfg config.Config, configPath string, fold
 			"entries": len(remote),
 			"cursor":  remoteCursor,
 		})
+		notePeerFolder(peer.ID, folder.ID, remoteCursor, len(remote))
 		mu := journalLock(configPath, folder.ID)
 		mu.Lock()
 		entries, loadErr := LoadJournal(configPath, folder.ID)

@@ -135,6 +135,50 @@ func TestRuntimeDialerReportsPeerWithoutReachableTCPStreamEndpoint(t *testing.T)
 	}
 }
 
+func TestRuntimeDialerUsesLibp2pWhenNoTCPEndpointExists(t *testing.T) {
+	dialed := ""
+	dialer := RuntimeDialer(RuntimeDialerOptions{
+		DialLibp2p: func(ctx context.Context, peerID string) (io.ReadWriteCloser, error) {
+			dialed = peerID
+			return testReadWriteCloser{}, nil
+		},
+		DialTCP: func(ctx context.Context, network string, address string) (io.ReadWriteCloser, error) {
+			t.Fatalf("DialTCP called for %s", address)
+			return nil, nil
+		},
+	})
+	stream, err := dialer(context.Background(), config.PeerConfig{ID: "peer-a", DHTPeerID: "12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU"}, config.FolderConfig{ID: "folder-a"})
+	if err != nil || stream == nil {
+		t.Fatalf("libp2p dial err=%v stream=%v", err, stream)
+	}
+	if dialed != "12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU" {
+		t.Fatalf("dialed %q", dialed)
+	}
+}
+
+func TestProcessCatchupStartsWhenPeerFolderMetadataIsEmpty(t *testing.T) {
+	store := state.NewJSONStore(filepath.Join(t.TempDir(), "state.json"))
+	calls := 0
+	result := ProcessCatchup(context.Background(), CatchupOptions{
+		Config: config.Config{
+			Identity: config.IdentityConfig{Groups: []config.IdentityGroupConfig{{ID: "home", Enabled: true}}},
+			Peers:    []config.PeerConfig{{ID: "peer-a", IdentityGroupID: "home", DHTPeerID: "12D3KooWF8UhVBmTEmqqbEjYg9wdQpV7E8KzAoXj7vBHrnDWBkrU"}},
+			Folders:  []config.FolderConfig{{ID: "docs", Enabled: true, Path: t.TempDir()}},
+		},
+		Store: store,
+		Dial: func(ctx context.Context, peer config.PeerConfig, folder config.FolderConfig) (io.ReadWriteCloser, error) {
+			calls++
+			if peer.ID != "peer-a" || folder.ID != "docs" {
+				t.Fatalf("dialed peer %s folder %s", peer.ID, folder.ID)
+			}
+			return nil, errTestDial
+		},
+	})
+	if calls != 1 || result.Failed != 1 || result.Started != 0 {
+		t.Fatalf("calls=%d result=%+v", calls, result)
+	}
+}
+
 type testReadWriteCloser struct{}
 
 func (testReadWriteCloser) Read([]byte) (int, error)    { return 0, io.EOF }

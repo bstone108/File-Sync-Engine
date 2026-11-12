@@ -145,7 +145,7 @@ func (s *Server) Serve(ctx context.Context, stream io.ReadWriter) error {
 			if err != nil {
 				return err
 			}
-			hello, _, session, err := signedResponderHello(s.cfg.NodeID, s.cfg.Identity, level, msg.Hello, advertisedTransferLimits(s.cfg.Transfer, s.cfg.Peer), []string{"folder-index", "block-transfer"})
+			hello, _, session, err := signedResponderHello(s.cfg.NodeID, s.cfg.Identity, level, msg.Hello, advertisedTransferLimits(s.cfg.Transfer, s.cfg.Peer), []string{"folder-index", "block-transfer", "metadata-state"})
 			if err != nil {
 				if writeErr := codec.Write(protocol.Message{Type: protocol.MessageError, Error: encryptionRetry(err)}); writeErr != nil {
 					return writeErr

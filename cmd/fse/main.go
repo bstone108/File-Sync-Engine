@@ -61,6 +61,7 @@ import (
 	"filesyncengine/internal/nat"
 	"filesyncengine/internal/pairing"
 	"filesyncengine/internal/peerevents"
+	"filesyncengine/internal/peeridentity"
 	"filesyncengine/internal/peerpullplan"
 	"filesyncengine/internal/peersync"
 	"filesyncengine/internal/routing"
@@ -72,6 +73,7 @@ import (
 	"filesyncengine/internal/snapshotcontrol"
 	"filesyncengine/internal/state"
 	"filesyncengine/internal/streamcontrol"
+	"filesyncengine/internal/streamsync"
 	"filesyncengine/internal/structuredlog"
 	"filesyncengine/internal/transfercontrol"
 	"filesyncengine/internal/validatecontrol"
@@ -427,6 +429,40 @@ func run(configPath string) {
 	fatalexit.Go(func() { advertise.StartAutoDetect(detectCtx, cfg) })
 	fatalexit.Go(func() { daemonwebgui.StartAutoUpdate(detectCtx, configPath, apiServer.SetWebGUIState) })
 	discovery.SetAPIHandler(apiServer.Router())
+	var catchupMu sync.Mutex
+	runMetadata := func() {
+		if !catchupMu.TryLock() {
+			return
+		}
+		defer catchupMu.Unlock()
+		fresh := cfg
+		if loaded, err := config.LoadFile(configPath); err == nil {
+			fresh = loaded
+		}
+		processMetadataReconciliation(context.Background(), apiServer, fresh, metadataStore, runtimeMetadataDialer(liveEndpointObservations, apistate.RoutingNetworkHints(fresh)))
+	}
+	foldershare.SetMetadataCatchup(runMetadata)
+	foldershare.SetPeerFolderRecorder(func(peerID, folderID string, cursor int64, files int) {
+		if cursor < 0 {
+			cursor = 0
+		}
+		if err := metadataStore.SavePeerFolderState(peerID, state.FolderSummary{
+			FolderID: folderID,
+			Cursor:   uint64(cursor),
+			Files:    files,
+		}); err != nil {
+			structuredlog.Event("warn", "metadata.peer.failed", "peer folder metadata was not saved", map[string]any{
+				"peer": peerID, "folder": folderID, "error": err.Error(),
+			})
+		}
+	})
+	discovery.SetMetadataServer(func(ctx context.Context, rw io.ReadWriteCloser) error {
+		fresh := cfg
+		if loaded, err := config.LoadFile(configPath); err == nil {
+			fresh = loaded
+		}
+		return serveMetadataStream(ctx, rw, fresh, metadataStore)
+	})
 	foldershare.SetPassReporter(func(folderID string, peer config.PeerConfig, stats foldershare.PassStats) {
 		route := ""
 		if obs, ok := nat.DefaultPaths.Active(peer.ID); ok && (stats.Writes+stats.Fetched+stats.Reused+stats.Deletes+stats.Moves) > 0 {
@@ -497,7 +533,7 @@ func run(configPath string) {
 				liveEndpointObservations = processDiscoveryPollWithEndpointObservations(apiServer, runtimeDiscoverySources(cfg), cfg)
 			},
 			Metadata: func() {
-				processMetadataReconciliation(context.Background(), apiServer, cfg, metadataStore, runtimeMetadataDialer(liveEndpointObservations, apistate.RoutingNetworkHints(cfg)))
+				runMetadata()
 			},
 		})
 		changed, err := mgr.ReloadIfQuiet(time.Now())
@@ -714,6 +750,30 @@ func processMetadataReconciliation(ctx context.Context, server *api.Server, cfg 
 
 func runtimeMetadataDialer(sidecarObservations []routing.EndpointObservation, networkHints routing.NetworkHints) metadataReconciliationDialer {
 	return metadatareconcile.RuntimeDialer(metadatareconcile.RuntimeDialerOptions{EndpointObservations: sidecarObservations, NetworkHints: networkHints})
+}
+
+func serveMetadataStream(ctx context.Context, rw io.ReadWriteCloser, cfg config.Config, store state.JSONStore) error {
+	folders := map[string]string{}
+	blockSize := 0
+	for _, folder := range cfg.Folders {
+		if !folder.Enabled || folder.Path == "" || folder.ID == "" {
+			continue
+		}
+		folders[folder.ID] = folder.Path
+		if blockSize == 0 {
+			blockSize = folder.BlockSize
+		}
+	}
+	server := streamsync.NewServer(streamsync.ServerConfig{
+		NodeID:          cfg.NodeName,
+		BlockSize:       blockSize,
+		Folders:         folders,
+		Identity:        peeridentity.Identity{PrivateKey: cfg.Identity.PrivateKey, PublicKey: cfg.Identity.PublicKey},
+		EncryptionLevel: cfg.Identity.EncryptionLevel,
+		Transfer:        cfg.Transfer,
+		MetadataStore:   store,
+	})
+	return server.Serve(ctx, rw)
 }
 
 func processDiscoveryPoll(server *api.Server, sources []discovery.Source) {
