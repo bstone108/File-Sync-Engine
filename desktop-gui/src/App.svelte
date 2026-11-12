@@ -2111,7 +2111,7 @@
         <dt>Identity</dt><dd>{status?.identityPublicKey ?? 'Loading'}</dd>
         <dt>Engine schema</dt><dd>{status?.engineSchemaVersion ?? '—'}</dd>
         <dt>Daemon</dt><dd>{status?.status ?? 'starting'}</dd>
-        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status?.natType)}{#if status?.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}{#if inboundLabel(status?.inboundClass)} · <span data-testid="inbound-class">{inboundLabel(status.inboundClass)}</span>{/if}</dd>
+        <dt>NAT</dt><dd data-testid="nat-type">{natTypeLabel(status?.natType)}{#if status?.stunMappedAddress} · <span data-testid="stun-mapped">{status.stunMappedAddress}</span>{/if}{#if inboundLabel(status?.inboundClass)} · <span data-testid="inbound-class">{inboundLabel(status?.inboundClass)}</span>{/if}</dd>
         <dt>Folders</dt><dd>{daemonFolders.length}</dd>
         <dt>Peers</dt><dd>{daemonPeers.length}</dd>
       </dl>

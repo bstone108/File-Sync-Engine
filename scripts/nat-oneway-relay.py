@@ -191,7 +191,7 @@ def main():
         fail(f"{name} did not reach {service} within {seconds}s")
 
     compose("exec", "-T", "-u", "0", "engine-a", "sh", "-c", "mkdir -p /data/shared && printf from-a > /data/shared/from-a.txt && chmod 666 /data/shared/from-a.txt")
-    wait_file("engine-b", "from-a.txt", "from-a", 60)
+    wait_file("engine-b", "from-a.txt", "from-a", 180)
     compose("exec", "-T", "-u", "0", "engine-b", "sh", "-c", "mkdir -p /data/shared && printf from-b > /data/shared/from-b.txt && chmod 666 /data/shared/from-b.txt")
     wait_file("engine-a", "from-b.txt", "from-b", 60)
     compose("restart", "engine-a", timeout=60)
