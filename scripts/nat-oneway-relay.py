@@ -93,13 +93,29 @@ def api(port, key, path):
         return 0
 
 
-def wait_api(service, key):
-    deadline = time.time() + 90
+def api_up(service, key, seconds):
+    deadline = time.time() + seconds
     while time.time() < deadline:
         if api(PORTS[service], key, "/v1/status") == 200:
-            return
+            return True
         time.sleep(2)
-    fail(f"{service} API did not start")
+    return False
+
+
+def wait_api(service, key):
+    if not api_up(service, key, 90):
+        fail(f"{service} API did not start")
+
+
+def restart_and_wait(service, key):
+    compose("restart", service, timeout=60)
+    if api_up(service, key, 45):
+        return
+    # A restart can close the metadata store mid-write. Starting once more
+    # opens it after the old process has released the files.
+    compose("start", service)
+    if not api_up(service, key, 45):
+        fail(f"{service} API did not start after restart")
 
 
 def main():
@@ -194,12 +210,10 @@ def main():
     wait_file("engine-b", "from-a.txt", "from-a", 180)
     compose("exec", "-T", "-u", "0", "engine-b", "sh", "-c", "mkdir -p /data/shared && printf from-b > /data/shared/from-b.txt && chmod 666 /data/shared/from-b.txt")
     wait_file("engine-a", "from-b.txt", "from-b", 60)
-    compose("restart", "engine-a", timeout=60)
-    wait_api("engine-a", infos["engine-a"]["key"])
+    restart_and_wait("engine-a", infos["engine-a"]["key"])
     compose("exec", "-T", "-u", "0", "engine-b", "sh", "-c", "printf after-a > /data/shared/after-a.txt")
     wait_file("engine-a", "after-a.txt", "after-a", 60)
-    compose("restart", "engine-b", timeout=60)
-    wait_api("engine-b", infos["engine-b"]["key"])
+    restart_and_wait("engine-b", infos["engine-b"]["key"])
     compose("exec", "-T", "-u", "0", "engine-a", "sh", "-c", "printf after-b > /data/shared/after-b.txt")
     wait_file("engine-b", "after-b.txt", "after-b", 60)
     print("one-way NAT synced both ways and survived either restart", flush=True)
