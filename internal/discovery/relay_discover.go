@@ -2,8 +2,6 @@ package discovery
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"net"
 	"strings"
 	"sync"
@@ -42,8 +40,7 @@ func currentRendezvous() string {
 	if groupID == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte("fse-relay-rendezvous/v1\n" + groupID))
-	return "fse-relay/" + hex.EncodeToString(sum[:8])
+	return "fse-relay/" + groupID
 }
 
 func logDiscoveredRelay(id string) {
