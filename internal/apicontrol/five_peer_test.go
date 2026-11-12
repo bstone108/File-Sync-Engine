@@ -19,18 +19,19 @@ import (
 	"filesyncengine/internal/foldershare"
 )
 
-// TestFivePeerIdentityShareAndRestart is the stand-in for four identity-linked
-// engines plus one share-only peer. The fifth engine is the Mac desktop client:
-// the Mac app calls this same daemon API and does not implement a second
-// management policy.
+// TestFivePeerIdentityShareAndRestart is the five-engine harness for the live
+// set. Identity A is the Mac desktop client, the Windows desktop client, and
+// two Unraid engines. Identity B is the third Unraid engine and joins only by
+// the folder share code. CI runs five Linux engines for those roles. The Mac
+// and Windows apps call this same daemon and do not keep a second policy.
 func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 	const (
 		group   = "identity-a"
 		token   = "identity-a-bootstrap-token-must-be-43-characters"
-		guestID = "guest"
+		guestID = "unraid-share"
 		secret  = "guest-sync-secret"
 	)
-	names := []string{"engine-a", "engine-b", "engine-c", "mac-stand-in"}
+	names := []string{"mac", "windows", "unraid-a", "unraid-b"}
 	roots := map[string]string{}
 	configs := map[string]string{}
 	for _, name := range append(append([]string{}, names...), guestID) {
@@ -91,7 +92,7 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 	}
 	guestPeer := peer(guestID, secret, nodes[guestID].server.URL, nodes[guestID].pin, "", secret)
 	shared := func(path string) config.FolderConfig {
-		return config.FolderConfig{ID: "shared", Path: filepath.Join(path, "shared"), Enabled: true, Mode: config.ModeSendReceive, SharedWith: []string{guestID, "engine-a", "engine-b", "engine-c", "mac-stand-in"}}
+		return config.FolderConfig{ID: "shared", Path: filepath.Join(path, "shared"), Enabled: true, Mode: config.ModeSendReceive, SharedWith: []string{guestID, "mac", "windows", "unraid-a", "unraid-b"}}
 	}
 	private := func(path string) config.FolderConfig {
 		return config.FolderConfig{ID: "private", Path: filepath.Join(path, "private"), Enabled: true, Mode: config.ModeSendReceive}
@@ -120,27 +121,25 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 		}
 		return cfg
 	}
-	if err := os.WriteFile(filepath.Join(roots["engine-a"], "shared", "note.txt"), []byte("from-a"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(roots["unraid-a"], "shared", "note.txt"), []byte("from-a"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	foldershare.RequestFullScan("shared")
-	foldershare.Reconcile(load("engine-a"), configs["engine-a"], nil)
-	for _, name := range []string{"engine-b", "engine-c", "mac-stand-in", guestID} {
+	foldershare.Reconcile(load("unraid-a"), configs["unraid-a"], nil)
+	for _, name := range []string{"mac", "windows", "unraid-b", guestID} {
 		foldershare.Reconcile(load(name), configs[name], nil)
-	}
-	for _, name := range []string{"engine-b", "engine-c", "mac-stand-in", guestID} {
 		got, err := os.ReadFile(filepath.Join(roots[name], "shared", "note.txt"))
 		if err != nil || string(got) != "from-a" {
 			t.Fatalf("%s note = %q %v", name, got, err)
 		}
 	}
 
-	if err := os.Rename(filepath.Join(roots["engine-b"], "shared", "note.txt"), filepath.Join(roots["engine-b"], "shared", "renamed.txt")); err != nil {
+	if err := os.Rename(filepath.Join(roots["windows"], "shared", "note.txt"), filepath.Join(roots["windows"], "shared", "renamed.txt")); err != nil {
 		t.Fatal(err)
 	}
 	foldershare.RequestFullScan("shared")
-	foldershare.Reconcile(load("engine-b"), configs["engine-b"], nil)
-	for _, name := range []string{"engine-a", "engine-c", "mac-stand-in", guestID} {
+	foldershare.Reconcile(load("windows"), configs["windows"], nil)
+	for _, name := range []string{"mac", "unraid-a", "unraid-b", guestID} {
 		foldershare.Reconcile(load(name), configs[name], nil)
 		if _, err := os.Stat(filepath.Join(roots[name], "shared", "note.txt")); !os.IsNotExist(err) {
 			t.Fatalf("%s still has the old name: %v", name, err)
@@ -151,12 +150,12 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 		}
 	}
 
-	if err := os.Remove(filepath.Join(roots["engine-c"], "shared", "renamed.txt")); err != nil {
+	if err := os.Remove(filepath.Join(roots["unraid-b"], "shared", "renamed.txt")); err != nil {
 		t.Fatal(err)
 	}
 	foldershare.RequestFullScan("shared")
-	foldershare.Reconcile(load("engine-c"), configs["engine-c"], nil)
-	for _, name := range []string{"engine-a", "engine-b", "mac-stand-in", guestID} {
+	foldershare.Reconcile(load("unraid-b"), configs["unraid-b"], nil)
+	for _, name := range []string{"mac", "windows", "unraid-a", guestID} {
 		foldershare.Reconcile(load(name), configs[name], nil)
 		if _, err := os.Stat(filepath.Join(roots[name], "shared", "renamed.txt")); !os.IsNotExist(err) {
 			t.Fatalf("%s did not delete renamed.txt: %v", name, err)
@@ -164,12 +163,12 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 	}
 
 	payload := bytes.Repeat([]byte("block-mesh-"), foldershare.TransferBlockSize/2)
-	if err := os.WriteFile(filepath.Join(roots["engine-a"], "shared", "large.bin"), payload, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(roots["mac"], "shared", "large.bin"), payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	foldershare.RequestFullScan("shared")
-	foldershare.Reconcile(load("engine-a"), configs["engine-a"], nil)
-	for _, name := range []string{"engine-b", "engine-c", "mac-stand-in", guestID} {
+	foldershare.Reconcile(load("mac"), configs["mac"], nil)
+	for _, name := range []string{"windows", "unraid-a", "unraid-b", guestID} {
 		foldershare.Reconcile(load(name), configs[name], nil)
 		got, err := os.ReadFile(filepath.Join(roots[name], "shared", "large.bin"))
 		if err != nil || !bytes.Equal(got, payload) {
@@ -190,24 +189,24 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 		}
 	}
 
-	nodes["mac-stand-in"].server.Close()
-	if err := os.WriteFile(filepath.Join(roots["engine-a"], "shared", "after-restart.txt"), []byte("caught-up"), 0o644); err != nil {
+	nodes["windows"].server.Close()
+	if err := os.WriteFile(filepath.Join(roots["unraid-a"], "shared", "after-restart.txt"), []byte("caught-up"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	foldershare.RequestFullScan("shared")
-	foldershare.Reconcile(load("engine-a"), configs["engine-a"], nil)
-	foldershare.Reconcile(load("mac-stand-in"), configs["mac-stand-in"], nil)
-	caught, err := os.ReadFile(filepath.Join(roots["mac-stand-in"], "shared", "after-restart.txt"))
+	foldershare.Reconcile(load("unraid-a"), configs["unraid-a"], nil)
+	foldershare.Reconcile(load("windows"), configs["windows"], nil)
+	caught, err := os.ReadFile(filepath.Join(roots["windows"], "shared", "after-restart.txt"))
 	if err != nil || string(caught) != "caught-up" {
-		t.Fatalf("mac stand-in after restart = %q %v", caught, err)
+		t.Fatalf("windows client after restart = %q %v", caught, err)
 	}
 
-	privateReq, err := http.NewRequest(http.MethodGet, nodes["engine-a"].server.URL+"/v1/sync-journal?folder=private", nil)
+	privateReq, err := http.NewRequest(http.MethodGet, nodes["unraid-a"].server.URL+"/v1/sync-journal?folder=private", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	privateReq.Header.Set("X-FSE-API-Key", secret)
-	privateResp, err := nodes["engine-a"].server.Client().Do(privateReq)
+	privateResp, err := nodes["unraid-a"].server.Client().Do(privateReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,12 +215,12 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 		body, _ := io.ReadAll(privateResp.Body)
 		t.Fatalf("share-only private journal = %d %s", privateResp.StatusCode, body)
 	}
-	configReq, err := http.NewRequest(http.MethodGet, nodes["engine-a"].server.URL+"/v1/config", nil)
+	configReq, err := http.NewRequest(http.MethodGet, nodes["unraid-a"].server.URL+"/v1/config", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	configReq.Header.Set("X-FSE-API-Key", secret)
-	configResp, err := nodes["engine-a"].server.Client().Do(configReq)
+	configResp, err := nodes["unraid-a"].server.Client().Do(configReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,29 +229,29 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 		t.Fatalf("share-only config = %d", configResp.StatusCode)
 	}
 
-	origin, err := HandleConfigSync(configs["engine-a"])
+	origin, err := HandleConfigSync(configs["mac"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := HandleConfigSync(configs["engine-c"])
+	target, err := HandleConfigSync(configs["windows"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := HandleConfigSyncEdit(configs["engine-a"], []byte(`{"targetInstanceId":"`+target.LocalInstanceID+`","path":"logging.level","value":"debug"}`)); err != nil {
+	if _, err := HandleConfigSyncEdit(configs["unraid-b"], []byte(`{"targetInstanceId":"`+target.LocalInstanceID+`","path":"logging.level","value":"debug"}`)); err != nil {
 		t.Fatalf("identity management edit: %v", err)
 	}
-	originReplica := syncReplicaFile(t, configs["engine-a"])
-	merged, err := HandleConfigSyncMerge(configs["engine-c"], mustJSON(t, map[string]any{"replica": originReplica}))
+	originReplica := syncReplicaFile(t, configs["unraid-b"])
+	merged, err := HandleConfigSyncMerge(configs["windows"], mustJSON(t, map[string]any{"replica": originReplica}))
 	if err != nil {
 		t.Fatalf("identity merge: %v", err)
 	}
 	if merged.LocalInstanceID != target.LocalInstanceID {
 		t.Fatalf("merge local = %s", merged.LocalInstanceID)
 	}
-	if loggingLevelFile(t, configs["engine-c"]) != "debug" {
-		t.Fatalf("managed level = %s", loggingLevelFile(t, configs["engine-c"]))
+	if loggingLevelFile(t, configs["windows"]) != "debug" {
+		t.Fatalf("managed level = %s", loggingLevelFile(t, configs["windows"]))
 	}
-	if loggingLevelFile(t, configs["engine-a"]) == "debug" {
+	if loggingLevelFile(t, configs["unraid-b"]) == "debug" {
 		t.Fatal("origin adopted the target setting")
 	}
 	guestView, err := HandleConfigSync(configs[guestID])

@@ -212,7 +212,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop-gui/package-lock.json
-      - name: Build and smoke-test native Windows desktop lifecycle
+      - name: Build the desktop app and smoke-test its engine
         shell: pwsh
         run: |
           go build -trimpath -o fse.exe ./cmd/fse
@@ -259,8 +259,29 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Five engines, four on one identity and one share-only peer
-        run: go test ./internal/apicontrol/ ./internal/access/ ./internal/ci/ -count=1 -timeout 180s -run 'TestFivePeerIdentityShareAndRestart|TestShareOnlyCannotManage|TestMacDesktopUsesDaemonManagementBoundary'
+      - name: Identity A is Mac, Windows, and two Unraid engines
+        run: go test ./internal/apicontrol/ ./internal/access/ ./internal/ci/ -count=1 -timeout 180s -run 'TestFivePeerIdentityShareAndRestart|TestShareOnlyCannotManage|TestDesktopClientsUseDaemonManagementBoundary'
+
+  five-peer-containers:
+    name: Five Linux containers for Mac, Windows, and Unraid
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the engine image
+        run: |
+          set -euo pipefail
+          mkdir -p docker-artifacts
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o docker-artifacts/fse-linux-amd64 ./cmd/fse
+          docker build -t file-sync-engine:e2e .
+      - name: Run five containers, four on identity A and one share-only Unraid
+        run: python3 scripts/five-peer-containers.py
 
   gui-sync-e2e:
     name: Two-container GUI sync
