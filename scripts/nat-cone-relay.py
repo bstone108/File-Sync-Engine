@@ -125,7 +125,7 @@ def main():
             "public": cfg["identity"]["publicKey"],
             "pin": cert_pin(compose("exec", "-T", service, "cat", "/config/fse-api-auto.crt").stdout),
             "dht": peer_id(service),
-            "url": "https://172.30.70.10:22420" if service == "engine-a" else "https://172.30.71.10:22420",
+            "url": "https://engine-a.nat.test:22420" if service == "engine-a" else "https://engine-b.nat.test:22420",
         }
         wait_api(service, infos[service]["key"])
     blocked = compose("exec", "-T", "engine-a", "sh", "-c", "wget -T 3 -O /dev/null https://172.30.71.10:22420/v1/status || true", check=False)
@@ -137,6 +137,8 @@ def main():
         cfg["shareACLVersion"] = 1
         cfg["api"]["advertiseURL"] = infos[service]["url"]
         cfg["api"]["advertisePinned"] = True
+        cfg.setdefault("discovery", {})["dht"] = True
+        cfg["discovery"]["dhtBootstrapPeers"] = [os.environ["FSE_STATIC_RELAYS"]]
         cfg["peers"] = [{
             "id": other,
             "apiKey": infos[other]["key"],
