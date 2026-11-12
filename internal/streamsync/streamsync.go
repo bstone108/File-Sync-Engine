@@ -74,14 +74,18 @@ type revisionMetadataStore interface {
 }
 
 type ServerConfig struct {
-	NodeID                       string
-	BlockSize                    int
-	Folders                      map[string]string
-	Identity                     peeridentity.Identity
-	EncryptionLevel              int
-	TrustedPeerPublicKeys        map[string]string
-	KnownPeers                   []discovery.Peer
-	IdentityGroups               []discovery.IdentityGroupState
+	NodeID                string
+	BlockSize             int
+	Folders               map[string]string
+	Identity              peeridentity.Identity
+	EncryptionLevel       int
+	TrustedPeerPublicKeys map[string]string
+	KnownPeers            []discovery.Peer
+	IdentityGroups        []discovery.IdentityGroupState
+	// RestrictIdentityGraph withholds the identity peer list and folder
+	// advertisements from a remote that is not an identity peer.
+	RestrictIdentityGraph        bool
+	IdentityPeerIDs              []string
 	Transfer                     config.TransferConfig
 	Peer                         config.PeerConfig
 	MetadataStore                MetadataStore
@@ -98,6 +102,18 @@ type Server struct {
 
 func NewServer(cfg ServerConfig) *Server {
 	return &Server{cfg: cfg}
+}
+
+func (s *Server) sharesIdentityWith(remoteID string) bool {
+	if s == nil || !s.cfg.RestrictIdentityGraph {
+		return true
+	}
+	for _, id := range s.cfg.IdentityPeerIDs {
+		if id != "" && id == remoteID {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) Serve(ctx context.Context, stream io.ReadWriter) error {
@@ -149,7 +165,12 @@ func (s *Server) Serve(ctx context.Context, stream io.ReadWriter) error {
 			plan := discovery.PlanPeerExchange(s.cfg.NodeID, s.cfg.KnownPeers, remotePeer, peersFromProtocol(msg.PeerExchange.Peers))
 			discovery.RememberMesh(s.cfg.NodeID, meshNode(remotePeer), meshNodes(plan.Learned))
 			groups := planIdentityGroupResponses(s.cfg.NodeID, identityGroupsWithSnapshots(s.cfg.IdentityGroups, s.cfg.SnapshotStore, s.cfg.SnapshotArchiveRoot, s.cfg.SnapshotCheckpointRoot), remotePeer.ID, groupsFromProtocol(msg.PeerExchange.IdentityGroups))
-			if err := codec.Write(protocol.Message{Type: protocol.MessagePeerExchange, PeerExchange: &protocol.PeerExchange{Peers: peersToProtocol(plan.ShareWithRemote), IdentityGroups: groupsToProtocol(groups)}}); err != nil {
+			sharePeers := plan.ShareWithRemote
+			if !s.sharesIdentityWith(remotePeer.ID) {
+				sharePeers = nil
+				groups = nil
+			}
+			if err := codec.Write(protocol.Message{Type: protocol.MessagePeerExchange, PeerExchange: &protocol.PeerExchange{Peers: peersToProtocol(sharePeers), IdentityGroups: groupsToProtocol(groups)}}); err != nil {
 				return err
 			}
 		case protocol.MessageMetadataState:
@@ -456,14 +477,17 @@ type StreamBlockSource struct {
 }
 
 type PullOptions struct {
-	NodeID                               string
-	FolderID                             string
-	LocalRoot                            string
-	Identity                             peeridentity.Identity
-	EncryptionLevel                      int
-	PeerPublicKey                        string
-	KnownPeers                           []discovery.Peer
-	IdentityGroups                       []discovery.IdentityGroupState
+	NodeID          string
+	FolderID        string
+	LocalRoot       string
+	Identity        peeridentity.Identity
+	EncryptionLevel int
+	PeerPublicKey   string
+	KnownPeers      []discovery.Peer
+	IdentityGroups  []discovery.IdentityGroupState
+	// IntroducerRole is access.RoleShare when this pull is from a share-only
+	// peer. Peers that peer introduces are not given identity trust.
+	IntroducerRole                       string
 	Transfer                             config.TransferConfig
 	Peer                                 config.PeerConfig
 	BlockSources                         []StreamBlockSource
@@ -574,7 +598,10 @@ func PullFolder(ctx context.Context, stream io.ReadWriter, opts PullOptions) (Pu
 		remote := discovery.Peer{ID: msg.Hello.NodeID}
 		plan := discovery.PlanPeerExchange(opts.NodeID, opts.KnownPeers, remote, peersFromProtocol(peerMsg.PeerExchange.Peers))
 		result.LearnedPeers = plan.Learned
-		discovery.NoteExchangedPeers(plan.Learned)
+		if opts.IntroducerRole == "share" {
+			result.LearnedPeers = nil
+		}
+		discovery.NoteExchangedPeers(result.LearnedPeers)
 		discovery.RememberMesh(opts.NodeID, meshNode(remote), meshNodes(plan.Learned))
 		remoteGroups := groupsFromProtocol(peerMsg.PeerExchange.IdentityGroups)
 		result.LearnedFolders = planIdentityGroupLearnedFolders(opts.NodeID, opts.IdentityGroups, remote.ID, remoteGroups)

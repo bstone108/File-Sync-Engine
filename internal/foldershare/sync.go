@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"filesyncengine/internal/access"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/link"
 	"filesyncengine/internal/structuredlog"
@@ -588,13 +589,21 @@ func peersFor(cfg config.Config, folder config.FolderConfig) []config.PeerConfig
 			allowed[id] = struct{}{}
 		}
 	}
+	groups := access.EnabledGroupIDs(cfg)
+	limited := len(groups) > 0
 	out := []config.PeerConfig{}
 	for _, peer := range cfg.Peers {
-		if peer.APIKey == "" {
+		if peer.APIKey == "" && peer.PeerSecret == "" {
 			continue
 		}
 		if len(allowed) > 0 {
 			if _, ok := allowed[peer.ID]; !ok {
+				continue
+			}
+		}
+		if limited {
+			role := access.RoleFor(groups, peer.IdentityGroupID)
+			if !access.MaySyncFolder(role, folder.SharedWith, peer.ID) {
 				continue
 			}
 		}

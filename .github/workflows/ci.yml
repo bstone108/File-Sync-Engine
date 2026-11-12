@@ -248,6 +248,20 @@ jobs:
       - name: Run build-all script
         run: scripts/build-all.sh "ci-${GITHUB_SHA::12}"
 
+  five-peer-mesh:
+    name: Five-peer identity and share mesh
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Five engines, four on one identity and one share-only peer
+        run: go test ./internal/apicontrol/ ./internal/access/ ./internal/ci/ -count=1 -timeout 180s -run 'TestFivePeerIdentityShareAndRestart|TestShareOnlyCannotManage|TestMacDesktopUsesDaemonManagementBoundary'
+
   gui-sync-e2e:
     name: Two-container GUI sync
     runs-on: ubuntu-latest

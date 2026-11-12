@@ -115,7 +115,7 @@ func TestPairingCodeLookupSkipsHijackAndFailsOver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(redeemerCfg.Peers) != 1 || redeemerCfg.Peers[0].APIKey != "publisher-api" {
+	if len(redeemerCfg.Peers) != 1 || redeemerCfg.Peers[0].APIKey == "" || redeemerCfg.Peers[0].APIKey == "publisher-api" || redeemerCfg.Peers[0].PeerSecret != redeemerCfg.Peers[0].APIKey {
 		t.Fatalf("redeemer peers = %+v", redeemerCfg.Peers)
 	}
 	addresses := map[string]string{}
@@ -132,7 +132,7 @@ func TestPairingCodeLookupSkipsHijackAndFailsOver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(publisherCfg.Peers) != 1 || publisherCfg.Peers[0].IdentityPublicKey != redeemerKey.PublicKey || publisherCfg.Peers[0].APIKey != "redeemer-api" {
+	if len(publisherCfg.Peers) != 1 || publisherCfg.Peers[0].IdentityPublicKey != redeemerKey.PublicKey || publisherCfg.Peers[0].APIKey == "" || publisherCfg.Peers[0].APIKey == "redeemer-api" || publisherCfg.Peers[0].PeerSecret != publisherCfg.Peers[0].APIKey {
 		t.Fatalf("publisher peers = %+v", publisherCfg.Peers)
 	}
 	if _, err := HandleRedeemPairCode(context.Background(), redeemerPath, api.PairCodeRedeemRequest{Code: code}); err == nil {
@@ -201,8 +201,8 @@ func TestPairCodeClaimDoesNotWaitForTailscaleOrRelays(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		response, claimErr := HandlePairCodeClaim(publisherPath, claim)
-		if claimErr == nil && response.APIKey != "publisher-api" {
-			claimErr = errors.New("claim response missing publisher api key")
+		if claimErr == nil && (response.APIKey == "" || response.APIKey == "publisher-api") {
+			claimErr = errors.New("share pairing must return a peer secret, not the engine API key")
 		}
 		done <- claimErr
 	}()

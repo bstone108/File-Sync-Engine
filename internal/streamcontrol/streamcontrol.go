@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"filesyncengine/internal/access"
 	"filesyncengine/internal/cli"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/discovery"
@@ -69,11 +70,13 @@ func Run(opts RunOptions) (RunResult, error) {
 			return RunResult{}, fmt.Errorf("folder %q not found", opts.CLI.ID)
 		}
 		server := streamsync.NewServer(streamsync.ServerConfig{
-			NodeID:         opts.Config.NodeName,
-			BlockSize:      folder.BlockSize,
-			Folders:        map[string]string{folder.ID: folder.Path},
-			Transfer:       opts.Config.Transfer,
-			IdentityGroups: discovery.IdentityGroupStatesFromConfig(opts.Config),
+			NodeID:                opts.Config.NodeName,
+			BlockSize:             folder.BlockSize,
+			Folders:               map[string]string{folder.ID: folder.Path},
+			Transfer:              opts.Config.Transfer,
+			IdentityGroups:        discovery.IdentityGroupStatesFromConfig(opts.Config),
+			RestrictIdentityGraph: len(access.EnabledGroupIDs(opts.Config)) > 0,
+			IdentityPeerIDs:       identityPeerIDs(opts.Config),
 		})
 		return RunResult{}, server.Serve(context.Background(), stream)
 	case cli.ActionPull:
@@ -91,6 +94,23 @@ func Run(opts RunOptions) (RunResult, error) {
 	default:
 		return RunResult{}, fmt.Errorf("stream action %s not implemented", opts.CLI.Action)
 	}
+}
+
+func identityPeerIDs(cfg config.Config) []string {
+	groups := map[string]struct{}{}
+	for _, id := range access.EnabledGroupIDs(cfg) {
+		groups[id] = struct{}{}
+	}
+	var ids []string
+	for _, peer := range cfg.Peers {
+		if _, ok := groups[peer.IdentityGroupID]; !ok {
+			continue
+		}
+		if peer.ID != "" {
+			ids = append(ids, peer.ID)
+		}
+	}
+	return ids
 }
 
 func findFolder(cfg config.Config, folderID string) (config.FolderConfig, bool) {
