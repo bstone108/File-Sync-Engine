@@ -243,8 +243,8 @@ def main():
         }
         if not infos[service]["key"] or not infos[service]["public"] or not pin:
             fail(f"{service} is missing an API key, identity, or certificate")
-    print("writing identity and share config")
-    compose("stop", timeout=120)
+    print("writing identity and share config", flush=True)
+    compose("stop", check=False, timeout=120)
     write_configs(infos)
     compose("start", timeout=120)
     for service in SERVICES:

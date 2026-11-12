@@ -68,13 +68,16 @@ def cert_pin(pem):
 
 
 def peer_id(service):
-    deadline = time.time() + 90
+    deadline = time.time() + 120
     while time.time() < deadline:
         logs = (compose("logs", service, check=False).stdout or "") + (compose("logs", service, check=False).stderr or "")
-        match = re.search(r'"peerId":"(12D3Koo[^"]+)"', logs)
+        stored = compose("exec", "-T", service, "sh", "-c", "cat /config/logs/fse.jsonl 2>/dev/null || true", check=False).stdout or ""
+        match = re.search(r'"peerId":"(12D3Koo[^"]+)"', logs + "\n" + stored)
         if match:
             return match.group(1)
         time.sleep(2)
+    tail = compose("exec", "-T", service, "sh", "-c", "tail -n 40 /config/logs/fse.jsonl 2>/dev/null || true", check=False)
+    sys.stderr.write(tail.stdout or "")
     fail(f"{service} did not announce a libp2p peer id")
 
 
