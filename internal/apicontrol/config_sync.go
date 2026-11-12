@@ -401,6 +401,7 @@ func loadPublishedReplica(configPath string) (*configsync.Store, configsync.Repl
 		Reachable:    announcement.Reachable,
 		InboundClass: string(nat.LocalClass()),
 		Transports:   nat.LocalTransports(),
+		AddedFolders: addedFolderIDs(cfg),
 		Online:       true,
 		LastSeen:     time.Now().UTC().Format(time.RFC3339),
 	}, time.Now().UnixMilli()); err != nil {
@@ -541,4 +542,15 @@ func identityGroupID(cfg config.Config) string {
 		}
 	}
 	return "primary"
+}
+
+func addedFolderIDs(cfg config.Config) []string {
+	var ids []string
+	for _, folder := range cfg.Folders {
+		if folder.ID == "" || strings.TrimSpace(folder.Path) == "" || !folder.SharingEnabled() {
+			continue
+		}
+		ids = append(ids, folder.ID)
+	}
+	return ids
 }

@@ -21,7 +21,7 @@ import (
 // quicKeepalive is how often an open identity session is pinged. QUIC's own
 // keepalive is also 15s. Together they refresh a NAT or VPN mapping that
 // would otherwise drop a quiet UDP flow in about a minute.
-const quicKeepalive = 15 * time.Second
+const quicKeepalive = 5 * time.Second
 
 // StreamConnected reports a libp2p connection that is still open.
 func StreamConnected(peerID string) bool {
@@ -92,11 +92,26 @@ func (r *Libp2pDHTRouter) pingIdentity(pinger *ping.PingService) {
 			cm.Protect(id, "fse-identity")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		failed := false
 		select {
-		case <-pinger.Ping(ctx, id):
+		case result := <-pinger.Ping(ctx, id):
+			if result.Error != nil {
+				failed = true
+			} else {
+				nat.DefaultPaths.Touch(id.String())
+			}
 		case <-ctx.Done():
+			failed = true
 		}
 		cancel()
+		if failed {
+			for _, conn := range r.host.Network().ConnsToPeer(id) {
+				if conn != nil {
+					_ = conn.Close()
+				}
+			}
+			nat.NotifyDisconnected(id.String())
+		}
 	}
 }
 

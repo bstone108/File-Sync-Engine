@@ -215,9 +215,14 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 	live := HasSession(peer.ID) || HasSession(id)
 	mode := nat.DialMode(localClass, remoteClass, live)
 	if !nat.ShouldDialNow(localClass, remoteClass, live) {
-		structuredlog.Event("info", "libp2p.dial.role", "this side accepts; the peer keeps the outbound session", map[string]any{
-			"peer": peer.ID, "mode": mode, "local": string(localClass), "remote": string(remoteClass),
-		})
+		if live {
+			if used, err := useOpenSession(ctx, peer, id, do); err == nil {
+				return used, nil
+			} else if err != nil && !errors.Is(err, errDialDeferred) {
+				return "", err
+			}
+		}
+		logAccept(peer.ID, mode, localClass, remoteClass)
 		return "", errDialDeferred
 	}
 	// Known addresses are dialed immediately. The DHT lookup runs beside them
@@ -361,6 +366,31 @@ func dialLibp2p(ctx context.Context, peer config.PeerConfig, do func(context.Con
 	return "", last
 }
 
+func useOpenSession(ctx context.Context, peer config.PeerConfig, id string, do func(context.Context, string, *http.Client) error) (string, error) {
+	if id == "" {
+		return "", errDialDeferred
+	}
+	session, err := discovery.OpenSession(id)
+	if err != nil {
+		return "", errDialDeferred
+	}
+	if err := do(ctx, discovery.StreamBaseURL, session.Client); err != nil {
+		return "", err
+	}
+	rememberDial(peer.ID, discovery.StreamBaseURL, session.Client)
+	if remote := session.CurrentRemote(); remote != "" {
+		NoteLiveSession(peer.ID, remote, false)
+		if peer.DHTPeerID != "" {
+			NoteLiveSession(peer.DHTPeerID, remote, false)
+		}
+		nat.DefaultPaths.Touch(peer.ID)
+		if peer.DHTPeerID != "" {
+			nat.DefaultPaths.Touch(peer.DHTPeerID)
+		}
+	}
+	return discovery.StreamBaseURL, nil
+}
+
 func dialStreamAddrs(parent, dialCtx context.Context, peer config.PeerConfig, id string, addrs []string, do func(context.Context, string, *http.Client) error) (string, error) {
 	session, err := discovery.DialStream(dialCtx, id, addrs)
 	if err != nil {
@@ -492,6 +522,30 @@ func FinishPeerPass(peerID string, connected bool) {
 	peerDialBurst[peerID] = time.Time{}
 	peerDialMu.Unlock()
 }
+
+func logAccept(peerID, mode string, local, remote nat.Class) {
+	key := peerID + "\x00" + mode
+	now := time.Now()
+	acceptLogMu.Lock()
+	last := acceptLogAt[key]
+	if !last.IsZero() && now.Sub(last) < 30*time.Second {
+		acceptLogMu.Unlock()
+		return
+	}
+	if acceptLogAt == nil {
+		acceptLogAt = map[string]time.Time{}
+	}
+	acceptLogAt[key] = now
+	acceptLogMu.Unlock()
+	structuredlog.Event("info", "libp2p.dial.role", "this side accepts; the peer keeps the outbound session", map[string]any{
+		"peer": peerID, "mode": mode, "local": string(local), "remote": string(remote),
+	})
+}
+
+var (
+	acceptLogMu sync.Mutex
+	acceptLogAt map[string]time.Time
+)
 
 func resetPeerDialSchedule() {
 	peerDialMu.Lock()

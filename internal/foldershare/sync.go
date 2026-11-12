@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,6 +25,7 @@ import (
 
 	"filesyncengine/internal/access"
 	"filesyncengine/internal/config"
+	"filesyncengine/internal/configsync"
 	"filesyncengine/internal/link"
 	"filesyncengine/internal/structuredlog"
 	"filesyncengine/internal/transferprogress"
@@ -585,15 +587,20 @@ func noteLinkDial(peer config.PeerConfig, used string) {
 	fn(peer, failedOver)
 }
 
-func peersFor(cfg config.Config, folder config.FolderConfig) []config.PeerConfig {
+func peersFor(cfg config.Config, configPath string, folder config.FolderConfig) []config.PeerConfig {
 	groups := access.EnabledGroupIDs(cfg)
+	added := configsync.RemoteAddedFolders(configPath)
 	out := []config.PeerConfig{}
 	for _, peer := range cfg.Peers {
 		if peer.APIKey == "" && peer.PeerSecret == "" {
 			continue
 		}
 		role := access.RoleFor(groups, peer.IdentityGroupID)
-		if !access.MaySyncFolder(role, folder.SharedWith, peer.ID) {
+		if role == access.RoleIdentity {
+			if !remoteAdded(added, peer, folder.ID) {
+				continue
+			}
+		} else if !access.MaySyncFolder(role, folder.SharedWith, peer.ID) {
 			continue
 		}
 		if !link.HasAPIEndpoint(peer) {
@@ -601,7 +608,56 @@ func peersFor(cfg config.Config, folder config.FolderConfig) []config.PeerConfig
 		}
 		out = append(out, peer)
 	}
+	if len(out) == 0 {
+		logNoTargets(folder.ID)
+	}
 	return out
+}
+
+func remoteAdded(added map[string]map[string]struct{}, peer config.PeerConfig, folderID string) bool {
+	for _, key := range []string{peer.DHTPeerID, peer.IdentityPublicKey, peer.ID} {
+		set := added[key]
+		if _, ok := set[folderID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+var noTargetOnce sync.Map
+
+func logNoTargets(folderID string) {
+	if folderID == "" {
+		return
+	}
+	if _, loaded := noTargetOnce.LoadOrStore(folderID, true); loaded {
+		return
+	}
+	structuredlog.Event("info", "folder.sync.no_targets", "folder has no sync targets", map[string]any{
+		"folder": folderID,
+	})
+}
+
+// TargetCount is how many peers an added folder will sync with.
+func TargetCount(cfg config.Config, configPath string, folder config.FolderConfig) int {
+	return len(peersFor(cfg, configPath, folder))
+}
+
+// DirectoryHasFiles reports whether root contains at least one file.
+func DirectoryHasFiles(root string) bool {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return false
+	}
+	found := false
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry == nil || entry.IsDir() {
+			return nil
+		}
+		found = true
+		return fs.SkipAll
+	})
+	return found
 }
 
 func indexEntries(entries []Entry) map[string]Entry {

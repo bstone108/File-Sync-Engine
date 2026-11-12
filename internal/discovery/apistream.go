@@ -221,6 +221,24 @@ func DialStream(ctx context.Context, peerID string, addrs []string) (StreamSessi
 	return newStreamSession(h, pid)
 }
 
+// OpenSession returns an HTTP client for a libp2p connection that is already
+// up. It does not dial. The side that accepted the session uses this to read
+// and write on the same connection.
+func OpenSession(peerID string) (StreamSession, error) {
+	h := currentAPIHost()
+	if h == nil {
+		return StreamSession{}, errNoAPIHost
+	}
+	pid, err := peer.Decode(strings.TrimSpace(peerID))
+	if err != nil {
+		return StreamSession{}, err
+	}
+	if h.Network().Connectedness(pid) != network.Connected {
+		return StreamSession{}, errNoAPIHost
+	}
+	return newStreamSession(h, pid)
+}
+
 func partitionStreamAddrs(addrs []ma.Multiaddr) (direct, circuits []ma.Multiaddr) {
 	for _, addr := range addrs {
 		if addr == nil {

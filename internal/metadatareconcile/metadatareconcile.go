@@ -6,14 +6,17 @@ import (
 	"io"
 	"net"
 
+	"filesyncengine/internal/access"
 	"filesyncengine/internal/api"
 	"filesyncengine/internal/config"
 	"filesyncengine/internal/daemon"
+	"filesyncengine/internal/discovery"
 	"filesyncengine/internal/discoverycontrol"
 	"filesyncengine/internal/peeridentity"
 	"filesyncengine/internal/routing"
 	"filesyncengine/internal/state"
 	"filesyncengine/internal/streamsync"
+	"filesyncengine/internal/structuredlog"
 )
 
 // PeerStreamEndpointCandidates builds metadata stream endpoint candidates from
@@ -80,6 +83,7 @@ type RuntimeDialerOptions struct {
 	EndpointObservations []routing.EndpointObservation
 	NetworkHints         routing.NetworkHints
 	DialTCP              TCPDialFunc
+	DialLibp2p           func(context.Context, string) (io.ReadWriteCloser, error)
 }
 
 // RuntimeDialer builds the live metadata catch-up dialer used by the daemon.
@@ -104,7 +108,25 @@ func RuntimeDialer(opts RuntimeDialerOptions) CatchupDialer {
 			}
 			return dialTCP(ctx, "tcp", address)
 		}
-		return nil, fmt.Errorf("peer %s has no tcp stream endpoint for metadata catch-up", peer.ID)
+		if peer.DHTPeerID != "" {
+			dialLibp2p := opts.DialLibp2p
+			if dialLibp2p == nil {
+				dialLibp2p = discovery.DialMetadata
+			}
+			stream, err := dialLibp2p(ctx, peer.DHTPeerID)
+			if err != nil {
+				structuredlog.Event("warn", "metadata.catchup.dial_failed", "metadata catch-up could not use the libp2p session", map[string]any{
+					"peer": peer.ID, "dhtPeerId": peer.DHTPeerID, "folder": folder.ID, "error": err.Error(),
+				})
+				return nil, err
+			}
+			return stream, nil
+		}
+		err := fmt.Errorf("peer %s has no tcp stream endpoint for metadata catch-up", peer.ID)
+		structuredlog.Event("warn", "metadata.catchup.dial_failed", "metadata catch-up has no route", map[string]any{
+			"peer": peer.ID, "folder": folder.ID, "error": err.Error(),
+		})
+		return nil, err
 	}
 }
 
@@ -131,8 +153,19 @@ func ProcessCatchup(ctx context.Context, opts CatchupOptions) CatchupResult {
 		statuses, err := opts.Store.PeerFolderStatuses(peer.ID)
 		if err != nil {
 			publish(opts.Publisher, api.Event{Type: "metadata.catchup.error", PeerID: peer.ID, Message: err.Error()})
+			structuredlog.Event("warn", "metadata.catchup.failed", "peer folder metadata was not read", map[string]any{
+				"peer": peer.ID, "error": err.Error(),
+			})
 			result.Failed++
 			continue
+		}
+		if len(statuses) == 0 {
+			for _, folder := range opts.Config.Folders {
+				if !metadataFolderForPeer(opts.Config, peer, folder) {
+					continue
+				}
+				statuses = append(statuses, state.PeerFolderStatus{PeerID: peer.ID, FolderID: folder.ID})
+			}
 		}
 		for _, status := range statuses {
 			if status.InSync {
@@ -145,6 +178,9 @@ func ProcessCatchup(ctx context.Context, opts CatchupOptions) CatchupResult {
 			stream, err := opts.Dial(ctx, peer, folder)
 			if err != nil {
 				publish(opts.Publisher, api.Event{Type: "metadata.catchup.error", PeerID: peer.ID, FolderID: folder.ID, Message: err.Error()})
+				structuredlog.Event("warn", "metadata.catchup.failed", "metadata catch-up could not dial", map[string]any{
+					"peer": peer.ID, "folder": folder.ID, "error": err.Error(),
+				})
 				result.Failed++
 				continue
 			}
@@ -160,11 +196,17 @@ func ProcessCatchup(ctx context.Context, opts CatchupOptions) CatchupResult {
 			closeErr := stream.Close()
 			if err != nil {
 				publish(opts.Publisher, api.Event{Type: "metadata.catchup.error", PeerID: peer.ID, FolderID: folder.ID, Message: err.Error()})
+				structuredlog.Event("warn", "metadata.catchup.failed", "metadata catch-up did not finish", map[string]any{
+					"peer": peer.ID, "folder": folder.ID, "error": err.Error(),
+				})
 				result.Failed++
 				continue
 			}
 			if closeErr != nil {
 				publish(opts.Publisher, api.Event{Type: "metadata.catchup.error", PeerID: peer.ID, FolderID: folder.ID, Message: closeErr.Error()})
+				structuredlog.Event("warn", "metadata.catchup.failed", "metadata catch-up stream did not close", map[string]any{
+					"peer": peer.ID, "folder": folder.ID, "error": closeErr.Error(),
+				})
 				result.Failed++
 				continue
 			}
@@ -191,4 +233,15 @@ func findConfigFolder(cfg config.Config, folderID string) (config.FolderConfig, 
 		}
 	}
 	return config.FolderConfig{}, false
+}
+
+func metadataFolderForPeer(cfg config.Config, peer config.PeerConfig, folder config.FolderConfig) bool {
+	if !folder.Enabled || folder.Path == "" || folder.ID == "" {
+		return false
+	}
+	role := access.RoleFor(access.EnabledGroupIDs(cfg), peer.IdentityGroupID)
+	if role == access.RoleIdentity {
+		return true
+	}
+	return access.MaySyncFolder(role, folder.SharedWith, peer.ID)
 }

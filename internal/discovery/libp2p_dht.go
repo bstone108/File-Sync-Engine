@@ -145,6 +145,7 @@ func NewLibp2pDHTRouter(ctx context.Context, opts Libp2pDHTRouterOptions) (*Libp
 	}
 	h.SetStreamHandler(protocol.ID(PairingProtocol), router.handlePairingStream)
 	h.SetStreamHandler(protocol.ID(ObserveProtocol), router.handleObserve)
+	registerMetadataStream(h)
 	noteRouterHost(h)
 	registerRouter(router)
 	watchConnections(h.Network())

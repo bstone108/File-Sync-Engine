@@ -112,6 +112,15 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 		guestPeers = append(guestPeers, peer(other.ID, secret, other.Endpoints[0].Address, other.APICertificateSHA256, "", secret))
 	}
 	write(guestID, guestPeers, []config.FolderConfig{shared(roots[guestID])})
+	for _, name := range names {
+		var others []string
+		for _, other := range names {
+			if other != name {
+				others = append(others, other)
+			}
+		}
+		announceAddedFolders(t, configs[name], name, others, []string{"shared", "private"})
+	}
 
 	load := func(name string) config.Config {
 		t.Helper()
@@ -228,6 +237,9 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 	if configResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("share-only config = %d", configResp.StatusCode)
 	}
+	for _, name := range append(append([]string{}, names...), guestID) {
+		_ = os.Remove(filepath.Join(filepath.Dir(configs[name]), "config-sync.json"))
+	}
 
 	origin, err := HandleConfigSync(configs["mac"])
 	if err != nil {
@@ -263,6 +275,21 @@ func TestFivePeerIdentityShareAndRestart(t *testing.T) {
 	}
 	if _, err := HandleConfigSyncMerge(configs[guestID], mustJSON(t, map[string]any{"replica": originReplica})); err == nil || !strings.Contains(err.Error(), "group mismatch") {
 		t.Fatalf("share-only adopted identity config: %v", err)
+	}
+}
+
+func announceAddedFolders(t *testing.T, configPath, self string, others, folders []string) {
+	t.Helper()
+	conns := map[string]configsync.Connection{}
+	for _, other := range others {
+		conns[other] = configsync.Connection{InstanceID: other, DHTPeerID: other, AddedFolders: append([]string(nil), folders...)}
+	}
+	raw, err := json.Marshal(configsync.Replica{GroupID: "identity-a", InstanceID: self, Connections: conns})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(configPath), "config-sync.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

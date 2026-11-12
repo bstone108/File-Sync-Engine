@@ -76,9 +76,12 @@ type Connection struct {
 	Reachable    string            `json:"reachable,omitempty"`
 	InboundClass string            `json:"inboundClass,omitempty"`
 	Transports   map[string]string `json:"transports,omitempty"`
-	Online       bool              `json:"online"`
-	LastSeen     string            `json:"lastSeen,omitempty"`
-	Clock        Clock             `json:"clock"`
+	// AddedFolders are folder ids this engine has added with a local path.
+	// Other identity engines show these as available until they add them too.
+	AddedFolders []string `json:"addedFolders,omitempty"`
+	Online       bool     `json:"online"`
+	LastSeen     string   `json:"lastSeen,omitempty"`
+	Clock        Clock    `json:"clock"`
 }
 
 // Edit is a change queued for one instance UUID. Any replica may carry it.
