@@ -1,10 +1,37 @@
 package config
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+// ErrUnchanged tells UpdateFile to leave the file alone.
+var ErrUnchanged = errors.New("config unchanged")
+
+var updateMu sync.Mutex
+
+// UpdateFile loads the config, mutates it, and writes it back as one step.
+// Concurrent callers cannot overwrite each other's fields.
+func UpdateFile(path string, mutate func(*Config) error) error {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+	cfg, err := LoadFile(path)
+	if err != nil {
+		return err
+	}
+	if err := mutate(&cfg); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return WriteFileAtomic(path, append(data, '\n'), 0o600)
+}
 
 // WriteFileAtomic replaces path with data without exposing a partially written file.
 // The temp file lives beside path so os.Rename stays on the same filesystem.
