@@ -30,6 +30,9 @@ func TestPublicLibp2pProbeAddrsPreferAnnouncedTCP(t *testing.T) {
 }
 
 func TestRemoteAutoNATDialbackPromotesAndBootstraps(t *testing.T) {
+	if _, err := exec.LookPath("ip"); err != nil {
+		t.Skip("ip is not installed; the public loopback dial-back runs on Linux")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	left, err := NewLibp2pDHTRouter(ctx, Libp2pDHTRouterOptions{NodeID: "dialback-left"})
@@ -99,7 +102,7 @@ func addLoopbackIP(t *testing.T, ip string) {
 	cmd := exec.Command("sudo", "-n", "ip", "addr", "add", ip+"/32", "dev", "lo")
 	out, err := cmd.CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "File exists") {
-		t.Fatalf("ip addr add %s: %v %s", ip, err, out)
+		t.Skipf("cannot add %s to loopback: %v %s", ip, err, out)
 	}
 	t.Cleanup(func() {
 		_ = exec.Command("sudo", "-n", "ip", "addr", "del", ip+"/32", "dev", "lo").Run()
