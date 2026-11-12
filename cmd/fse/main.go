@@ -331,6 +331,13 @@ func run(configPath string) {
 			structuredlog.Event("warn", "configsync.exchange.failed", "identity config sync was not exchanged with this peer", map[string]any{"peer": peer.ID, "error": err.Error()})
 		}
 	})
+	foldershare.SetIdentityExchange(func(peer config.PeerConfig) {
+		exchangeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := apicontrol.ExchangeConfigSync(exchangeCtx, configPath, peer); err != nil {
+			structuredlog.Event("info", "configsync.exchange.failed", "identity folder list was not exchanged", map[string]any{"peer": peer.ID, "error": err.Error()})
+		}
+	})
 	daemonapihandlers.RegisterStatic(apiServer, daemonapihandlers.BuildStaticHandlers(daemonapihandlers.StaticRuntimeDeps{
 		ConfigPath:      configPath,
 		CurrentStore:    func() state.JSONStore { return metadataStore },
