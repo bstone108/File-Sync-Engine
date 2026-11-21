@@ -22,7 +22,7 @@ func TestGoModulesPinPatchedSecurityDependencyVersions(t *testing.T) {
 		{"go.mod", "github.com/quic-go/webtransport-go v0.11.1"},
 		{"go.mod", "github.com/golang/glog v1.2.4"},
 		{"go.mod", "github.com/klauspost/compress v1.18.7"},
-		{"go.mod", "go.opentelemetry.io/otel v1.42.0"},
+		{"go.mod", "go.opentelemetry.io/otel v1.47.0"},
 		{"go.mod", "github.com/ipld/go-ipld-prime v0.23.0"},
 		{"go.mod", "github.com/pion/dtls/v3 v3.1.4"},
 		{"go.mod", "github.com/pion/stun/v3 v3.1.5"},
